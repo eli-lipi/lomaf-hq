@@ -15,8 +15,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Missing data' }, { status: 400 });
     }
 
-    // Teams CSV has cumulative standings (no round column).
-    // Find the latest round that has player_rounds data.
+    // Find latest round with player_rounds data
     const { data: latestRound } = await supabase
       .from('player_rounds')
       .select('round_number')
@@ -31,7 +30,7 @@ export async function POST(request: Request) {
       );
     }
 
-    // Parse teams CSV and create team_snapshots for the latest round
+    // Parse teams CSV
     const snapshots = data.map((row: Record<string, unknown>) => {
       const teamName = String(row['team_name'] || row['Team'] || row['team'] || '');
       const team = TEAMS.find(
@@ -52,45 +51,111 @@ export async function POST(request: Request) {
       };
     });
 
-    // Upsert team snapshots for the latest round
+    // Upsert team snapshots for latest round
     const { error: snapError } = await supabase
       .from('team_snapshots')
       .upsert(snapshots, { onConflict: 'round_number,team_id' });
-
     if (snapError) throw snapError;
 
-    // Now compute line scores for ALL rounds that have player data
-    const { data: allRounds } = await supabase
+    // Get ALL player_rounds and compute everything in memory
+    const { data: allPlayers } = await supabase
       .from('player_rounds')
-      .select('round_number');
+      .select('round_number, team_id, pos, points, is_scoring');
 
-    const uniqueRounds = [...new Set(allRounds?.map((r) => r.round_number) || [])].sort((a, b) => a - b);
+    if (!allPlayers) {
+      return NextResponse.json({ success: true, count: snapshots.length, target_round: targetRound });
+    }
 
-    // Ensure team_snapshots exist for each round (create minimal entries if needed)
-    for (const roundNum of uniqueRounds) {
-      if (roundNum === targetRound) continue; // already done
+    // Get unique rounds
+    const uniqueRounds = [...new Set(allPlayers.map((p) => p.round_number))].sort((a, b) => a - b);
 
-      // Check if snapshots exist for this round
-      const { count } = await supabase
-        .from('team_snapshots')
-        .select('*', { count: 'exact', head: true })
-        .eq('round_number', roundNum);
+    // Compute line totals per team per round (all in memory)
+    const lineTotals = new Map<string, Record<string, number>>(); // key: "round-teamId"
 
-      if (!count || count === 0) {
-        // Create minimal snapshots for this round
-        const minSnapshots = TEAMS.map((t) => ({
-          round_number: roundNum,
-          team_id: t.team_id,
-          team_name: t.team_name,
-        }));
-        await supabase.from('team_snapshots').upsert(minSnapshots, { onConflict: 'round_number,team_id' });
+    for (const p of allPlayers) {
+      if (!p.is_scoring) continue;
+      const key = `${p.round_number}-${p.team_id}`;
+      if (!lineTotals.has(key)) {
+        lineTotals.set(key, { DEF: 0, MID: 0, FWD: 0, RUC: 0, UTL: 0 });
+      }
+      const totals = lineTotals.get(key)!;
+      const pos = p.pos.toUpperCase();
+      if (pos in totals) {
+        totals[pos] += Number(p.points || 0);
       }
     }
 
-    // Compute line scores and rankings for all rounds
+    // Build all team_snapshots rows with line totals and rankings
+    const allSnapshotRows: Record<string, unknown>[] = [];
+
     for (const roundNum of uniqueRounds) {
-      await computeLineScores(roundNum);
-      await computeLineRankings(roundNum, uniqueRounds);
+      const roundTeams = TEAMS.map((t) => {
+        const key = `${roundNum}-${t.team_id}`;
+        const totals = lineTotals.get(key) || { DEF: 0, MID: 0, FWD: 0, RUC: 0, UTL: 0 };
+        return {
+          round_number: roundNum,
+          team_id: t.team_id,
+          team_name: t.team_name,
+          def_total: totals.DEF,
+          mid_total: totals.MID,
+          fwd_total: totals.FWD,
+          ruc_total: totals.RUC,
+          utl_total: totals.UTL,
+        };
+      });
+
+      // Compute per-round rankings
+      const positions = ['def', 'mid', 'fwd', 'ruc', 'utl'] as const;
+      for (const pos of positions) {
+        const sorted = [...roundTeams].sort(
+          (a, b) => (b[`${pos}_total`] as number) - (a[`${pos}_total`] as number)
+        );
+        sorted.forEach((team, i) => {
+          (team as Record<string, unknown>)[`${pos}_rank`] = i + 1;
+        });
+      }
+
+      allSnapshotRows.push(...roundTeams);
+    }
+
+    // Compute season rankings (average across all rounds up to each round)
+    for (const roundNum of uniqueRounds) {
+      const roundsUpTo = uniqueRounds.filter((r) => r <= roundNum);
+      const positions = ['def', 'mid', 'fwd', 'ruc', 'utl'] as const;
+
+      for (const pos of positions) {
+        // Compute average per team across rounds up to this one
+        const teamAvgs = TEAMS.map((t) => {
+          const vals = roundsUpTo
+            .map((r) => {
+              const snap = allSnapshotRows.find(
+                (s) => s.round_number === r && s.team_id === t.team_id
+              );
+              return snap ? (snap[`${pos}_total`] as number) : 0;
+            });
+          const avg = vals.length > 0 ? vals.reduce((a, b) => a + b, 0) / vals.length : 0;
+          return { team_id: t.team_id, avg };
+        });
+
+        teamAvgs.sort((a, b) => b.avg - a.avg);
+        teamAvgs.forEach((ta, i) => {
+          const snap = allSnapshotRows.find(
+            (s) => s.round_number === roundNum && s.team_id === ta.team_id
+          );
+          if (snap) {
+            (snap as Record<string, unknown>)[`${pos}_season_rank`] = i + 1;
+          }
+        });
+      }
+    }
+
+    // Single batch upsert for all snapshots
+    for (let i = 0; i < allSnapshotRows.length; i += 500) {
+      const batch = allSnapshotRows.slice(i, i + 500);
+      const { error } = await supabase
+        .from('team_snapshots')
+        .upsert(batch, { onConflict: 'round_number,team_id' });
+      if (error) throw error;
     }
 
     // Log upload
@@ -112,127 +177,5 @@ export async function POST(request: Request) {
       { error: err instanceof Error ? err.message : 'Upload failed' },
       { status: 500 }
     );
-  }
-}
-
-async function computeLineScores(roundNumber: number) {
-  const { data: players } = await supabase
-    .from('player_rounds')
-    .select('team_id, pos, points')
-    .eq('round_number', roundNumber)
-    .eq('is_scoring', true);
-
-  if (!players) return;
-
-  const teamTotals = new Map<number, Record<string, number>>();
-
-  for (const p of players) {
-    if (!teamTotals.has(p.team_id)) {
-      teamTotals.set(p.team_id, { DEF: 0, MID: 0, FWD: 0, RUC: 0, UTL: 0 });
-    }
-    const totals = teamTotals.get(p.team_id)!;
-    const pos = p.pos.toUpperCase();
-    if (pos in totals) {
-      totals[pos] += Number(p.points || 0);
-    }
-  }
-
-  for (const [teamId, totals] of teamTotals) {
-    await supabase
-      .from('team_snapshots')
-      .update({
-        def_total: totals.DEF,
-        mid_total: totals.MID,
-        fwd_total: totals.FWD,
-        ruc_total: totals.RUC,
-        utl_total: totals.UTL,
-      })
-      .eq('round_number', roundNumber)
-      .eq('team_id', teamId);
-  }
-}
-
-async function computeLineRankings(roundNumber: number, allRounds: number[]) {
-  const { data: snapshots } = await supabase
-    .from('team_snapshots')
-    .select('*')
-    .eq('round_number', roundNumber);
-
-  if (!snapshots || snapshots.length === 0) return;
-
-  const positions = [
-    { field: 'def_total', rankField: 'def_rank' },
-    { field: 'mid_total', rankField: 'mid_rank' },
-    { field: 'fwd_total', rankField: 'fwd_rank' },
-    { field: 'ruc_total', rankField: 'ruc_rank' },
-    { field: 'utl_total', rankField: 'utl_rank' },
-  ];
-
-  for (const { field, rankField } of positions) {
-    const sorted = [...snapshots].sort(
-      (a, b) => (Number(b[field]) || 0) - (Number(a[field]) || 0)
-    );
-
-    for (let i = 0; i < sorted.length; i++) {
-      await supabase
-        .from('team_snapshots')
-        .update({ [rankField]: i + 1 })
-        .eq('round_number', roundNumber)
-        .eq('team_id', sorted[i].team_id);
-    }
-  }
-
-  // Compute season line rankings (average across all rounds up to this one)
-  const roundsUpTo = allRounds.filter((r) => r <= roundNumber && r > 0);
-  const { data: allSnapshots } = await supabase
-    .from('team_snapshots')
-    .select('*')
-    .in('round_number', roundsUpTo);
-
-  if (!allSnapshots || allSnapshots.length === 0) return;
-
-  const teamAvgs = new Map<number, Record<string, { total: number; count: number }>>();
-
-  for (const snap of allSnapshots) {
-    if (!teamAvgs.has(snap.team_id)) {
-      teamAvgs.set(snap.team_id, {
-        def: { total: 0, count: 0 },
-        mid: { total: 0, count: 0 },
-        fwd: { total: 0, count: 0 },
-        ruc: { total: 0, count: 0 },
-        utl: { total: 0, count: 0 },
-      });
-    }
-    const avgs = teamAvgs.get(snap.team_id)!;
-    avgs.def.total += Number(snap.def_total || 0); avgs.def.count++;
-    avgs.mid.total += Number(snap.mid_total || 0); avgs.mid.count++;
-    avgs.fwd.total += Number(snap.fwd_total || 0); avgs.fwd.count++;
-    avgs.ruc.total += Number(snap.ruc_total || 0); avgs.ruc.count++;
-    avgs.utl.total += Number(snap.utl_total || 0); avgs.utl.count++;
-  }
-
-  const seasonPositions = [
-    { key: 'def', rankField: 'def_season_rank' },
-    { key: 'mid', rankField: 'mid_season_rank' },
-    { key: 'fwd', rankField: 'fwd_season_rank' },
-    { key: 'ruc', rankField: 'ruc_season_rank' },
-    { key: 'utl', rankField: 'utl_season_rank' },
-  ];
-
-  for (const { key, rankField } of seasonPositions) {
-    const entries = Array.from(teamAvgs.entries()).map(([teamId, avgs]) => ({
-      teamId,
-      avg: avgs[key].count > 0 ? avgs[key].total / avgs[key].count : 0,
-    }));
-
-    entries.sort((a, b) => b.avg - a.avg);
-
-    for (let i = 0; i < entries.length; i++) {
-      await supabase
-        .from('team_snapshots')
-        .update({ [rankField]: i + 1 })
-        .eq('round_number', roundNumber)
-        .eq('team_id', entries[i].teamId);
-    }
   }
 }

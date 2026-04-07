@@ -13,7 +13,7 @@
 - Drag-and-drop: @dnd-kit
 
 ## Design
-- Light theme inspired by AFL.com.au: `#F0F2F5` background, white cards, `#E21937` red accent
+- Light theme inspired by AFL.com.au: `#F0F2F5` background, white cards, `#1A56DB` blue accent
 - Dark navy sidebar: `#0E1629`
 - Sporty, clean, professional aesthetic
 - Fixed sidebar navigation

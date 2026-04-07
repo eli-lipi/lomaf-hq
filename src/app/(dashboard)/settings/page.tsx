@@ -1,8 +1,8 @@
 'use client';
 
-import { useState } from 'react';
-import { Upload, User } from 'lucide-react';
-import { TEAMS, LEAGUE_NAME, LEAGUE_FULL_NAME, SEASON } from '@/lib/constants';
+import { useState, useEffect } from 'react';
+import { Upload, User, Trash2 } from 'lucide-react';
+import { TEAMS, LEAGUE_FULL_NAME, SEASON } from '@/lib/constants';
 import { supabase } from '@/lib/supabase';
 
 export default function SettingsPage() {
@@ -47,9 +47,37 @@ export default function SettingsPage() {
 
 function CoachCard({ team }: { team: (typeof TEAMS)[number] }) {
   const [uploading, setUploading] = useState(false);
-  const [photoUrl, setPhotoUrl] = useState<string | null>(null);
+  const [photoUrls, setPhotoUrls] = useState<Record<string, string | null>>({});
 
   const photoKeys = Array.isArray(team.coach_photo_key) ? team.coach_photo_key : [team.coach_photo_key];
+
+  // Load existing photos on mount
+  useEffect(() => {
+    async function loadPhotos() {
+      const urls: Record<string, string | null> = {};
+      for (const key of photoKeys) {
+        // Try common extensions
+        for (const ext of ['jpg', 'jpeg', 'png', 'webp']) {
+          const path = `${key}.${ext}`;
+          const { data } = supabase.storage.from('coach-photos').getPublicUrl(path);
+          // Check if file exists by trying to fetch it
+          try {
+            const res = await fetch(data.publicUrl, { method: 'HEAD' });
+            if (res.ok) {
+              urls[key] = data.publicUrl;
+              break;
+            }
+          } catch {
+            // continue
+          }
+        }
+        if (!urls[key]) urls[key] = null;
+      }
+      setPhotoUrls(urls);
+    }
+    loadPhotos();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>, key: string) => {
     const file = e.target.files?.[0];
@@ -64,11 +92,31 @@ function CoachCard({ team }: { team: (typeof TEAMS)[number] }) {
       if (error) throw error;
 
       const { data } = supabase.storage.from('coach-photos').getPublicUrl(path);
-      setPhotoUrl(data.publicUrl);
+      setPhotoUrls((prev) => ({ ...prev, [key]: data.publicUrl + '?t=' + Date.now() }));
     } catch (err) {
       console.error('Upload failed:', err);
     } finally {
       setUploading(false);
+    }
+  };
+
+  const handleDelete = async (key: string) => {
+    try {
+      // List files in bucket to find the exact filename
+      const { data: files } = await supabase.storage.from('coach-photos').list('', {
+        search: key,
+      });
+
+      if (files && files.length > 0) {
+        const toDelete = files.filter((f) => f.name.startsWith(key + '.')).map((f) => f.name);
+        if (toDelete.length > 0) {
+          await supabase.storage.from('coach-photos').remove(toDelete);
+        }
+      }
+
+      setPhotoUrls((prev) => ({ ...prev, [key]: null }));
+    } catch (err) {
+      console.error('Delete failed:', err);
     }
   };
 
@@ -81,9 +129,9 @@ function CoachCard({ team }: { team: (typeof TEAMS)[number] }) {
               key={key}
               className="w-12 h-12 rounded-full bg-muted flex items-center justify-center border-2 border-card overflow-hidden"
             >
-              {photoUrl ? (
+              {photoUrls[key] ? (
                 // eslint-disable-next-line @next/next/no-img-element
-                <img src={photoUrl} alt={key} className="w-full h-full object-cover" />
+                <img src={photoUrls[key]!} alt={key} className="w-full h-full object-cover" />
               ) : (
                 <User size={20} className="text-muted-foreground" />
               )}
@@ -95,22 +143,30 @@ function CoachCard({ team }: { team: (typeof TEAMS)[number] }) {
           <p className="text-xs text-muted-foreground truncate">{team.coach}</p>
         </div>
       </div>
-      <div className="flex gap-2">
+      <div className="flex gap-3">
         {photoKeys.map((key) => (
-          <label
-            key={key}
-            className="flex items-center gap-1.5 text-xs text-primary cursor-pointer hover:underline font-medium"
-          >
-            <Upload size={12} />
-            {photoKeys.length > 1 ? key : 'Upload Photo'}
-            <input
-              type="file"
-              accept="image/*"
-              className="hidden"
-              onChange={(e) => handleUpload(e, key)}
-              disabled={uploading}
-            />
-          </label>
+          <div key={key} className="flex items-center gap-2">
+            <label className="flex items-center gap-1.5 text-xs text-primary cursor-pointer hover:underline font-medium">
+              <Upload size={12} />
+              {photoKeys.length > 1 ? `Upload ${key}` : 'Upload'}
+              <input
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={(e) => handleUpload(e, key)}
+                disabled={uploading}
+              />
+            </label>
+            {photoUrls[key] && (
+              <button
+                onClick={() => handleDelete(key)}
+                className="flex items-center gap-1 text-xs text-red-500 hover:text-red-700 hover:underline"
+              >
+                <Trash2 size={12} />
+                Delete
+              </button>
+            )}
+          </div>
         ))}
       </div>
     </div>

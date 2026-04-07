@@ -455,7 +455,7 @@ function CsvDropZone({
           : upload.status === 'uploading'
             ? 'border-blue-300 bg-blue-50'
             : upload.status === 'parsed'
-              ? 'border-primary/30 bg-red-50/30'
+              ? 'border-primary/30 bg-blue-50/30'
               : upload.status === 'error'
                 ? 'border-red-300 bg-red-50'
                 : 'border-border hover:border-gray-300'

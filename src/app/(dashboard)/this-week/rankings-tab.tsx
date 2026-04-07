@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   DndContext,
   closestCenter,
@@ -18,11 +18,11 @@ import {
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { GripVertical, Save, Send } from 'lucide-react';
+import { GripVertical, Save, Send, Eye, EyeOff } from 'lucide-react';
 import { cn, ordinal, movementLabel, movementColor } from '@/lib/utils';
 import { TEAMS } from '@/lib/constants';
 import { supabase } from '@/lib/supabase';
-import type { PwrnkgsRound, PwrnkgsRanking, TeamSnapshot } from '@/lib/types';
+import type { PwrnkgsRound, TeamSnapshot } from '@/lib/types';
 
 interface RankingItem {
   id: string;
@@ -45,6 +45,11 @@ export default function RankingsTab() {
   const [publishing, setPublishing] = useState(false);
   const [latestRound, setLatestRound] = useState<number | null>(null);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [showPreview, setShowPreview] = useState(false);
+  const [selectedSlide, setSelectedSlide] = useState(0);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const previewTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const sensors = useSensors(
     useSensor(PointerSensor),
@@ -148,6 +153,60 @@ export default function RankingsTab() {
     loadData();
   }, []);
 
+  // Auto-refresh slide preview when data changes (debounced)
+  const refreshPreview = useCallback(() => {
+    if (!showPreview || !round) return;
+
+    if (previewTimer.current) clearTimeout(previewTimer.current);
+    previewTimer.current = setTimeout(async () => {
+      setPreviewLoading(true);
+      try {
+        // Save current state first so the slide API can read it
+        const rankingRows = rankings.map((r) => ({
+          round_id: round.id,
+          round_number: round.round_number,
+          team_id: r.team_id,
+          team_name: r.team_name,
+          ranking: r.ranking,
+          previous_ranking: r.previous_ranking,
+          writeup: r.writeup,
+        }));
+
+        await supabase
+          .from('pwrnkgs_rounds')
+          .update({ theme: theme || null, preview_text: previewText || null, week_ahead_text: weekAheadText || null })
+          .eq('id', round.id);
+
+        await supabase
+          .from('pwrnkgs_rankings')
+          .upsert(rankingRows, { onConflict: 'round_number,team_id' });
+
+        // Fetch the slide image
+        const res = await fetch(`/api/carousel/slide/${selectedSlide}?round=${round.round_number}`);
+        if (res.ok) {
+          const blob = await res.blob();
+          const url = URL.createObjectURL(blob);
+          setPreviewUrl((prev) => {
+            if (prev) URL.revokeObjectURL(prev);
+            return url;
+          });
+        }
+      } catch (err) {
+        console.error('Preview refresh failed:', err);
+      } finally {
+        setPreviewLoading(false);
+      }
+    }, 1500); // 1.5s debounce
+  }, [showPreview, round, rankings, theme, previewText, weekAheadText, selectedSlide]);
+
+  // Trigger preview refresh when relevant data changes
+  useEffect(() => {
+    refreshPreview();
+    return () => {
+      if (previewTimer.current) clearTimeout(previewTimer.current);
+    };
+  }, [refreshPreview]);
+
   const handleDragEnd = (event: DragEndEvent) => {
     const { active, over } = event;
     if (!over || active.id === over.id) return;
@@ -231,100 +290,164 @@ export default function RankingsTab() {
 
   const isPublished = round?.status === 'published';
 
+  // Slide selector labels
+  const slideLabels = [
+    'Preview',
+    ...Array.from({ length: 10 }, (_, i) => `#${10 - i}`),
+    'Summary',
+  ];
+
   return (
-    <div>
-      {/* Round header */}
-      <div className="flex items-center gap-3 mb-6">
-        <span className="bg-primary/10 text-primary font-bold px-3 py-1 rounded-full text-sm">R{latestRound}</span>
-        {isPublished && (
-          <span className="bg-green-100 text-green-700 text-xs font-medium px-2.5 py-1 rounded-full">Published</span>
+    <div className="flex gap-6">
+      {/* Main editor */}
+      <div className="flex-1 min-w-0">
+        {/* Round header */}
+        <div className="flex items-center gap-3 mb-6">
+          <span className="bg-primary/10 text-primary font-bold px-3 py-1 rounded-full text-sm">R{latestRound}</span>
+          {isPublished && (
+            <span className="bg-green-100 text-green-700 text-xs font-medium px-2.5 py-1 rounded-full">Published</span>
+          )}
+          <button
+            onClick={() => setShowPreview(!showPreview)}
+            className={cn(
+              'ml-auto flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors',
+              showPreview
+                ? 'bg-primary text-primary-foreground'
+                : 'bg-card border border-border text-muted-foreground hover:text-foreground'
+            )}
+          >
+            {showPreview ? <EyeOff size={14} /> : <Eye size={14} />}
+            {showPreview ? 'Hide Preview' : 'Show Preview'}
+          </button>
+        </div>
+
+        {/* Round metadata */}
+        <div className="space-y-4 mb-8 bg-card rounded-lg p-5 border border-border shadow-sm">
+          <div>
+            <label className="block text-xs text-muted-foreground mb-1 font-medium">Theme (optional)</label>
+            <input
+              type="text"
+              value={theme}
+              onChange={(e) => setTheme(e.target.value)}
+              placeholder="e.g., The Gap"
+              disabled={isPublished}
+              className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary disabled:opacity-50"
+            />
+          </div>
+          <div>
+            <label className="block text-xs text-muted-foreground mb-1 font-medium">Preview Text (Slide 1)</label>
+            <textarea
+              value={previewText}
+              onChange={(e) => setPreviewText(e.target.value)}
+              placeholder="The intro paragraph for the first carousel slide..."
+              rows={4}
+              disabled={isPublished}
+              className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary disabled:opacity-50 resize-y"
+            />
+          </div>
+          <div>
+            <label className="block text-xs text-muted-foreground mb-1 font-medium">Week Ahead Text (Slide 12)</label>
+            <textarea
+              value={weekAheadText}
+              onChange={(e) => setWeekAheadText(e.target.value)}
+              placeholder="Closing paragraph about the upcoming round..."
+              rows={3}
+              disabled={isPublished}
+              className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary disabled:opacity-50 resize-y"
+            />
+          </div>
+        </div>
+
+        {/* Rankings list */}
+        <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+          <SortableContext items={rankings.map((r) => r.id)} strategy={verticalListSortingStrategy}>
+            <div className="space-y-2">
+              {rankings.map((item) => (
+                <SortableRankingCard
+                  key={item.id}
+                  item={item}
+                  onWriteupChange={updateWriteup}
+                  disabled={isPublished}
+                />
+              ))}
+            </div>
+          </SortableContext>
+        </DndContext>
+
+        {/* Action buttons */}
+        {!isPublished && (
+          <div className="flex gap-3 mt-6">
+            <button
+              onClick={save}
+              disabled={saving}
+              className="flex items-center gap-2 px-6 py-2.5 rounded-lg bg-card border border-border text-sm font-medium hover:bg-muted transition-colors disabled:opacity-50 shadow-sm"
+            >
+              <Save size={16} />
+              {saving ? 'Saving...' : 'Save Draft'}
+            </button>
+            <button
+              onClick={publish}
+              disabled={publishing}
+              className="flex items-center gap-2 px-6 py-2.5 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors disabled:opacity-50 shadow-sm"
+            >
+              <Send size={16} />
+              {publishing ? 'Publishing...' : 'Publish'}
+            </button>
+          </div>
+        )}
+
+        {/* Message */}
+        {message && (
+          <div
+            className={cn(
+              'mt-4 p-3 rounded-lg text-sm font-medium',
+              message.type === 'success' ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-red-50 text-red-700 border border-red-200'
+            )}
+          >
+            {message.text}
+          </div>
         )}
       </div>
 
-      {/* Round metadata */}
-      <div className="space-y-4 mb-8 bg-card rounded-lg p-5 border border-border shadow-sm">
-        <div>
-          <label className="block text-xs text-muted-foreground mb-1 font-medium">Theme (optional)</label>
-          <input
-            type="text"
-            value={theme}
-            onChange={(e) => setTheme(e.target.value)}
-            placeholder="e.g., The Gap"
-            disabled={isPublished}
-            className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary disabled:opacity-50"
-          />
-        </div>
-        <div>
-          <label className="block text-xs text-muted-foreground mb-1 font-medium">Preview Text (Slide 1)</label>
-          <textarea
-            value={previewText}
-            onChange={(e) => setPreviewText(e.target.value)}
-            placeholder="The intro paragraph for the first carousel slide..."
-            rows={4}
-            disabled={isPublished}
-            className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary disabled:opacity-50 resize-y"
-          />
-        </div>
-        <div>
-          <label className="block text-xs text-muted-foreground mb-1 font-medium">Week Ahead Text (Slide 12)</label>
-          <textarea
-            value={weekAheadText}
-            onChange={(e) => setWeekAheadText(e.target.value)}
-            placeholder="Closing paragraph about the upcoming round..."
-            rows={3}
-            disabled={isPublished}
-            className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary disabled:opacity-50 resize-y"
-          />
-        </div>
-      </div>
-
-      {/* Rankings list */}
-      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
-        <SortableContext items={rankings.map((r) => r.id)} strategy={verticalListSortingStrategy}>
-          <div className="space-y-2">
-            {rankings.map((item) => (
-              <SortableRankingCard
-                key={item.id}
-                item={item}
-                onWriteupChange={updateWriteup}
-                disabled={isPublished}
-              />
-            ))}
+      {/* Slide preview panel */}
+      {showPreview && (
+        <div className="w-80 shrink-0 sticky top-6 self-start">
+          <div className="bg-card border border-border rounded-lg shadow-sm overflow-hidden">
+            <div className="p-3 border-b border-border">
+              <p className="text-xs font-medium text-muted-foreground mb-2">Slide Preview</p>
+              <div className="flex flex-wrap gap-1">
+                {slideLabels.map((label, i) => (
+                  <button
+                    key={i}
+                    onClick={() => setSelectedSlide(i)}
+                    className={cn(
+                      'px-2 py-1 rounded text-xs font-medium transition-colors',
+                      selectedSlide === i
+                        ? 'bg-primary text-primary-foreground'
+                        : 'bg-muted text-muted-foreground hover:text-foreground'
+                    )}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="aspect-square bg-gray-100 relative">
+              {previewLoading && (
+                <div className="absolute inset-0 flex items-center justify-center bg-white/80 z-10">
+                  <div className="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+                </div>
+              )}
+              {previewUrl ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={previewUrl} alt="Slide preview" className="w-full h-full object-contain" />
+              ) : (
+                <div className="w-full h-full flex items-center justify-center text-muted-foreground text-xs">
+                  Edit content to see preview
+                </div>
+              )}
+            </div>
           </div>
-        </SortableContext>
-      </DndContext>
-
-      {/* Action buttons */}
-      {!isPublished && (
-        <div className="flex gap-3 mt-6">
-          <button
-            onClick={save}
-            disabled={saving}
-            className="flex items-center gap-2 px-6 py-2.5 rounded-lg bg-card border border-border text-sm font-medium hover:bg-muted transition-colors disabled:opacity-50 shadow-sm"
-          >
-            <Save size={16} />
-            {saving ? 'Saving...' : 'Save Draft'}
-          </button>
-          <button
-            onClick={publish}
-            disabled={publishing}
-            className="flex items-center gap-2 px-6 py-2.5 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors disabled:opacity-50 shadow-sm"
-          >
-            <Send size={16} />
-            {publishing ? 'Publishing...' : 'Publish'}
-          </button>
-        </div>
-      )}
-
-      {/* Message */}
-      {message && (
-        <div
-          className={cn(
-            'mt-4 p-3 rounded-lg text-sm font-medium',
-            message.type === 'success' ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-red-50 text-red-700 border border-red-200'
-          )}
-        >
-          {message.text}
         </div>
       )}
     </div>
@@ -362,7 +485,6 @@ function SortableRankingCard({
         isDragging && 'opacity-50 z-50 shadow-lg'
       )}
     >
-      {/* Drag handle */}
       <div
         {...attributes}
         {...listeners}
@@ -371,12 +493,10 @@ function SortableRankingCard({
         <GripVertical size={18} className="text-gray-400" />
       </div>
 
-      {/* Rank number */}
       <div className="w-10 shrink-0 flex items-start justify-center pt-1">
         <span className="text-2xl font-bold text-primary">{item.ranking}</span>
       </div>
 
-      {/* Content */}
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-3 mb-2">
           <span className="font-semibold text-sm truncate">{item.team_name}</span>
@@ -384,7 +504,6 @@ function SortableRankingCard({
           <span className={cn('text-xs font-medium', moveColor)}>{movement}</span>
         </div>
 
-        {/* Stats row */}
         {item.snapshot && (
           <div className="flex gap-4 text-xs text-muted-foreground mb-2">
             <span>Score: {Math.round(item.snapshot.pts_for)}</span>
@@ -395,7 +514,6 @@ function SortableRankingCard({
           </div>
         )}
 
-        {/* Writeup textarea */}
         <textarea
           value={item.writeup}
           onChange={(e) => onWriteupChange(item.team_id, e.target.value)}

@@ -5,7 +5,7 @@
   --foreground: #111827;
   --card: #FFFFFF;
   --card-elevated: #F8FAFC;
-  --primary: #E21937;
+  --primary: #1A56DB;
   --primary-foreground: #FFFFFF;
   --muted: #F3F4F6;
   --muted-foreground: #6B7280;
@@ -15,7 +15,7 @@
   --accent-blue: #2563EB;
   --sidebar: #0E1629;
   --sidebar-foreground: #CBD5E1;
-  --sidebar-active: #E21937;
+  --sidebar-active: #3B82F6;
 }
 
 @theme inline {
