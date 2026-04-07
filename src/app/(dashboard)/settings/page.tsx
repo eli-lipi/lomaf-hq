@@ -11,7 +11,6 @@ export default function SettingsPage() {
       <h1 className="text-2xl font-bold mb-1">Settings</h1>
       <p className="text-muted-foreground text-sm mb-6">Manage coach photos and league info</p>
 
-      {/* League Info */}
       <section className="mb-8">
         <h2 className="text-lg font-semibold mb-3">League Info</h2>
         <div className="bg-card border border-border rounded-lg p-5 shadow-sm">
@@ -32,7 +31,6 @@ export default function SettingsPage() {
         </div>
       </section>
 
-      {/* Coach Photos */}
       <section>
         <h2 className="text-lg font-semibold mb-3">Coach Photos</h2>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -48,32 +46,33 @@ export default function SettingsPage() {
 function CoachCard({ team }: { team: (typeof TEAMS)[number] }) {
   const [uploading, setUploading] = useState(false);
   const [photoUrls, setPhotoUrls] = useState<Record<string, string | null>>({});
+  const [fileNames, setFileNames] = useState<Record<string, string | null>>({});
 
   const photoKeys = Array.isArray(team.coach_photo_key) ? team.coach_photo_key : [team.coach_photo_key];
 
-  // Load existing photos on mount
+  // Load existing photos using storage.list()
   useEffect(() => {
     async function loadPhotos() {
+      const { data: files } = await supabase.storage.from('coach-photos').list('', { limit: 100 });
+      if (!files) return;
+
       const urls: Record<string, string | null> = {};
+      const names: Record<string, string | null> = {};
+
       for (const key of photoKeys) {
-        // Try common extensions
-        for (const ext of ['jpg', 'jpeg', 'png', 'webp']) {
-          const path = `${key}.${ext}`;
-          const { data } = supabase.storage.from('coach-photos').getPublicUrl(path);
-          // Check if file exists by trying to fetch it
-          try {
-            const res = await fetch(data.publicUrl, { method: 'HEAD' });
-            if (res.ok) {
-              urls[key] = data.publicUrl;
-              break;
-            }
-          } catch {
-            // continue
-          }
+        const match = files.find((f) => f.name.startsWith(key + '.'));
+        if (match) {
+          const { data } = supabase.storage.from('coach-photos').getPublicUrl(match.name);
+          urls[key] = data.publicUrl + '?t=' + Date.now();
+          names[key] = match.name;
+        } else {
+          urls[key] = null;
+          names[key] = null;
         }
-        if (!urls[key]) urls[key] = null;
       }
+
       setPhotoUrls(urls);
+      setFileNames(names);
     }
     loadPhotos();
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -85,6 +84,11 @@ function CoachCard({ team }: { team: (typeof TEAMS)[number] }) {
 
     setUploading(true);
     try {
+      // Delete old file first if exists
+      if (fileNames[key]) {
+        await supabase.storage.from('coach-photos').remove([fileNames[key]!]);
+      }
+
       const ext = file.name.split('.').pop() || 'jpg';
       const path = `${key}.${ext}`;
 
@@ -93,6 +97,7 @@ function CoachCard({ team }: { team: (typeof TEAMS)[number] }) {
 
       const { data } = supabase.storage.from('coach-photos').getPublicUrl(path);
       setPhotoUrls((prev) => ({ ...prev, [key]: data.publicUrl + '?t=' + Date.now() }));
+      setFileNames((prev) => ({ ...prev, [key]: path }));
     } catch (err) {
       console.error('Upload failed:', err);
     } finally {
@@ -102,19 +107,11 @@ function CoachCard({ team }: { team: (typeof TEAMS)[number] }) {
 
   const handleDelete = async (key: string) => {
     try {
-      // List files in bucket to find the exact filename
-      const { data: files } = await supabase.storage.from('coach-photos').list('', {
-        search: key,
-      });
-
-      if (files && files.length > 0) {
-        const toDelete = files.filter((f) => f.name.startsWith(key + '.')).map((f) => f.name);
-        if (toDelete.length > 0) {
-          await supabase.storage.from('coach-photos').remove(toDelete);
-        }
+      if (fileNames[key]) {
+        await supabase.storage.from('coach-photos').remove([fileNames[key]!]);
       }
-
       setPhotoUrls((prev) => ({ ...prev, [key]: null }));
+      setFileNames((prev) => ({ ...prev, [key]: null }));
     } catch (err) {
       console.error('Delete failed:', err);
     }

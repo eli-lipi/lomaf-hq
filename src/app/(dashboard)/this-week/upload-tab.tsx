@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useCallback, useEffect } from 'react';
-import { Upload, CheckCircle, AlertCircle, FileText, Loader2, Database } from 'lucide-react';
+import { Upload, CheckCircle, AlertCircle, FileText, Loader2 } from 'lucide-react';
 import Papa from 'papaparse';
 import { cn } from '@/lib/utils';
 import { supabase } from '@/lib/supabase';
@@ -16,11 +16,9 @@ interface UploadState {
   data?: Record<string, unknown>[];
 }
 
-interface DbSummary {
-  playerRounds: Record<number, number>;
-  teamSnapshots: Record<number, number>;
-  draftPicks: number;
-  pwrnkgsRounds: { round_number: number; status: string }[];
+interface RoundStatus {
+  playerRounds: boolean;
+  teamSnapshots: boolean;
 }
 
 function detectCsvType(filename: string): CsvType | null {
@@ -32,6 +30,8 @@ function detectCsvType(filename: string): CsvType | null {
   return null;
 }
 
+const TOTAL_ROUNDS = 23;
+
 export default function UploadTab() {
   const [uploads, setUploads] = useState<Record<CsvType, UploadState>>({
     lineups: { status: 'idle' },
@@ -42,10 +42,10 @@ export default function UploadTab() {
   const [processing, setProcessing] = useState(false);
   const [processResult, setProcessResult] = useState<string | null>(null);
   const [stepLog, setStepLog] = useState<string[]>([]);
-  const [dbSummary, setDbSummary] = useState<DbSummary | null>(null);
+  const [roundStatuses, setRoundStatuses] = useState<Record<number, RoundStatus>>({});
+  const [hasDraft, setHasDraft] = useState(false);
   const [loadingDb, setLoadingDb] = useState(true);
 
-  // Load current DB state on mount
   useEffect(() => {
     loadDbSummary();
   }, []);
@@ -53,28 +53,22 @@ export default function UploadTab() {
   const loadDbSummary = async () => {
     setLoadingDb(true);
     try {
-      // Player rounds by round
       const { data: pr } = await supabase.from('player_rounds').select('round_number');
-      const prByRound: Record<number, number> = {};
-      pr?.forEach((r) => { prByRound[r.round_number] = (prByRound[r.round_number] || 0) + 1; });
-
-      // Team snapshots by round
       const { data: ts } = await supabase.from('team_snapshots').select('round_number');
-      const tsByRound: Record<number, number> = {};
-      ts?.forEach((r) => { tsByRound[r.round_number] = (tsByRound[r.round_number] || 0) + 1; });
-
-      // Draft picks count
       const { count: draftCount } = await supabase.from('draft_picks').select('*', { count: 'exact', head: true });
 
-      // PWRNKGs rounds
-      const { data: pwr } = await supabase.from('pwrnkgs_rounds').select('round_number, status').order('round_number');
-
-      setDbSummary({
-        playerRounds: prByRound,
-        teamSnapshots: tsByRound,
-        draftPicks: draftCount || 0,
-        pwrnkgsRounds: pwr || [],
+      const statuses: Record<number, RoundStatus> = {};
+      pr?.forEach((r) => {
+        if (!statuses[r.round_number]) statuses[r.round_number] = { playerRounds: false, teamSnapshots: false };
+        statuses[r.round_number].playerRounds = true;
       });
+      ts?.forEach((r) => {
+        if (!statuses[r.round_number]) statuses[r.round_number] = { playerRounds: false, teamSnapshots: false };
+        statuses[r.round_number].teamSnapshots = true;
+      });
+
+      setRoundStatuses(statuses);
+      setHasDraft((draftCount || 0) > 0);
     } catch (err) {
       console.error('Failed to load DB summary:', err);
     } finally {
@@ -92,23 +86,14 @@ export default function UploadTab() {
         if (results.errors.length > 0) {
           setUploads((prev) => ({
             ...prev,
-            [type]: {
-              status: 'error',
-              filename: file.name,
-              error: results.errors[0].message,
-            },
+            [type]: { status: 'error', filename: file.name, error: results.errors[0].message },
           }));
           return;
         }
 
         setUploads((prev) => ({
           ...prev,
-          [type]: {
-            status: 'parsed',
-            filename: file.name,
-            rowCount: data.length,
-            data,
-          },
+          [type]: { status: 'parsed', filename: file.name, rowCount: data.length, data },
         }));
 
         setProcessResult(null);
@@ -117,34 +102,29 @@ export default function UploadTab() {
     });
   }, []);
 
-  const handleDrop = useCallback(
-    (e: React.DragEvent, type: CsvType) => {
+  const handleMultiDrop = useCallback(
+    (e: React.DragEvent) => {
       e.preventDefault();
-      const file = e.dataTransfer.files[0];
-      if (file && file.name.endsWith('.csv')) {
-        handleFile(file, type);
+      const files = Array.from(e.dataTransfer.files).filter((f) => f.name.endsWith('.csv'));
+
+      for (const file of files) {
+        const detected = detectCsvType(file.name);
+        if (detected) {
+          handleFile(file, detected);
+        }
       }
     },
     [handleFile]
   );
 
   const handleFileInput = useCallback(
-    (e: React.ChangeEvent<HTMLInputElement>, type: CsvType) => {
-      const file = e.target.files?.[0];
-      if (file) handleFile(file, type);
-    },
-    [handleFile]
-  );
-
-  const handleAutoDrop = useCallback(
-    (e: React.DragEvent) => {
-      e.preventDefault();
-      const file = e.dataTransfer.files[0];
-      if (!file || !file.name.endsWith('.csv')) return;
-
-      const detected = detectCsvType(file.name);
-      if (detected) {
-        handleFile(file, detected);
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      const files = Array.from(e.target.files || []);
+      for (const file of files) {
+        const detected = detectCsvType(file.name);
+        if (detected) {
+          handleFile(file, detected);
+        }
       }
     },
     [handleFile]
@@ -158,7 +138,7 @@ export default function UploadTab() {
     try {
       let filesProcessed = 0;
 
-      // Upload lineups first (routes auto-detect rounds from data)
+      // Upload in correct order: lineups first, then teams, then points_grid
       const uploadOrder: CsvType[] = ['lineups', 'teams', 'points_grid'];
       for (const type of uploadOrder) {
         const upload = uploads[type];
@@ -192,13 +172,12 @@ export default function UploadTab() {
           [type]: { ...prev[type], status: 'uploaded' },
         }));
 
-        // Build detailed log message
         let logMsg = `${type} uploaded successfully`;
         if (result.rounds) {
-          const roundList = Object.entries(result.rounds).map(([r, c]) => `R${r}: ${c} rows`).join(', ');
+          const roundList = Object.entries(result.rounds).map(([r, c]) => `R${r}: ${c}`).join(', ');
           logMsg += ` (${roundList})`;
         } else if (result.target_round) {
-          logMsg += ` (applied to R${result.target_round})`;
+          logMsg += ` (applied to R${result.target_round}, computed ${result.rounds_computed?.length || 0} rounds)`;
         } else {
           logMsg += ` (${result.count} records)`;
         }
@@ -208,10 +187,7 @@ export default function UploadTab() {
       // Process draft if parsed
       if (uploads.draft.status === 'parsed' && uploads.draft.data) {
         setStepLog((prev) => [...prev, `Uploading draft... (${uploads.draft.rowCount} picks)`]);
-        setUploads((prev) => ({
-          ...prev,
-          draft: { ...prev.draft, status: 'uploading' },
-        }));
+        setUploads((prev) => ({ ...prev, draft: { ...prev.draft, status: 'uploading' } }));
 
         const res = await fetch('/api/upload/draft', {
           method: 'POST',
@@ -224,10 +200,7 @@ export default function UploadTab() {
           throw new Error(`draft: ${err.error || 'Upload failed'}`);
         }
 
-        setUploads((prev) => ({
-          ...prev,
-          draft: { ...prev.draft, status: 'uploaded' },
-        }));
+        setUploads((prev) => ({ ...prev, draft: { ...prev.draft, status: 'uploaded' } }));
         setStepLog((prev) => [...prev, `Draft uploaded successfully`]);
         filesProcessed++;
       }
@@ -238,7 +211,6 @@ export default function UploadTab() {
         setProcessResult(`Done! ${filesProcessed} file${filesProcessed > 1 ? 's' : ''} processed.`);
       }
 
-      // Refresh DB summary
       await loadDbSummary();
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : 'Unknown error';
@@ -249,128 +221,122 @@ export default function UploadTab() {
     }
   };
 
-  const csvSlots: { type: CsvType; label: string; description: string }[] = [
-    { type: 'lineups', label: 'Lineups CSV', description: 'Player lineups — auto-detects rounds from round_id column' },
-    { type: 'teams', label: 'Teams CSV', description: 'Team standings — applied to latest round' },
-    { type: 'points_grid', label: 'Points Grid CSV', description: 'Wide format scores (R0, R1, R2... columns)' },
+  const csvSlots: { type: CsvType; label: string }[] = [
+    { type: 'lineups', label: 'Lineups' },
+    { type: 'teams', label: 'Teams' },
+    { type: 'points_grid', label: 'Points Grid' },
   ];
 
   const hasAnyParsed = Object.values(uploads).some((u) => u.status === 'parsed');
 
   return (
     <div>
-      {/* DB Status Summary */}
+      {/* Season Round Timeline */}
       <div className="bg-card border border-border rounded-lg p-5 mb-6 shadow-sm">
-        <div className="flex items-center gap-2 mb-3">
-          <Database size={18} className="text-primary" />
-          <h3 className="font-semibold text-sm">Current Data in Database</h3>
-        </div>
+        <h3 className="font-semibold text-sm mb-3">Season Progress</h3>
         {loadingDb ? (
-          <p className="text-sm text-muted-foreground">Loading...</p>
-        ) : dbSummary ? (
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
-            <div>
-              <span className="text-muted-foreground block text-xs">Player Rounds</span>
-              {Object.keys(dbSummary.playerRounds).length > 0 ? (
-                <div className="font-medium">
-                  {Object.entries(dbSummary.playerRounds)
-                    .sort(([a], [b]) => Number(a) - Number(b))
-                    .map(([r, c]) => (
-                      <span key={r} className="inline-block bg-muted px-2 py-0.5 rounded text-xs mr-1 mb-1">
-                        R{r}: {c}
-                      </span>
-                    ))}
-                </div>
-              ) : (
-                <span className="text-muted-foreground">None</span>
+          <div className="text-sm text-muted-foreground">Loading...</div>
+        ) : (
+          <div className="flex items-center gap-1 overflow-x-auto pb-1">
+            {/* Draft pill */}
+            <div
+              className={cn(
+                'flex items-center justify-center h-8 px-2.5 rounded-md text-xs font-medium shrink-0 border',
+                hasDraft
+                  ? 'bg-green-100 text-green-700 border-green-300'
+                  : 'bg-gray-100 text-gray-400 border-gray-200'
               )}
+            >
+              Draft
             </div>
-            <div>
-              <span className="text-muted-foreground block text-xs">Team Snapshots</span>
-              {Object.keys(dbSummary.teamSnapshots).length > 0 ? (
-                <div className="font-medium">
-                  {Object.entries(dbSummary.teamSnapshots)
-                    .sort(([a], [b]) => Number(a) - Number(b))
-                    .map(([r, c]) => (
-                      <span key={r} className="inline-block bg-muted px-2 py-0.5 rounded text-xs mr-1 mb-1">
-                        R{r}: {c}
-                      </span>
-                    ))}
+            <div className="w-1 h-px bg-border shrink-0" />
+            {/* Round pills R1–R23 */}
+            {Array.from({ length: TOTAL_ROUNDS }, (_, i) => i + 1).map((round) => {
+              const status = roundStatuses[round];
+              const hasData = status?.playerRounds || status?.teamSnapshots;
+              return (
+                <div
+                  key={round}
+                  className={cn(
+                    'flex items-center justify-center w-8 h-8 rounded-md text-xs font-medium shrink-0 border',
+                    hasData
+                      ? 'bg-green-100 text-green-700 border-green-300'
+                      : 'bg-gray-100 text-gray-400 border-gray-200'
+                  )}
+                  title={hasData ? `R${round}: data uploaded` : `R${round}: no data`}
+                >
+                  {round}
                 </div>
-              ) : (
-                <span className="text-muted-foreground">None</span>
-              )}
-            </div>
-            <div>
-              <span className="text-muted-foreground block text-xs">Draft Picks</span>
-              <span className="font-medium">{dbSummary.draftPicks || 'None'}</span>
-            </div>
-            <div>
-              <span className="text-muted-foreground block text-xs">PWRNKGs</span>
-              {dbSummary.pwrnkgsRounds.length > 0 ? (
-                <div className="font-medium">
-                  {dbSummary.pwrnkgsRounds.map((r) => (
-                    <span
-                      key={r.round_number}
-                      className={cn(
-                        'inline-block px-2 py-0.5 rounded text-xs mr-1 mb-1',
-                        r.status === 'published' ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'
-                      )}
-                    >
-                      R{r.round_number} ({r.status})
-                    </span>
-                  ))}
-                </div>
-              ) : (
-                <span className="text-muted-foreground">None</span>
-              )}
-            </div>
+              );
+            })}
           </div>
-        ) : null}
+        )}
       </div>
 
-      {/* Auto-detect drop zone */}
+      {/* Multi-file drop zone */}
       <div
-        onDrop={handleAutoDrop}
+        onDrop={handleMultiDrop}
         onDragOver={(e) => e.preventDefault()}
         className="border-2 border-dashed border-border rounded-xl p-8 mb-6 text-center hover:border-primary/50 transition-colors bg-card"
       >
         <Upload size={32} className="mx-auto mb-3 text-muted-foreground" />
-        <p className="text-sm text-muted-foreground">
-          Drop any CSV here — type will be auto-detected from filename
+        <p className="text-sm text-muted-foreground mb-2">
+          Drop all your CSVs here at once — types auto-detected from filenames
         </p>
+        <p className="text-xs text-muted-foreground mb-3">
+          (lineups, teams, points-grid)
+        </p>
+        <label className="inline-flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg text-sm font-medium cursor-pointer hover:bg-primary/90 transition-colors">
+          <Upload size={14} />
+          Browse Files
+          <input
+            type="file"
+            accept=".csv"
+            multiple
+            className="hidden"
+            onChange={handleFileInput}
+          />
+        </label>
       </div>
 
-      {/* Individual CSV slots */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-        {csvSlots.map(({ type, label, description }) => {
-          const upload = uploads[type];
-          return (
-            <CsvDropZone
-              key={type}
-              type={type}
-              label={label}
-              description={description}
-              upload={upload}
-              onDrop={handleDrop}
-              onFileInput={handleFileInput}
-            />
-          );
-        })}
-      </div>
-
-      {/* Draft CSV (separate, one-time) */}
-      <div className="mb-6">
-        <h3 className="text-sm font-medium text-muted-foreground mb-2">Draft Data (one-time upload)</h3>
-        <CsvDropZone
-          type="draft"
-          label="Draft CSV"
-          description="Draft picks — upload once for the season"
-          upload={uploads.draft}
-          onDrop={handleDrop}
-          onFileInput={handleFileInput}
-        />
-      </div>
+      {/* Parsed files summary */}
+      {csvSlots.some(({ type }) => uploads[type].status !== 'idle') && (
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-6">
+          {csvSlots.map(({ type, label }) => {
+            const upload = uploads[type];
+            if (upload.status === 'idle') return (
+              <div key={type} className="border border-border rounded-lg p-3 bg-card text-muted-foreground text-sm">
+                {label}: not loaded
+              </div>
+            );
+            return (
+              <div
+                key={type}
+                className={cn(
+                  'border rounded-lg p-3',
+                  upload.status === 'uploaded' ? 'border-green-300 bg-green-50'
+                    : upload.status === 'uploading' ? 'border-blue-300 bg-blue-50'
+                    : upload.status === 'parsed' ? 'border-primary/30 bg-blue-50/30'
+                    : upload.status === 'error' ? 'border-red-300 bg-red-50'
+                    : 'border-border bg-card'
+                )}
+              >
+                <div className="flex items-center gap-2">
+                  {upload.status === 'uploaded' ? <CheckCircle size={16} className="text-green-600" />
+                    : upload.status === 'uploading' ? <Loader2 size={16} className="text-blue-600 animate-spin" />
+                    : upload.status === 'error' ? <AlertCircle size={16} className="text-red-600" />
+                    : <FileText size={16} className="text-primary" />
+                  }
+                  <span className="text-sm font-medium">{label}</span>
+                  {upload.rowCount && <span className="text-xs text-muted-foreground ml-auto">{upload.rowCount} rows</span>}
+                </div>
+                {upload.filename && <p className="text-xs text-muted-foreground mt-1 truncate">{upload.filename}</p>}
+                {upload.error && <p className="text-xs text-red-600 mt-1">{upload.error}</p>}
+              </div>
+            );
+          })}
+        </div>
+      )}
 
       {/* Process button */}
       {hasAnyParsed && (
@@ -395,7 +361,7 @@ export default function UploadTab() {
         </button>
       )}
 
-      {/* Step-by-step log */}
+      {/* Step log */}
       {stepLog.length > 0 && (
         <div className="mt-4 bg-card border border-border rounded-lg p-4 space-y-1 shadow-sm">
           {stepLog.map((log, i) => (
@@ -425,81 +391,6 @@ export default function UploadTab() {
           {processResult}
         </div>
       )}
-    </div>
-  );
-}
-
-function CsvDropZone({
-  type,
-  label,
-  description,
-  upload,
-  onDrop,
-  onFileInput,
-}: {
-  type: CsvType;
-  label: string;
-  description: string;
-  upload: UploadState;
-  onDrop: (e: React.DragEvent, type: CsvType) => void;
-  onFileInput: (e: React.ChangeEvent<HTMLInputElement>, type: CsvType) => void;
-}) {
-  return (
-    <div
-      onDrop={(e) => onDrop(e, type)}
-      onDragOver={(e) => e.preventDefault()}
-      className={cn(
-        'border rounded-lg p-4 transition-colors bg-card',
-        upload.status === 'uploaded'
-          ? 'border-green-300 bg-green-50'
-          : upload.status === 'uploading'
-            ? 'border-blue-300 bg-blue-50'
-            : upload.status === 'parsed'
-              ? 'border-primary/30 bg-blue-50/30'
-              : upload.status === 'error'
-                ? 'border-red-300 bg-red-50'
-                : 'border-border hover:border-gray-300'
-      )}
-    >
-      <div className="flex items-start gap-3">
-        {upload.status === 'uploaded' ? (
-          <CheckCircle size={20} className="text-green-600 mt-0.5 shrink-0" />
-        ) : upload.status === 'uploading' ? (
-          <Loader2 size={20} className="text-blue-600 mt-0.5 shrink-0 animate-spin" />
-        ) : upload.status === 'error' ? (
-          <AlertCircle size={20} className="text-red-600 mt-0.5 shrink-0" />
-        ) : upload.status === 'parsed' ? (
-          <FileText size={20} className="text-primary mt-0.5 shrink-0" />
-        ) : (
-          <Upload size={20} className="text-muted-foreground mt-0.5 shrink-0" />
-        )}
-        <div className="flex-1 min-w-0">
-          <p className="text-sm font-medium">{label}</p>
-          {upload.filename ? (
-            <p className="text-xs text-muted-foreground truncate">{upload.filename}</p>
-          ) : (
-            <p className="text-xs text-muted-foreground">{description}</p>
-          )}
-          {upload.rowCount !== undefined && (
-            <p className="text-xs text-primary font-medium mt-1">{upload.rowCount} rows parsed</p>
-          )}
-          {upload.status === 'uploading' && (
-            <p className="text-xs text-blue-600 mt-1">Uploading...</p>
-          )}
-          {upload.error && <p className="text-xs text-red-600 mt-1">{upload.error}</p>}
-          {upload.status === 'idle' && (
-            <label className="text-xs text-primary cursor-pointer mt-1 inline-block hover:underline font-medium">
-              Browse
-              <input
-                type="file"
-                accept=".csv"
-                className="hidden"
-                onChange={(e) => onFileInput(e, type)}
-              />
-            </label>
-          )}
-        </div>
-      </div>
     </div>
   );
 }
