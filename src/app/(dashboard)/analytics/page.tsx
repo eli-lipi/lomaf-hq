@@ -2,6 +2,10 @@
 
 import { useState } from 'react';
 import { cn } from '@/lib/utils';
+import OverviewTab from './overview-tab';
+import TeamDeepDiveTab from './team-tab';
+import DraftTab from './draft-tab';
+import PlayersTab from './players-tab';
 
 const TABS = [
   { id: 'overview', label: 'Overview' },
@@ -43,38 +47,6 @@ export default function AnalyticsPage() {
       {activeTab === 'team' && <TeamDeepDiveTab />}
       {activeTab === 'draft' && <DraftTab />}
       {activeTab === 'players' && <PlayersTab />}
-    </div>
-  );
-}
-
-function OverviewTab() {
-  return (
-    <div className="text-center py-12 bg-card border border-border rounded-lg shadow-sm">
-      <p className="text-muted-foreground">Overview analytics will appear here after data is uploaded.</p>
-    </div>
-  );
-}
-
-function TeamDeepDiveTab() {
-  return (
-    <div className="text-center py-12 bg-card border border-border rounded-lg shadow-sm">
-      <p className="text-muted-foreground">Select a team to see detailed analytics.</p>
-    </div>
-  );
-}
-
-function DraftTab() {
-  return (
-    <div className="text-center py-12 bg-card border border-border rounded-lg shadow-sm">
-      <p className="text-muted-foreground">Upload draft data to see draft vs reality analysis.</p>
-    </div>
-  );
-}
-
-function PlayersTab() {
-  return (
-    <div className="text-center py-12 bg-card border border-border rounded-lg shadow-sm">
-      <p className="text-muted-foreground">Player rankings will appear here after data is uploaded.</p>
     </div>
   );
 }
