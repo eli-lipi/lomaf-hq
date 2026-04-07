@@ -49,7 +49,7 @@ export default function AnalyticsPage() {
 
 function OverviewTab() {
   return (
-    <div className="text-center py-12">
+    <div className="text-center py-12 bg-card border border-border rounded-lg shadow-sm">
       <p className="text-muted-foreground">Overview analytics will appear here after data is uploaded.</p>
     </div>
   );
@@ -57,7 +57,7 @@ function OverviewTab() {
 
 function TeamDeepDiveTab() {
   return (
-    <div className="text-center py-12">
+    <div className="text-center py-12 bg-card border border-border rounded-lg shadow-sm">
       <p className="text-muted-foreground">Select a team to see detailed analytics.</p>
     </div>
   );
@@ -65,7 +65,7 @@ function TeamDeepDiveTab() {
 
 function DraftTab() {
   return (
-    <div className="text-center py-12">
+    <div className="text-center py-12 bg-card border border-border rounded-lg shadow-sm">
       <p className="text-muted-foreground">Upload draft data to see draft vs reality analysis.</p>
     </div>
   );
@@ -73,7 +73,7 @@ function DraftTab() {
 
 function PlayersTab() {
   return (
-    <div className="text-center py-12">
+    <div className="text-center py-12 bg-card border border-border rounded-lg shadow-sm">
       <p className="text-muted-foreground">Player rankings will appear here after data is uploaded.</p>
     </div>
   );

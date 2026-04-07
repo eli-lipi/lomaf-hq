@@ -93,16 +93,16 @@ export default function GenerateTab() {
     <div>
       <div className="flex items-center justify-between mb-6">
         <div>
-          <span className="bg-primary/10 text-primary font-bold px-3 py-1 rounded text-sm">R{roundNumber}</span>
+          <span className="bg-primary/10 text-primary font-bold px-3 py-1 rounded-full text-sm">R{roundNumber}</span>
         </div>
         <div className="flex gap-3">
           <button
             onClick={generateAll}
             disabled={generating}
             className={cn(
-              'flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors',
+              'flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors shadow-sm',
               generating
-                ? 'bg-muted text-muted-foreground cursor-not-allowed'
+                ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
                 : 'bg-primary text-primary-foreground hover:bg-primary/90'
             )}
           >
@@ -121,7 +121,7 @@ export default function GenerateTab() {
           {slides.some((s) => s !== null) && (
             <button
               onClick={downloadAll}
-              className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-card border border-border hover:bg-muted/50 transition-colors"
+              className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-card border border-border hover:bg-muted transition-colors shadow-sm"
             >
               <Download size={16} />
               Download ZIP
@@ -130,12 +130,25 @@ export default function GenerateTab() {
         </div>
       </div>
 
+      {/* Progress bar */}
+      {generating && (
+        <div className="mb-6">
+          <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
+            <div
+              className="h-full bg-primary rounded-full transition-all duration-300"
+              style={{ width: `${(progress / 12) * 100}%` }}
+            />
+          </div>
+          <p className="text-xs text-muted-foreground mt-1 text-center">Generating slide {progress} of 12...</p>
+        </div>
+      )}
+
       {/* Slide grid */}
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
         {Array.from({ length: 12 }).map((_, i) => (
           <div
             key={i}
-            className="aspect-square bg-card border border-border rounded-lg overflow-hidden relative group cursor-pointer"
+            className="aspect-square bg-card border border-border rounded-lg overflow-hidden relative group cursor-pointer shadow-sm"
             onClick={() => downloadSlide(i)}
           >
             {slides[i] ? (
@@ -159,7 +172,7 @@ export default function GenerateTab() {
       </div>
 
       {error && (
-        <div className="mt-4 p-3 rounded-lg bg-red-500/10 text-red-400 text-sm">{error}</div>
+        <div className="mt-4 p-3 rounded-lg bg-red-50 text-red-700 border border-red-200 text-sm">{error}</div>
       )}
     </div>
   );

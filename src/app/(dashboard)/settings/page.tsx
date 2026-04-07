@@ -14,7 +14,7 @@ export default function SettingsPage() {
       {/* League Info */}
       <section className="mb-8">
         <h2 className="text-lg font-semibold mb-3">League Info</h2>
-        <div className="bg-card border border-border rounded-lg p-5">
+        <div className="bg-card border border-border rounded-lg p-5 shadow-sm">
           <div className="grid grid-cols-2 md:grid-cols-3 gap-4 text-sm">
             <div>
               <span className="text-muted-foreground">League</span>
@@ -73,7 +73,7 @@ function CoachCard({ team }: { team: (typeof TEAMS)[number] }) {
   };
 
   return (
-    <div className="bg-card border border-border rounded-lg p-4">
+    <div className="bg-card border border-border rounded-lg p-4 shadow-sm">
       <div className="flex items-center gap-3 mb-3">
         <div className="flex -space-x-2">
           {photoKeys.map((key) => (
@@ -99,7 +99,7 @@ function CoachCard({ team }: { team: (typeof TEAMS)[number] }) {
         {photoKeys.map((key) => (
           <label
             key={key}
-            className="flex items-center gap-1.5 text-xs text-primary cursor-pointer hover:underline"
+            className="flex items-center gap-1.5 text-xs text-primary cursor-pointer hover:underline font-medium"
           >
             <Upload size={12} />
             {photoKeys.length > 1 ? key : 'Upload Photo'}

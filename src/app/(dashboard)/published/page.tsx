@@ -1,9 +1,9 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Archive, ChevronRight, ExternalLink } from 'lucide-react';
+import { Archive } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
-import { cn, ordinal, movementLabel, movementColor } from '@/lib/utils';
+import { cn, movementLabel, movementColor } from '@/lib/utils';
 import type { PwrnkgsRound, PwrnkgsRanking } from '@/lib/types';
 
 export default function PublishedPage() {
@@ -47,7 +47,7 @@ export default function PublishedPage() {
   if (rounds.length === 0) {
     return (
       <div className="text-center py-12">
-        <Archive size={48} className="mx-auto mb-4 text-muted-foreground/30" />
+        <Archive size={48} className="mx-auto mb-4 text-gray-300" />
         <p className="text-muted-foreground">No published PWRNKGs yet.</p>
       </div>
     );
@@ -65,7 +65,7 @@ export default function PublishedPage() {
             key={r.round_number}
             onClick={() => selectRound(r)}
             className={cn(
-              'px-4 py-2 rounded-lg text-sm font-medium whitespace-nowrap transition-colors',
+              'px-4 py-2 rounded-lg text-sm font-medium whitespace-nowrap transition-colors shadow-sm',
               selectedRound?.round_number === r.round_number
                 ? 'bg-primary text-primary-foreground'
                 : 'bg-card border border-border text-muted-foreground hover:text-foreground'
@@ -80,11 +80,11 @@ export default function PublishedPage() {
       {selectedRound && (
         <div>
           {/* Round info */}
-          <div className="bg-card border border-border rounded-lg p-5 mb-6">
+          <div className="bg-card border border-border rounded-lg p-5 mb-6 shadow-sm">
             <div className="flex items-center gap-3 mb-2">
               <span className="text-xl font-bold">Round {selectedRound.round_number} PWRNKGs</span>
               {selectedRound.theme && (
-                <span className="text-sm text-primary">&quot;{selectedRound.theme}&quot;</span>
+                <span className="text-sm text-primary font-medium">&quot;{selectedRound.theme}&quot;</span>
               )}
             </div>
             {selectedRound.preview_text && (
@@ -101,7 +101,7 @@ export default function PublishedPage() {
               const moveColor = movementColor(r.ranking, r.previous_ranking);
 
               return (
-                <div key={r.team_id} className="bg-card border border-border rounded-lg p-4 flex gap-4">
+                <div key={r.team_id} className="bg-card border border-border rounded-lg p-4 flex gap-4 shadow-sm">
                   <div className="w-12 shrink-0 flex items-start justify-center pt-1">
                     <span className="text-3xl font-bold text-primary">{r.ranking}</span>
                   </div>
@@ -119,7 +119,7 @@ export default function PublishedPage() {
 
           {/* Week Ahead */}
           {selectedRound.week_ahead_text && (
-            <div className="bg-card border border-border rounded-lg p-5 mt-6">
+            <div className="bg-card border border-border rounded-lg p-5 mt-6 shadow-sm">
               <h3 className="text-sm font-semibold text-primary mb-2">Week Ahead</h3>
               <p className="text-sm text-muted-foreground whitespace-pre-line">
                 {selectedRound.week_ahead_text}

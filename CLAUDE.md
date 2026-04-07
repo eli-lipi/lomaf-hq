@@ -13,8 +13,9 @@
 - Drag-and-drop: @dnd-kit
 
 ## Design
-- Dark theme: `#0A0F1C` background, `#A3FF12` lime accent
-- Sporty, clean, minimalist aesthetic
+- Light theme inspired by AFL.com.au: `#F0F2F5` background, white cards, `#E21937` red accent
+- Dark navy sidebar: `#0E1629`
+- Sporty, clean, professional aesthetic
 - Fixed sidebar navigation
 
 ## Rules

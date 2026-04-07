@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useCallback } from 'react';
-import { Upload, CheckCircle, AlertCircle, FileText } from 'lucide-react';
+import { Upload, CheckCircle, AlertCircle, FileText, Loader2 } from 'lucide-react';
 import Papa from 'papaparse';
 import { cn } from '@/lib/utils';
 
@@ -25,7 +25,6 @@ function detectCsvType(filename: string): CsvType | null {
 }
 
 function detectRoundNumber(data: Record<string, unknown>[]): number | null {
-  // Look for round_id column (format: 202601 = 2026, Round 1)
   for (const row of data) {
     const roundId = row['round_id'] || row['Round ID'] || row['roundId'];
     if (roundId) {
@@ -48,6 +47,7 @@ export default function UploadTab() {
   });
   const [processing, setProcessing] = useState(false);
   const [processResult, setProcessResult] = useState<string | null>(null);
+  const [stepLog, setStepLog] = useState<string[]>([]);
 
   const handleFile = useCallback((file: File, type: CsvType) => {
     Papa.parse(file, {
@@ -68,7 +68,6 @@ export default function UploadTab() {
           return;
         }
 
-        // Auto-detect round from lineups CSV
         if (type === 'lineups') {
           const detected = detectRoundNumber(data);
           if (detected) setRoundNumber(detected);
@@ -83,6 +82,10 @@ export default function UploadTab() {
             data,
           },
         }));
+
+        // Clear any previous result when new files are added
+        setProcessResult(null);
+        setStepLog([]);
       },
     });
   }, []);
@@ -124,13 +127,21 @@ export default function UploadTab() {
     if (!roundNumber) return;
     setProcessing(true);
     setProcessResult(null);
+    setStepLog([]);
 
     try {
       const uploadTypes: CsvType[] = ['lineups', 'teams', 'points_grid'];
+      let totalRows = 0;
+      let filesProcessed = 0;
+
       for (const type of uploadTypes) {
         const upload = uploads[type];
-        if (upload.status !== 'parsed' || !upload.data) continue;
+        if (upload.status !== 'parsed' || !upload.data) {
+          setStepLog((prev) => [...prev, `Skipping ${type} (no file uploaded)`]);
+          continue;
+        }
 
+        setStepLog((prev) => [...prev, `Uploading ${type}... (${upload.rowCount} rows)`]);
         setUploads((prev) => ({
           ...prev,
           [type]: { ...prev[type], status: 'uploading' },
@@ -147,14 +158,20 @@ export default function UploadTab() {
           throw new Error(`${type}: ${err.error || 'Upload failed'}`);
         }
 
+        const result = await res.json();
+        totalRows += upload.rowCount || 0;
+        filesProcessed++;
+
         setUploads((prev) => ({
           ...prev,
           [type]: { ...prev[type], status: 'uploaded' },
         }));
+        setStepLog((prev) => [...prev, `${type} uploaded successfully (${result.count || upload.rowCount} records)`]);
       }
 
       // Process draft if parsed
       if (uploads.draft.status === 'parsed' && uploads.draft.data) {
+        setStepLog((prev) => [...prev, `Uploading draft... (${uploads.draft.rowCount} picks)`]);
         setUploads((prev) => ({
           ...prev,
           draft: { ...prev.draft, status: 'uploading' },
@@ -175,17 +192,21 @@ export default function UploadTab() {
           ...prev,
           draft: { ...prev.draft, status: 'uploaded' },
         }));
+        setStepLog((prev) => [...prev, `Draft uploaded successfully`]);
+        filesProcessed++;
       }
 
-      const totalRows = uploadTypes.reduce(
-        (sum, type) => sum + (uploads[type].rowCount || 0),
-        0
-      );
-      setProcessResult(
-        `Round ${roundNumber} processed. ${totalRows} records across ${uploadTypes.filter((t) => uploads[t].status === 'uploaded').length} files.`
-      );
+      if (filesProcessed === 0) {
+        setProcessResult('No files to process. Upload at least one CSV first.');
+      } else {
+        setProcessResult(
+          `Round ${roundNumber} processed! ${totalRows} records across ${filesProcessed} file${filesProcessed > 1 ? 's' : ''}.`
+        );
+      }
     } catch (err) {
-      setProcessResult(`Error: ${err instanceof Error ? err.message : 'Unknown error'}`);
+      const errorMsg = err instanceof Error ? err.message : 'Unknown error';
+      setStepLog((prev) => [...prev, `Error: ${errorMsg}`]);
+      setProcessResult(`Error: ${errorMsg}`);
     } finally {
       setProcessing(false);
     }
@@ -197,19 +218,19 @@ export default function UploadTab() {
     { type: 'points_grid', label: 'Points Grid CSV', description: 'Scoring grid with player points' },
   ];
 
-  const allUploaded = csvSlots.every(
-    (s) => uploads[s.type].status === 'parsed' || uploads[s.type].status === 'uploaded'
-  );
+  // Show button when at least one file is parsed and we have a round number
+  const hasAnyParsed = Object.values(uploads).some((u) => u.status === 'parsed');
+  const canProcess = hasAnyParsed && roundNumber !== null;
 
   return (
     <div>
       {/* Round indicator */}
       <div className="flex items-center gap-4 mb-6">
-        <label className="text-sm text-muted-foreground">Round:</label>
+        <label className="text-sm text-muted-foreground font-medium">Round:</label>
         {roundNumber ? (
-          <span className="bg-primary/10 text-primary font-bold px-3 py-1 rounded text-sm">R{roundNumber}</span>
+          <span className="bg-primary/10 text-primary font-bold px-3 py-1 rounded-full text-sm">R{roundNumber}</span>
         ) : (
-          <span className="text-muted-foreground text-sm">Auto-detected from lineups CSV</span>
+          <span className="text-muted-foreground text-sm italic">Auto-detected from lineups CSV</span>
         )}
       </div>
 
@@ -217,7 +238,7 @@ export default function UploadTab() {
       <div
         onDrop={handleAutoDrop}
         onDragOver={(e) => e.preventDefault()}
-        className="border-2 border-dashed border-border rounded-xl p-8 mb-6 text-center hover:border-primary/50 transition-colors"
+        className="border-2 border-dashed border-border rounded-xl p-8 mb-6 text-center hover:border-primary/50 transition-colors bg-card"
       >
         <Upload size={32} className="mx-auto mb-3 text-muted-foreground" />
         <p className="text-sm text-muted-foreground">
@@ -257,27 +278,53 @@ export default function UploadTab() {
       </div>
 
       {/* Process button */}
-      {allUploaded && roundNumber && (
+      {canProcess && (
         <button
           onClick={processRound}
           disabled={processing}
           className={cn(
             'w-full py-3 rounded-lg font-medium text-sm transition-colors',
             processing
-              ? 'bg-muted text-muted-foreground cursor-not-allowed'
-              : 'bg-primary text-primary-foreground hover:bg-primary/90'
+              ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+              : 'bg-primary text-primary-foreground hover:bg-primary/90 shadow-sm'
           )}
         >
-          {processing ? 'Processing...' : `Process Round ${roundNumber}`}
+          {processing ? (
+            <span className="flex items-center justify-center gap-2">
+              <Loader2 size={16} className="animate-spin" />
+              Processing Round {roundNumber}...
+            </span>
+          ) : (
+            `Process Round ${roundNumber}`
+          )}
         </button>
+      )}
+
+      {/* Step-by-step log */}
+      {stepLog.length > 0 && (
+        <div className="mt-4 bg-card border border-border rounded-lg p-4 space-y-1">
+          {stepLog.map((log, i) => (
+            <p
+              key={i}
+              className={cn(
+                'text-sm font-mono',
+                log.startsWith('Error') ? 'text-red-600' : log.includes('successfully') ? 'text-green-600' : 'text-muted-foreground'
+              )}
+            >
+              {log.includes('successfully') ? '✓' : log.startsWith('Error') ? '✗' : '→'} {log}
+            </p>
+          ))}
+        </div>
       )}
 
       {/* Result */}
       {processResult && (
         <div
           className={cn(
-            'mt-4 p-4 rounded-lg text-sm',
-            processResult.startsWith('Error') ? 'bg-red-500/10 text-red-400' : 'bg-green-500/10 text-green-400'
+            'mt-4 p-4 rounded-lg text-sm font-medium',
+            processResult.startsWith('Error')
+              ? 'bg-red-50 text-red-700 border border-red-200'
+              : 'bg-green-50 text-green-700 border border-green-200'
           )}
         >
           {processResult}
@@ -307,21 +354,25 @@ function CsvDropZone({
       onDrop={(e) => onDrop(e, type)}
       onDragOver={(e) => e.preventDefault()}
       className={cn(
-        'border rounded-lg p-4 transition-colors',
+        'border rounded-lg p-4 transition-colors bg-card',
         upload.status === 'uploaded'
-          ? 'border-green-500/30 bg-green-500/5'
-          : upload.status === 'parsed'
-            ? 'border-primary/30 bg-primary/5'
-            : upload.status === 'error'
-              ? 'border-red-500/30 bg-red-500/5'
-              : 'border-border hover:border-muted-foreground/30'
+          ? 'border-green-300 bg-green-50'
+          : upload.status === 'uploading'
+            ? 'border-blue-300 bg-blue-50'
+            : upload.status === 'parsed'
+              ? 'border-primary/30 bg-red-50/30'
+              : upload.status === 'error'
+                ? 'border-red-300 bg-red-50'
+                : 'border-border hover:border-gray-300'
       )}
     >
       <div className="flex items-start gap-3">
         {upload.status === 'uploaded' ? (
-          <CheckCircle size={20} className="text-green-400 mt-0.5 shrink-0" />
+          <CheckCircle size={20} className="text-green-600 mt-0.5 shrink-0" />
+        ) : upload.status === 'uploading' ? (
+          <Loader2 size={20} className="text-blue-600 mt-0.5 shrink-0 animate-spin" />
         ) : upload.status === 'error' ? (
-          <AlertCircle size={20} className="text-red-400 mt-0.5 shrink-0" />
+          <AlertCircle size={20} className="text-red-600 mt-0.5 shrink-0" />
         ) : upload.status === 'parsed' ? (
           <FileText size={20} className="text-primary mt-0.5 shrink-0" />
         ) : (
@@ -335,11 +386,14 @@ function CsvDropZone({
             <p className="text-xs text-muted-foreground">{description}</p>
           )}
           {upload.rowCount !== undefined && (
-            <p className="text-xs text-primary mt-1">{upload.rowCount} rows</p>
+            <p className="text-xs text-primary font-medium mt-1">{upload.rowCount} rows parsed</p>
           )}
-          {upload.error && <p className="text-xs text-red-400 mt-1">{upload.error}</p>}
+          {upload.status === 'uploading' && (
+            <p className="text-xs text-blue-600 mt-1">Uploading...</p>
+          )}
+          {upload.error && <p className="text-xs text-red-600 mt-1">{upload.error}</p>}
           {upload.status === 'idle' && (
-            <label className="text-xs text-primary cursor-pointer mt-1 inline-block hover:underline">
+            <label className="text-xs text-primary cursor-pointer mt-1 inline-block hover:underline font-medium">
               Browse
               <input
                 type="file"

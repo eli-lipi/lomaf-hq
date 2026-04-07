@@ -24,11 +24,11 @@ export function movementLabel(current: number, previous: number | null): string 
 }
 
 export function movementColor(current: number, previous: number | null): string {
-  if (previous === null) return 'text-blue-400';
+  if (previous === null) return 'text-blue-600';
   const diff = previous - current;
-  if (diff > 0) return 'text-green-400';
-  if (diff < 0) return 'text-red-400';
-  return 'text-gray-500';
+  if (diff > 0) return 'text-green-600';
+  if (diff < 0) return 'text-red-600';
+  return 'text-gray-400';
 }
 
 export function parseRoundFromId(roundId: string): number {

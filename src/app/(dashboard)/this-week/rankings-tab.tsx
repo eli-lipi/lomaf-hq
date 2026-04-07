@@ -51,10 +51,8 @@ export default function RankingsTab() {
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
   );
 
-  // Load latest round data
   useEffect(() => {
     async function loadData() {
-      // Find the latest round with team_snapshots
       const { data: snapshots } = await supabase
         .from('team_snapshots')
         .select('round_number')
@@ -65,14 +63,12 @@ export default function RankingsTab() {
       if (!currentRound) return;
       setLatestRound(currentRound);
 
-      // Check if a pwrnkgs_rounds entry exists for this round
       let { data: roundData } = await supabase
         .from('pwrnkgs_rounds')
         .select('*')
         .eq('round_number', currentRound)
         .single();
 
-      // If not, create one
       if (!roundData) {
         const { data: newRound } = await supabase
           .from('pwrnkgs_rounds')
@@ -88,20 +84,17 @@ export default function RankingsTab() {
       setPreviewText(roundData.preview_text || '');
       setWeekAheadText(roundData.week_ahead_text || '');
 
-      // Load existing rankings for this round
       const { data: existingRankings } = await supabase
         .from('pwrnkgs_rankings')
         .select('*')
         .eq('round_number', currentRound)
         .order('ranking', { ascending: true });
 
-      // Load team snapshots for stats
       const { data: teamSnapshots } = await supabase
         .from('team_snapshots')
         .select('*')
         .eq('round_number', currentRound);
 
-      // Get previous round's rankings for movement
       const { data: prevRankings } = await supabase
         .from('pwrnkgs_rankings')
         .select('team_id, ranking')
@@ -130,7 +123,6 @@ export default function RankingsTab() {
           })
         );
       } else {
-        // Initialize with all teams, sorted by league rank or alphabetically
         const sorted = [...TEAMS].sort((a, b) => {
           const snapA = snapshotMap.get(a.team_id);
           const snapB = snapshotMap.get(b.team_id);
@@ -180,13 +172,11 @@ export default function RankingsTab() {
     setMessage(null);
 
     try {
-      // Update round metadata
       await supabase
         .from('pwrnkgs_rounds')
         .update({ theme: theme || null, preview_text: previewText || null, week_ahead_text: weekAheadText || null })
         .eq('id', round.id);
 
-      // Upsert rankings
       const rankingRows = rankings.map((r) => ({
         round_id: round.id,
         round_number: round.round_number,
@@ -245,45 +235,45 @@ export default function RankingsTab() {
     <div>
       {/* Round header */}
       <div className="flex items-center gap-3 mb-6">
-        <span className="bg-primary/10 text-primary font-bold px-3 py-1 rounded text-sm">R{latestRound}</span>
+        <span className="bg-primary/10 text-primary font-bold px-3 py-1 rounded-full text-sm">R{latestRound}</span>
         {isPublished && (
-          <span className="bg-green-500/10 text-green-400 text-xs font-medium px-2 py-1 rounded">Published</span>
+          <span className="bg-green-100 text-green-700 text-xs font-medium px-2.5 py-1 rounded-full">Published</span>
         )}
       </div>
 
       {/* Round metadata */}
-      <div className="space-y-4 mb-8 bg-card rounded-lg p-5 border border-border">
+      <div className="space-y-4 mb-8 bg-card rounded-lg p-5 border border-border shadow-sm">
         <div>
-          <label className="block text-xs text-muted-foreground mb-1">Theme (optional)</label>
+          <label className="block text-xs text-muted-foreground mb-1 font-medium">Theme (optional)</label>
           <input
             type="text"
             value={theme}
             onChange={(e) => setTheme(e.target.value)}
             placeholder="e.g., The Gap"
             disabled={isPublished}
-            className="w-full bg-muted/50 border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary disabled:opacity-50"
+            className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary disabled:opacity-50"
           />
         </div>
         <div>
-          <label className="block text-xs text-muted-foreground mb-1">Preview Text (Slide 1)</label>
+          <label className="block text-xs text-muted-foreground mb-1 font-medium">Preview Text (Slide 1)</label>
           <textarea
             value={previewText}
             onChange={(e) => setPreviewText(e.target.value)}
             placeholder="The intro paragraph for the first carousel slide..."
             rows={4}
             disabled={isPublished}
-            className="w-full bg-muted/50 border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary disabled:opacity-50 resize-y"
+            className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary disabled:opacity-50 resize-y"
           />
         </div>
         <div>
-          <label className="block text-xs text-muted-foreground mb-1">Week Ahead Text (Slide 12)</label>
+          <label className="block text-xs text-muted-foreground mb-1 font-medium">Week Ahead Text (Slide 12)</label>
           <textarea
             value={weekAheadText}
             onChange={(e) => setWeekAheadText(e.target.value)}
             placeholder="Closing paragraph about the upcoming round..."
             rows={3}
             disabled={isPublished}
-            className="w-full bg-muted/50 border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary disabled:opacity-50 resize-y"
+            className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary disabled:opacity-50 resize-y"
           />
         </div>
       </div>
@@ -310,7 +300,7 @@ export default function RankingsTab() {
           <button
             onClick={save}
             disabled={saving}
-            className="flex items-center gap-2 px-6 py-2.5 rounded-lg bg-card border border-border text-sm font-medium hover:bg-muted/50 transition-colors disabled:opacity-50"
+            className="flex items-center gap-2 px-6 py-2.5 rounded-lg bg-card border border-border text-sm font-medium hover:bg-muted transition-colors disabled:opacity-50 shadow-sm"
           >
             <Save size={16} />
             {saving ? 'Saving...' : 'Save Draft'}
@@ -318,7 +308,7 @@ export default function RankingsTab() {
           <button
             onClick={publish}
             disabled={publishing}
-            className="flex items-center gap-2 px-6 py-2.5 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors disabled:opacity-50"
+            className="flex items-center gap-2 px-6 py-2.5 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors disabled:opacity-50 shadow-sm"
           >
             <Send size={16} />
             {publishing ? 'Publishing...' : 'Publish'}
@@ -330,8 +320,8 @@ export default function RankingsTab() {
       {message && (
         <div
           className={cn(
-            'mt-4 p-3 rounded-lg text-sm',
-            message.type === 'success' ? 'bg-green-500/10 text-green-400' : 'bg-red-500/10 text-red-400'
+            'mt-4 p-3 rounded-lg text-sm font-medium',
+            message.type === 'success' ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-red-50 text-red-700 border border-red-200'
           )}
         >
           {message.text}
@@ -368,8 +358,8 @@ function SortableRankingCard({
       ref={setNodeRef}
       style={style}
       className={cn(
-        'bg-card border border-border rounded-lg p-4 flex gap-4',
-        isDragging && 'opacity-50 z-50'
+        'bg-card border border-border rounded-lg p-4 flex gap-4 shadow-sm',
+        isDragging && 'opacity-50 z-50 shadow-lg'
       )}
     >
       {/* Drag handle */}
@@ -378,7 +368,7 @@ function SortableRankingCard({
         {...listeners}
         className={cn('flex items-center cursor-grab active:cursor-grabbing', disabled && 'cursor-default')}
       >
-        <GripVertical size={18} className="text-muted-foreground" />
+        <GripVertical size={18} className="text-gray-400" />
       </div>
 
       {/* Rank number */}
@@ -412,7 +402,7 @@ function SortableRankingCard({
           placeholder="Write 2-3 sentences about this team..."
           rows={2}
           disabled={disabled}
-          className="w-full bg-muted/30 border border-border rounded px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary disabled:opacity-50 resize-y"
+          className="w-full bg-background border border-border rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary disabled:opacity-50 resize-y"
         />
       </div>
     </div>
