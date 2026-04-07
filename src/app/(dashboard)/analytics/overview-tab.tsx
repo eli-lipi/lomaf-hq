@@ -7,7 +7,7 @@ import { formatScore } from '@/lib/utils';
 import type { TeamSnapshot } from '@/lib/types';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
-  BarChart, Bar, Cell,
+  BarChart, Bar, Cell, ReferenceLine,
 } from 'recharts';
 
 const TEAM_COLORS = [
@@ -33,6 +33,7 @@ export default function OverviewTab() {
   const [standings, setStandings] = useState<StandingsRow[]>([]);
   const [scoringTrends, setScoringTrends] = useState<Record<string, unknown>[]>([]);
   const [leagueAvg, setLeagueAvg] = useState<{ round: number; avg: number }[]>([]);
+  const [yDomain, setYDomain] = useState<[number, number]>([0, 2000]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -46,7 +47,7 @@ export default function OverviewTab() {
         .from('player_rounds')
         .select('round_number, team_id, team_name, points, is_scoring');
 
-      // Get team snapshots for standings (W/L/T/PF/PA come from teams CSV)
+      // Get team snapshots for standings (W/L/T come from teams CSV)
       const { data: snapshots } = await supabase
         .from('team_snapshots')
         .select('*')
@@ -73,51 +74,75 @@ export default function OverviewTab() {
       }
 
       // === Compute weekly scores from player_rounds (source of truth) ===
-      // Sum points where is_scoring=true, grouped by round+team
-      const teamRoundScores: Record<string, number> = {}; // "round-teamId" -> total
+      const teamRoundScores: Record<string, number> = {};
+      const teamRoundScoringCount: Record<string, number> = {};
       const roundsSet = new Set<number>();
 
       playerRounds?.forEach((pr) => {
-        if (!pr.is_scoring || pr.points == null) return;
+        if (!pr.is_scoring) return;
         const key = `${pr.round_number}-${pr.team_id}`;
+        if (!teamRoundScoringCount[key]) teamRoundScoringCount[key] = 0;
+        teamRoundScoringCount[key]++;
+        if (pr.points == null) return;
         teamRoundScores[key] = (teamRoundScores[key] || 0) + Number(pr.points);
         roundsSet.add(pr.round_number);
       });
 
-      const rounds = [...roundsSet].sort((a, b) => a - b);
+      // Filter out rounds where most teams have no points (incomplete data)
+      const allRounds = [...roundsSet].sort((a, b) => a - b);
+      const validRounds = allRounds.filter((round) => {
+        const teamsWithScores = TEAMS.filter((team) => {
+          const key = `${round}-${team.team_id}`;
+          return (teamRoundScores[key] || 0) > 0;
+        }).length;
+        return teamsWithScores >= 5; // At least half the teams must have scores
+      });
 
       // Build scoring trends
-      const trendData = rounds.map((round) => {
+      const allScores: number[] = [];
+      const trendData = validRounds.map((round) => {
         const row: Record<string, unknown> = { round: `R${round}` };
         TEAMS.forEach((team) => {
           const key = `${round}-${team.team_id}`;
-          row[team.team_name] = Math.round(teamRoundScores[key] || 0);
+          const score = Math.round(teamRoundScores[key] || 0);
+          row[team.team_name] = score;
+          if (score > 0) allScores.push(score);
         });
         return row;
       });
       setScoringTrends(trendData);
 
+      // Compute a zoomed Y axis: pad around min/max
+      if (allScores.length > 0) {
+        const minScore = Math.min(...allScores);
+        const maxScore = Math.max(...allScores);
+        const padding = Math.round((maxScore - minScore) * 0.15);
+        setYDomain([
+          Math.max(0, Math.floor((minScore - padding) / 50) * 50),
+          Math.ceil((maxScore + padding) / 50) * 50,
+        ]);
+      }
+
       // League average per round
-      const avgData = rounds.map((round) => {
+      const avgData = validRounds.map((round) => {
         const scores = TEAMS.map((team) => {
           const key = `${round}-${team.team_id}`;
           return teamRoundScores[key] || 0;
-        });
-        const avg = scores.reduce((a, b) => a + b, 0) / scores.length;
+        }).filter((s) => s > 0);
+        const avg = scores.length > 0 ? scores.reduce((a, b) => a + b, 0) / scores.length : 0;
         return { round, avg: Math.round(avg) };
       });
       setLeagueAvg(avgData);
 
-      // === Build standings from team_snapshots (latest round with W/L data) ===
+      // === Build standings ===
       if (snapshots && snapshots.length > 0) {
         const maxRound = Math.max(...snapshots.map((s: TeamSnapshot) => s.round_number));
         const latestSnapshots = snapshots.filter((s: TeamSnapshot) => s.round_number === maxRound);
 
-        // Compute cumulative PF from player_rounds for each team
         const cumulativePF: Record<number, number> = {};
         TEAMS.forEach((t) => {
           let total = 0;
-          rounds.forEach((r) => {
+          validRounds.forEach((r) => {
             total += teamRoundScores[`${r}-${t.team_id}`] || 0;
           });
           cumulativePF[t.team_id] = total;
@@ -126,7 +151,6 @@ export default function OverviewTab() {
         const standingsData: StandingsRow[] = latestSnapshots
           .map((s: TeamSnapshot) => {
             const team = TEAMS.find((t) => t.team_id === s.team_id);
-            // Use pts_for from team_snapshots if available, otherwise from computed
             const ptsFor = Number(s.pts_for) > 0 ? Number(s.pts_for) : cumulativePF[s.team_id] || 0;
             return {
               team_name: s.team_name,
@@ -143,29 +167,19 @@ export default function OverviewTab() {
             };
           })
           .sort((a, b) => a.league_rank - b.league_rank);
-
         setStandings(standingsData);
-      } else if (rounds.length > 0) {
-        // No team snapshots yet but we have player data — show basic standings
+      } else if (validRounds.length > 0) {
         const standingsData: StandingsRow[] = TEAMS.map((team) => {
           let totalPF = 0;
-          rounds.forEach((r) => {
+          validRounds.forEach((r) => {
             totalPF += teamRoundScores[`${r}-${team.team_id}`] || 0;
           });
           return {
-            team_name: team.team_name,
-            team_id: team.team_id,
-            coach: team.coach,
-            wins: 0, losses: 0, ties: 0,
-            pts_for: totalPF,
-            pts_against: 0,
-            pct: 0,
-            league_rank: 0,
-            pwrnkg: pwrnkgsMap[team.team_id] || null,
+            team_name: team.team_name, team_id: team.team_id, coach: team.coach,
+            wins: 0, losses: 0, ties: 0, pts_for: totalPF, pts_against: 0, pct: 0,
+            league_rank: 0, pwrnkg: pwrnkgsMap[team.team_id] || null,
           };
         }).sort((a, b) => b.pts_for - a.pts_for);
-
-        // Assign ranks by PF
         standingsData.forEach((s, i) => { s.league_rank = i + 1; });
         setStandings(standingsData);
       }
@@ -219,10 +233,7 @@ export default function OverviewTab() {
               </thead>
               <tbody>
                 {standings.map((team, i) => (
-                  <tr
-                    key={team.team_id}
-                    className={i % 2 === 0 ? 'bg-card' : 'bg-muted/20'}
-                  >
+                  <tr key={team.team_id} className={i % 2 === 0 ? 'bg-card' : 'bg-muted/20'}>
                     <td className="px-4 py-2.5 font-semibold text-muted-foreground">{team.league_rank}</td>
                     <td className="px-4 py-2.5">
                       <div>
@@ -253,15 +264,15 @@ export default function OverviewTab() {
         </div>
       )}
 
-      {/* Scoring Trends Chart */}
+      {/* Scoring Trends — Zoomed Y Axis */}
       {scoringTrends.length > 0 && (
         <div className="bg-card border border-border rounded-lg shadow-sm p-5">
           <h3 className="font-semibold mb-4">Weekly Scoring Trends</h3>
-          <ResponsiveContainer width="100%" height={360}>
+          <ResponsiveContainer width="100%" height={400}>
             <LineChart data={scoringTrends}>
               <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
               <XAxis dataKey="round" tick={{ fontSize: 12 }} />
-              <YAxis tick={{ fontSize: 12 }} />
+              <YAxis domain={yDomain} tick={{ fontSize: 12 }} />
               <Tooltip
                 contentStyle={{
                   backgroundColor: '#fff',
@@ -269,6 +280,7 @@ export default function OverviewTab() {
                   borderRadius: '8px',
                   fontSize: '12px',
                 }}
+                itemSorter={(item) => -(Number(item.value) || 0)}
               />
               <Legend wrapperStyle={{ fontSize: '11px' }} />
               {teamNames.map((name, i) => (
@@ -287,15 +299,21 @@ export default function OverviewTab() {
         </div>
       )}
 
-      {/* League Average Bar Chart */}
+      {/* League Average Bar Chart — Zoomed */}
       {leagueAvg.length > 0 && (
         <div className="bg-card border border-border rounded-lg shadow-sm p-5">
           <h3 className="font-semibold mb-4">League Average Score by Round</h3>
-          <ResponsiveContainer width="100%" height={240}>
+          <ResponsiveContainer width="100%" height={260}>
             <BarChart data={leagueAvg}>
               <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
               <XAxis dataKey="round" tickFormatter={(v) => `R${v}`} tick={{ fontSize: 12 }} />
-              <YAxis tick={{ fontSize: 12 }} />
+              <YAxis
+                domain={[
+                  Math.max(0, Math.floor((Math.min(...leagueAvg.map((d) => d.avg)) - 50) / 50) * 50),
+                  Math.ceil((Math.max(...leagueAvg.map((d) => d.avg)) + 50) / 50) * 50,
+                ]}
+                tick={{ fontSize: 12 }}
+              />
               <Tooltip
                 labelFormatter={(v) => `Round ${v}`}
                 contentStyle={{
@@ -305,6 +323,7 @@ export default function OverviewTab() {
                   fontSize: '12px',
                 }}
               />
+              <ReferenceLine y={Math.round(leagueAvg.reduce((a, b) => a + b.avg, 0) / leagueAvg.length)} stroke="#9CA3AF" strokeDasharray="5 5" label={{ value: 'Season Avg', position: 'right', fontSize: 10, fill: '#9CA3AF' }} />
               <Bar dataKey="avg" radius={[4, 4, 0, 0]}>
                 {leagueAvg.map((_, i) => (
                   <Cell key={i} fill="#1A56DB" fillOpacity={0.8} />
