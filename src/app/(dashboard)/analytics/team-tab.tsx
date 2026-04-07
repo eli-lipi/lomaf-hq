@@ -50,14 +50,23 @@ export default function TeamDeepDiveTab() {
   const team = TEAMS.find((t) => t.team_id === selectedTeamId);
   const latestSnap = snapshots.length > 0 ? snapshots[snapshots.length - 1] : null;
 
-  // Score trend (per-round scoring, not cumulative)
-  const scoreTrend = snapshots.map((s, i) => {
-    const prevPF = i > 0 ? Number(snapshots[i - 1].pts_for) : 0;
-    return {
-      round: `R${s.round_number}`,
-      score: Math.round(Number(s.pts_for) - prevPF),
-    };
+  // Compute weekly scores from player_rounds (source of truth)
+  const roundsWithData = [...new Set(playerData.map((p) => p.round_number))].sort((a, b) => a - b);
+
+  const scoreTrend = roundsWithData.map((round) => {
+    const roundPlayers = playerData.filter((p) => p.round_number === round && p.is_scoring);
+    const total = roundPlayers.reduce((sum, p) => sum + (Number(p.points) || 0), 0);
+    return { round: `R${round}`, score: Math.round(total) };
   });
+
+  // Cumulative PF from player_rounds
+  const cumulativePF = roundsWithData.reduce((sum, round) => {
+    const roundPlayers = playerData.filter((p) => p.round_number === round && p.is_scoring);
+    return sum + roundPlayers.reduce((s, p) => s + (Number(p.points) || 0), 0);
+  }, 0);
+
+  // Average score per round
+  const avgScore = roundsWithData.length > 0 ? Math.round(cumulativePF / roundsWithData.length) : 0;
 
   // Line ranking radar for latest round
   const radarData = latestSnap
@@ -68,32 +77,39 @@ export default function TeamDeepDiveTab() {
       }))
     : [];
 
-  // Line totals over time
-  const lineTrends = snapshots.map((s, i) => {
-    const prev = i > 0 ? snapshots[i - 1] : null;
+  // Line totals by round - computed from player_rounds
+  const lineTrends = roundsWithData.map((round) => {
+    const roundPlayers = playerData.filter((p) => p.round_number === round && p.is_scoring);
+    const byPos: Record<string, number> = { DEF: 0, MID: 0, FWD: 0, RUC: 0 };
+    roundPlayers.forEach((p) => {
+      const pos = p.pos.toUpperCase();
+      if (pos in byPos) byPos[pos] += Number(p.points) || 0;
+    });
     return {
-      round: `R${s.round_number}`,
-      DEF: Math.round(Number(s.def_total) - (prev ? Number(prev.def_total) : 0)),
-      MID: Math.round(Number(s.mid_total) - (prev ? Number(prev.mid_total) : 0)),
-      FWD: Math.round(Number(s.fwd_total) - (prev ? Number(prev.fwd_total) : 0)),
-      RUC: Math.round(Number(s.ruc_total) - (prev ? Number(prev.ruc_total) : 0)),
+      round: `R${round}`,
+      DEF: Math.round(byPos.DEF),
+      MID: Math.round(byPos.MID),
+      FWD: Math.round(byPos.FWD),
+      RUC: Math.round(byPos.RUC),
     };
   });
 
   // Top scorers for the team (latest round)
-  const latestRound = snapshots.length > 0 ? snapshots[snapshots.length - 1].round_number : 0;
+  const latestRound = roundsWithData.length > 0 ? roundsWithData[roundsWithData.length - 1] : 0;
   const latestPlayers = playerData
     .filter((p) => p.round_number === latestRound && p.is_scoring)
     .sort((a, b) => (Number(b.points) || 0) - (Number(a.points) || 0));
 
-  // Bench points wasted (EMG/non-scoring players who scored)
-  const benchByRound = snapshots.map((s) => {
-    const roundPlayers = playerData.filter((p) => p.round_number === s.round_number);
+  // Bench points wasted (non-scoring players who scored)
+  const benchByRound = roundsWithData.map((round) => {
+    const roundPlayers = playerData.filter((p) => p.round_number === round);
     const benchPts = roundPlayers
       .filter((p) => !p.is_scoring && Number(p.points) > 0)
       .reduce((sum, p) => sum + (Number(p.points) || 0), 0);
-    return { round: `R${s.round_number}`, benchPts: Math.round(benchPts) };
+    return { round: `R${round}`, benchPts: Math.round(benchPts) };
   });
+
+  const hasData = roundsWithData.length > 0;
 
   return (
     <div className="space-y-6">
@@ -130,22 +146,27 @@ export default function TeamDeepDiveTab() {
         </div>
       )}
 
-      {selectedTeamId && !loading && latestSnap && (
+      {selectedTeamId && !loading && hasData && (
         <>
           {/* Team Header Stats */}
           <div className="bg-card border border-border rounded-lg p-5 shadow-sm">
             <h3 className="font-semibold text-lg mb-1">{team?.team_name}</h3>
             <p className="text-muted-foreground text-sm mb-4">{team?.coach}</p>
             <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 gap-4">
-              <StatCard label="Record" value={`${latestSnap.wins}-${latestSnap.losses}-${latestSnap.ties}`} />
-              <StatCard label="Points For" value={formatScore(Number(latestSnap.pts_for))} />
-              <StatCard label="Points Against" value={formatScore(Number(latestSnap.pts_against))} />
-              <StatCard label="League Rank" value={`#${latestSnap.league_rank}`} />
-              <StatCard label="Win %" value={`${(Number(latestSnap.pct) * 100).toFixed(1)}%`} />
-              <StatCard
-                label="Avg Score"
-                value={formatScore(Math.round(Number(latestSnap.pts_for) / Math.max(snapshots.length, 1)))}
-              />
+              {latestSnap && (
+                <StatCard label="Record" value={`${latestSnap.wins}-${latestSnap.losses}-${latestSnap.ties}`} />
+              )}
+              <StatCard label="Points For" value={formatScore(Math.round(cumulativePF))} />
+              {latestSnap && Number(latestSnap.pts_against) > 0 && (
+                <StatCard label="Points Against" value={formatScore(Number(latestSnap.pts_against))} />
+              )}
+              {latestSnap && latestSnap.league_rank > 0 && (
+                <StatCard label="League Rank" value={`#${latestSnap.league_rank}`} />
+              )}
+              {latestSnap && Number(latestSnap.pct) > 0 && (
+                <StatCard label="Win %" value={`${(Number(latestSnap.pct) * 100).toFixed(1)}%`} />
+              )}
+              <StatCard label="Avg Score" value={formatScore(avgScore)} />
             </div>
           </div>
 
@@ -192,7 +213,7 @@ export default function TeamDeepDiveTab() {
             )}
 
             {/* Line Totals By Round */}
-            {lineTrends.length > 1 && (
+            {lineTrends.length > 0 && (
               <div className="bg-card border border-border rounded-lg shadow-sm p-5">
                 <h3 className="font-semibold mb-4">Line Scores by Round</h3>
                 <ResponsiveContainer width="100%" height={280}>
@@ -242,7 +263,7 @@ export default function TeamDeepDiveTab() {
             )}
 
             {/* Bench Points Wasted */}
-            {benchByRound.length > 1 && (
+            {benchByRound.length > 0 && (
               <div className="bg-card border border-border rounded-lg shadow-sm p-5">
                 <h3 className="font-semibold mb-4">Bench Points Wasted</h3>
                 <ResponsiveContainer width="100%" height={280}>
@@ -271,7 +292,7 @@ export default function TeamDeepDiveTab() {
         </>
       )}
 
-      {selectedTeamId && !loading && !latestSnap && (
+      {selectedTeamId && !loading && !hasData && (
         <div className="text-center py-12 bg-card border border-border rounded-lg shadow-sm">
           <p className="text-muted-foreground">No data available for this team yet. Upload round data first.</p>
         </div>

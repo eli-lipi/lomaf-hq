@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react';
 import { supabase } from '@/lib/supabase';
 import { TEAMS } from '@/lib/constants';
 import { formatScore } from '@/lib/utils';
-import type { TeamSnapshot, PwrnkgsRanking } from '@/lib/types';
+import type { TeamSnapshot } from '@/lib/types';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
   BarChart, Bar, Cell,
@@ -41,14 +41,19 @@ export default function OverviewTab() {
 
   const loadData = async () => {
     try {
-      // Get all team snapshots
+      // Source of truth: player_rounds from lineups CSV
+      const { data: playerRounds } = await supabase
+        .from('player_rounds')
+        .select('round_number, team_id, team_name, points, is_scoring');
+
+      // Get team snapshots for standings (W/L/T/PF/PA come from teams CSV)
       const { data: snapshots } = await supabase
         .from('team_snapshots')
         .select('*')
         .order('round_number', { ascending: true });
 
       // Get latest PWRNKGs rankings
-      const { data: latestRound } = await supabase
+      const { data: latestPwrnkg } = await supabase
         .from('pwrnkgs_rounds')
         .select('round_number')
         .eq('status', 'published')
@@ -57,61 +62,36 @@ export default function OverviewTab() {
         .single();
 
       let pwrnkgsMap: Record<number, number> = {};
-      if (latestRound) {
+      if (latestPwrnkg) {
         const { data: rankings } = await supabase
           .from('pwrnkgs_rankings')
           .select('team_id, ranking')
-          .eq('round_number', latestRound.round_number);
+          .eq('round_number', latestPwrnkg.round_number);
         rankings?.forEach((r: { team_id: number; ranking: number }) => {
           pwrnkgsMap[r.team_id] = r.ranking;
         });
       }
 
-      if (!snapshots || snapshots.length === 0) {
-        setLoading(false);
-        return;
-      }
+      // === Compute weekly scores from player_rounds (source of truth) ===
+      // Sum points where is_scoring=true, grouped by round+team
+      const teamRoundScores: Record<string, number> = {}; // "round-teamId" -> total
+      const roundsSet = new Set<number>();
 
-      // Get the latest round for standings
-      const maxRound = Math.max(...snapshots.map((s: TeamSnapshot) => s.round_number));
-      const latestSnapshots = snapshots.filter((s: TeamSnapshot) => s.round_number === maxRound);
+      playerRounds?.forEach((pr) => {
+        if (!pr.is_scoring || pr.points == null) return;
+        const key = `${pr.round_number}-${pr.team_id}`;
+        teamRoundScores[key] = (teamRoundScores[key] || 0) + Number(pr.points);
+        roundsSet.add(pr.round_number);
+      });
 
-      // Build standings
-      const standingsData: StandingsRow[] = latestSnapshots
-        .map((s: TeamSnapshot) => {
-          const team = TEAMS.find((t) => t.team_id === s.team_id);
-          return {
-            team_name: s.team_name,
-            team_id: s.team_id,
-            coach: team?.coach || '',
-            wins: s.wins,
-            losses: s.losses,
-            ties: s.ties,
-            pts_for: Number(s.pts_for),
-            pts_against: Number(s.pts_against),
-            pct: Number(s.pct),
-            league_rank: s.league_rank,
-            pwrnkg: pwrnkgsMap[s.team_id] || null,
-          };
-        })
-        .sort((a, b) => a.league_rank - b.league_rank);
+      const rounds = [...roundsSet].sort((a, b) => a - b);
 
-      setStandings(standingsData);
-
-      // Build scoring trends (pts_for per round per team)
-      const rounds = [...new Set(snapshots.map((s: TeamSnapshot) => s.round_number))].sort((a, b) => a - b);
+      // Build scoring trends
       const trendData = rounds.map((round) => {
         const row: Record<string, unknown> = { round: `R${round}` };
-        const roundSnaps = snapshots.filter((s: TeamSnapshot) => s.round_number === round);
-        // Calculate per-round score (difference from previous round's cumulative)
-        roundSnaps.forEach((s: TeamSnapshot) => {
-          const prevRound = snapshots.find(
-            (p: TeamSnapshot) => p.team_id === s.team_id && p.round_number === round - 1
-          );
-          const roundScore = prevRound
-            ? Number(s.pts_for) - Number(prevRound.pts_for)
-            : Number(s.pts_for);
-          row[s.team_name] = Math.round(roundScore);
+        TEAMS.forEach((team) => {
+          const key = `${round}-${team.team_id}`;
+          row[team.team_name] = Math.round(teamRoundScores[key] || 0);
         });
         return row;
       });
@@ -119,17 +99,76 @@ export default function OverviewTab() {
 
       // League average per round
       const avgData = rounds.map((round) => {
-        const roundSnaps = snapshots.filter((s: TeamSnapshot) => s.round_number === round);
-        const scores = roundSnaps.map((s: TeamSnapshot) => {
-          const prevRound = snapshots.find(
-            (p: TeamSnapshot) => p.team_id === s.team_id && p.round_number === round - 1
-          );
-          return prevRound ? Number(s.pts_for) - Number(prevRound.pts_for) : Number(s.pts_for);
+        const scores = TEAMS.map((team) => {
+          const key = `${round}-${team.team_id}`;
+          return teamRoundScores[key] || 0;
         });
-        const avg = scores.length > 0 ? scores.reduce((a, b) => a + b, 0) / scores.length : 0;
+        const avg = scores.reduce((a, b) => a + b, 0) / scores.length;
         return { round, avg: Math.round(avg) };
       });
       setLeagueAvg(avgData);
+
+      // === Build standings from team_snapshots (latest round with W/L data) ===
+      if (snapshots && snapshots.length > 0) {
+        const maxRound = Math.max(...snapshots.map((s: TeamSnapshot) => s.round_number));
+        const latestSnapshots = snapshots.filter((s: TeamSnapshot) => s.round_number === maxRound);
+
+        // Compute cumulative PF from player_rounds for each team
+        const cumulativePF: Record<number, number> = {};
+        TEAMS.forEach((t) => {
+          let total = 0;
+          rounds.forEach((r) => {
+            total += teamRoundScores[`${r}-${t.team_id}`] || 0;
+          });
+          cumulativePF[t.team_id] = total;
+        });
+
+        const standingsData: StandingsRow[] = latestSnapshots
+          .map((s: TeamSnapshot) => {
+            const team = TEAMS.find((t) => t.team_id === s.team_id);
+            // Use pts_for from team_snapshots if available, otherwise from computed
+            const ptsFor = Number(s.pts_for) > 0 ? Number(s.pts_for) : cumulativePF[s.team_id] || 0;
+            return {
+              team_name: s.team_name,
+              team_id: s.team_id,
+              coach: team?.coach || '',
+              wins: s.wins,
+              losses: s.losses,
+              ties: s.ties,
+              pts_for: ptsFor,
+              pts_against: Number(s.pts_against),
+              pct: Number(s.pct),
+              league_rank: s.league_rank,
+              pwrnkg: pwrnkgsMap[s.team_id] || null,
+            };
+          })
+          .sort((a, b) => a.league_rank - b.league_rank);
+
+        setStandings(standingsData);
+      } else if (rounds.length > 0) {
+        // No team snapshots yet but we have player data — show basic standings
+        const standingsData: StandingsRow[] = TEAMS.map((team) => {
+          let totalPF = 0;
+          rounds.forEach((r) => {
+            totalPF += teamRoundScores[`${r}-${team.team_id}`] || 0;
+          });
+          return {
+            team_name: team.team_name,
+            team_id: team.team_id,
+            coach: team.coach,
+            wins: 0, losses: 0, ties: 0,
+            pts_for: totalPF,
+            pts_against: 0,
+            pct: 0,
+            league_rank: 0,
+            pwrnkg: pwrnkgsMap[team.team_id] || null,
+          };
+        }).sort((a, b) => b.pts_for - a.pts_for);
+
+        // Assign ranks by PF
+        standingsData.forEach((s, i) => { s.league_rank = i + 1; });
+        setStandings(standingsData);
+      }
     } catch (err) {
       console.error('Failed to load analytics:', err);
     } finally {
@@ -145,7 +184,7 @@ export default function OverviewTab() {
     );
   }
 
-  if (standings.length === 0) {
+  if (standings.length === 0 && scoringTrends.length === 0) {
     return (
       <div className="text-center py-12 bg-card border border-border rounded-lg shadow-sm">
         <p className="text-muted-foreground">Upload round data to see league analytics.</p>
@@ -158,62 +197,64 @@ export default function OverviewTab() {
   return (
     <div className="space-y-6">
       {/* League Standings */}
-      <div className="bg-card border border-border rounded-lg shadow-sm overflow-hidden">
-        <div className="p-4 border-b border-border">
-          <h3 className="font-semibold">League Standings</h3>
-        </div>
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="bg-muted/50 text-left">
-                <th className="px-4 py-2.5 font-medium text-muted-foreground w-10">#</th>
-                <th className="px-4 py-2.5 font-medium text-muted-foreground">Team</th>
-                <th className="px-4 py-2.5 font-medium text-muted-foreground text-center">W</th>
-                <th className="px-4 py-2.5 font-medium text-muted-foreground text-center">L</th>
-                <th className="px-4 py-2.5 font-medium text-muted-foreground text-center">T</th>
-                <th className="px-4 py-2.5 font-medium text-muted-foreground text-right">PF</th>
-                <th className="px-4 py-2.5 font-medium text-muted-foreground text-right">PA</th>
-                <th className="px-4 py-2.5 font-medium text-muted-foreground text-right">%</th>
-                <th className="px-4 py-2.5 font-medium text-muted-foreground text-center">PWRNKG</th>
-              </tr>
-            </thead>
-            <tbody>
-              {standings.map((team, i) => (
-                <tr
-                  key={team.team_id}
-                  className={i % 2 === 0 ? 'bg-card' : 'bg-muted/20'}
-                >
-                  <td className="px-4 py-2.5 font-semibold text-muted-foreground">{team.league_rank}</td>
-                  <td className="px-4 py-2.5">
-                    <div>
-                      <span className="font-medium">{team.team_name}</span>
-                      <span className="text-muted-foreground text-xs ml-2">{team.coach}</span>
-                    </div>
-                  </td>
-                  <td className="px-4 py-2.5 text-center font-medium text-green-600">{team.wins}</td>
-                  <td className="px-4 py-2.5 text-center font-medium text-red-600">{team.losses}</td>
-                  <td className="px-4 py-2.5 text-center text-muted-foreground">{team.ties}</td>
-                  <td className="px-4 py-2.5 text-right font-medium">{formatScore(team.pts_for)}</td>
-                  <td className="px-4 py-2.5 text-right text-muted-foreground">{formatScore(team.pts_against)}</td>
-                  <td className="px-4 py-2.5 text-right">{(team.pct * 100).toFixed(1)}%</td>
-                  <td className="px-4 py-2.5 text-center">
-                    {team.pwrnkg ? (
-                      <span className="inline-flex items-center justify-center w-7 h-7 rounded-full bg-primary/10 text-primary font-bold text-xs">
-                        {team.pwrnkg}
-                      </span>
-                    ) : (
-                      <span className="text-muted-foreground">—</span>
-                    )}
-                  </td>
+      {standings.length > 0 && (
+        <div className="bg-card border border-border rounded-lg shadow-sm overflow-hidden">
+          <div className="p-4 border-b border-border">
+            <h3 className="font-semibold">League Standings</h3>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="bg-muted/50 text-left">
+                  <th className="px-4 py-2.5 font-medium text-muted-foreground w-10">#</th>
+                  <th className="px-4 py-2.5 font-medium text-muted-foreground">Team</th>
+                  <th className="px-4 py-2.5 font-medium text-muted-foreground text-center">W</th>
+                  <th className="px-4 py-2.5 font-medium text-muted-foreground text-center">L</th>
+                  <th className="px-4 py-2.5 font-medium text-muted-foreground text-center">T</th>
+                  <th className="px-4 py-2.5 font-medium text-muted-foreground text-right">PF</th>
+                  <th className="px-4 py-2.5 font-medium text-muted-foreground text-right">PA</th>
+                  <th className="px-4 py-2.5 font-medium text-muted-foreground text-right">%</th>
+                  <th className="px-4 py-2.5 font-medium text-muted-foreground text-center">PWRNKG</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {standings.map((team, i) => (
+                  <tr
+                    key={team.team_id}
+                    className={i % 2 === 0 ? 'bg-card' : 'bg-muted/20'}
+                  >
+                    <td className="px-4 py-2.5 font-semibold text-muted-foreground">{team.league_rank}</td>
+                    <td className="px-4 py-2.5">
+                      <div>
+                        <span className="font-medium">{team.team_name}</span>
+                        <span className="text-muted-foreground text-xs ml-2">{team.coach}</span>
+                      </div>
+                    </td>
+                    <td className="px-4 py-2.5 text-center font-medium text-green-600">{team.wins}</td>
+                    <td className="px-4 py-2.5 text-center font-medium text-red-600">{team.losses}</td>
+                    <td className="px-4 py-2.5 text-center text-muted-foreground">{team.ties}</td>
+                    <td className="px-4 py-2.5 text-right font-medium">{formatScore(team.pts_for)}</td>
+                    <td className="px-4 py-2.5 text-right text-muted-foreground">{formatScore(team.pts_against)}</td>
+                    <td className="px-4 py-2.5 text-right">{(team.pct * 100).toFixed(1)}%</td>
+                    <td className="px-4 py-2.5 text-center">
+                      {team.pwrnkg ? (
+                        <span className="inline-flex items-center justify-center w-7 h-7 rounded-full bg-primary/10 text-primary font-bold text-xs">
+                          {team.pwrnkg}
+                        </span>
+                      ) : (
+                        <span className="text-muted-foreground">—</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Scoring Trends Chart */}
-      {scoringTrends.length > 1 && (
+      {scoringTrends.length > 0 && (
         <div className="bg-card border border-border rounded-lg shadow-sm p-5">
           <h3 className="font-semibold mb-4">Weekly Scoring Trends</h3>
           <ResponsiveContainer width="100%" height={360}>
