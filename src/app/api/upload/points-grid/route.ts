@@ -9,55 +9,97 @@ const supabase = createClient(
 
 export async function POST(request: Request) {
   try {
-    const { round_number, data } = await request.json();
+    const { data } = await request.json();
 
-    if (!round_number || !data || !Array.isArray(data)) {
-      return NextResponse.json({ error: 'Missing round_number or data' }, { status: 400 });
+    if (!data || !Array.isArray(data)) {
+      return NextResponse.json({ error: 'Missing data' }, { status: 400 });
     }
 
-    // Points grid CSV: update player_rounds with score data
+    // Points Grid CSV is in WIDE format:
+    // Columns: id, name, team, R0, R1, R2, R3, R4, ... R28
+    // Each row is one player, each R# column is their score for that round
+
+    // Detect round columns (R0, R1, R2, etc.)
+    const sampleRow = data[0];
+    const roundColumns: { col: string; roundNum: number }[] = [];
+    for (const key of Object.keys(sampleRow)) {
+      const match = key.match(/^R(\d+)$/);
+      if (match) {
+        roundColumns.push({ col: key, roundNum: parseInt(match[1], 10) });
+      }
+    }
+
+    if (roundColumns.length === 0) {
+      return NextResponse.json({ error: 'No round columns (R0, R1, ...) found in data' }, { status: 400 });
+    }
+
+    // Build a lookup of existing player_rounds for fast matching
+    // Get all unique rounds that have data
+    const { data: existingRounds } = await supabase
+      .from('player_rounds')
+      .select('round_number, player_id, team_id, id')
+      .order('round_number');
+
+    const existingMap = new Map<string, string>();
+    existingRounds?.forEach((r) => {
+      existingMap.set(`${r.round_number}-${r.player_id}-${r.team_id}`, r.id);
+    });
+
     let updatedCount = 0;
 
-    for (const row of data) {
-      const playerName = String(row['player_name'] || row['Player'] || row['player'] || '');
-      const teamName = String(row['team_name'] || row['Team'] || row['team'] || '');
-      const points = row['points'] !== undefined && row['points'] !== null && row['points'] !== '' ? Number(row['points']) : null;
-      const playerId = Number(row['player_id'] || row['Player ID'] || 0);
+    // Process in batches per round
+    for (const { col, roundNum } of roundColumns) {
+      const updates: { id: string; points: number }[] = [];
 
-      if (!playerName && !playerId) continue;
+      for (const row of data) {
+        const playerId = Number(row['id'] || row['player_id'] || 0);
+        const teamName = String(row['team'] || row['team_name'] || '');
 
-      const team = TEAMS.find(
-        (t) => t.team_name.toLowerCase() === teamName.toLowerCase() || t.team_id === Number(row['team_id'])
-      );
+        if (!playerId) continue;
 
-      // Update existing player_rounds row with the score
-      const query = supabase
-        .from('player_rounds')
-        .update({ points })
-        .eq('round_number', round_number);
+        const val = row[col];
+        if (val === undefined || val === null || val === '' || val === '-') continue;
+        const points = Number(val);
+        if (isNaN(points)) continue;
 
-      if (playerId) {
-        query.eq('player_id', playerId);
-      } else {
-        query.eq('player_name', playerName);
+        // Find team
+        const team = TEAMS.find(
+          (t) => t.team_name.toLowerCase() === teamName.toLowerCase()
+        );
+        const teamId = team?.team_id || 0;
+
+        // Look up existing record
+        const key = `${roundNum}-${playerId}-${teamId}`;
+        const existingId = existingMap.get(key);
+        if (existingId) {
+          updates.push({ id: existingId, points });
+        }
       }
 
-      if (team) {
-        query.eq('team_id', team.team_id);
-      }
+      // Batch update by ID
+      for (const { id, points } of updates) {
+        const { error } = await supabase
+          .from('player_rounds')
+          .update({ points })
+          .eq('id', id);
 
-      const { error } = await query;
-      if (!error) updatedCount++;
+        if (!error) updatedCount++;
+      }
     }
 
     // Log upload
+    const maxRound = Math.max(...roundColumns.map((r) => r.roundNum));
     await supabase.from('csv_uploads').insert({
-      round_number,
+      round_number: maxRound,
       upload_type: 'points_grid',
-      raw_data: data,
+      raw_data: { players: data.length, round_columns: roundColumns.map((r) => r.col) },
     });
 
-    return NextResponse.json({ success: true, count: updatedCount });
+    return NextResponse.json({
+      success: true,
+      count: updatedCount,
+      rounds_in_grid: roundColumns.map((r) => r.roundNum),
+    });
   } catch (err) {
     console.error('Points grid upload error:', err);
     return NextResponse.json(

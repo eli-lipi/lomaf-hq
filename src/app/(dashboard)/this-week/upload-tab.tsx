@@ -1,9 +1,10 @@
 'use client';
 
-import { useState, useCallback } from 'react';
-import { Upload, CheckCircle, AlertCircle, FileText, Loader2 } from 'lucide-react';
+import { useState, useCallback, useEffect } from 'react';
+import { Upload, CheckCircle, AlertCircle, FileText, Loader2, Database } from 'lucide-react';
 import Papa from 'papaparse';
 import { cn } from '@/lib/utils';
+import { supabase } from '@/lib/supabase';
 
 type CsvType = 'lineups' | 'teams' | 'points_grid' | 'draft';
 
@@ -15,6 +16,13 @@ interface UploadState {
   data?: Record<string, unknown>[];
 }
 
+interface DbSummary {
+  playerRounds: Record<number, number>;
+  teamSnapshots: Record<number, number>;
+  draftPicks: number;
+  pwrnkgsRounds: { round_number: number; status: string }[];
+}
+
 function detectCsvType(filename: string): CsvType | null {
   const lower = filename.toLowerCase();
   if (lower.includes('lineup')) return 'lineups';
@@ -24,21 +32,7 @@ function detectCsvType(filename: string): CsvType | null {
   return null;
 }
 
-function detectRoundNumber(data: Record<string, unknown>[]): number | null {
-  for (const row of data) {
-    const roundId = row['round_id'] || row['Round ID'] || row['roundId'];
-    if (roundId) {
-      const str = String(roundId);
-      if (str.length === 6) {
-        return parseInt(str.slice(4), 10);
-      }
-    }
-  }
-  return null;
-}
-
 export default function UploadTab() {
-  const [roundNumber, setRoundNumber] = useState<number | null>(null);
   const [uploads, setUploads] = useState<Record<CsvType, UploadState>>({
     lineups: { status: 'idle' },
     teams: { status: 'idle' },
@@ -48,6 +42,45 @@ export default function UploadTab() {
   const [processing, setProcessing] = useState(false);
   const [processResult, setProcessResult] = useState<string | null>(null);
   const [stepLog, setStepLog] = useState<string[]>([]);
+  const [dbSummary, setDbSummary] = useState<DbSummary | null>(null);
+  const [loadingDb, setLoadingDb] = useState(true);
+
+  // Load current DB state on mount
+  useEffect(() => {
+    loadDbSummary();
+  }, []);
+
+  const loadDbSummary = async () => {
+    setLoadingDb(true);
+    try {
+      // Player rounds by round
+      const { data: pr } = await supabase.from('player_rounds').select('round_number');
+      const prByRound: Record<number, number> = {};
+      pr?.forEach((r) => { prByRound[r.round_number] = (prByRound[r.round_number] || 0) + 1; });
+
+      // Team snapshots by round
+      const { data: ts } = await supabase.from('team_snapshots').select('round_number');
+      const tsByRound: Record<number, number> = {};
+      ts?.forEach((r) => { tsByRound[r.round_number] = (tsByRound[r.round_number] || 0) + 1; });
+
+      // Draft picks count
+      const { count: draftCount } = await supabase.from('draft_picks').select('*', { count: 'exact', head: true });
+
+      // PWRNKGs rounds
+      const { data: pwr } = await supabase.from('pwrnkgs_rounds').select('round_number, status').order('round_number');
+
+      setDbSummary({
+        playerRounds: prByRound,
+        teamSnapshots: tsByRound,
+        draftPicks: draftCount || 0,
+        pwrnkgsRounds: pwr || [],
+      });
+    } catch (err) {
+      console.error('Failed to load DB summary:', err);
+    } finally {
+      setLoadingDb(false);
+    }
+  };
 
   const handleFile = useCallback((file: File, type: CsvType) => {
     Papa.parse(file, {
@@ -68,11 +101,6 @@ export default function UploadTab() {
           return;
         }
 
-        if (type === 'lineups') {
-          const detected = detectRoundNumber(data);
-          if (detected) setRoundNumber(detected);
-        }
-
         setUploads((prev) => ({
           ...prev,
           [type]: {
@@ -83,7 +111,6 @@ export default function UploadTab() {
           },
         }));
 
-        // Clear any previous result when new files are added
         setProcessResult(null);
         setStepLog([]);
       },
@@ -124,20 +151,19 @@ export default function UploadTab() {
   );
 
   const processRound = async () => {
-    if (!roundNumber) return;
     setProcessing(true);
     setProcessResult(null);
     setStepLog([]);
 
     try {
-      const uploadTypes: CsvType[] = ['lineups', 'teams', 'points_grid'];
-      let totalRows = 0;
       let filesProcessed = 0;
 
-      for (const type of uploadTypes) {
+      // Upload lineups first (routes auto-detect rounds from data)
+      const uploadOrder: CsvType[] = ['lineups', 'teams', 'points_grid'];
+      for (const type of uploadOrder) {
         const upload = uploads[type];
         if (upload.status !== 'parsed' || !upload.data) {
-          setStepLog((prev) => [...prev, `Skipping ${type} (no file uploaded)`]);
+          setStepLog((prev) => [...prev, `Skipping ${type} (no file)`]);
           continue;
         }
 
@@ -150,7 +176,7 @@ export default function UploadTab() {
         const res = await fetch(`/api/upload/${type.replace('_', '-')}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ round_number: roundNumber, data: upload.data }),
+          body: JSON.stringify({ data: upload.data }),
         });
 
         if (!res.ok) {
@@ -159,14 +185,24 @@ export default function UploadTab() {
         }
 
         const result = await res.json();
-        totalRows += upload.rowCount || 0;
         filesProcessed++;
 
         setUploads((prev) => ({
           ...prev,
           [type]: { ...prev[type], status: 'uploaded' },
         }));
-        setStepLog((prev) => [...prev, `${type} uploaded successfully (${result.count || upload.rowCount} records)`]);
+
+        // Build detailed log message
+        let logMsg = `${type} uploaded successfully`;
+        if (result.rounds) {
+          const roundList = Object.entries(result.rounds).map(([r, c]) => `R${r}: ${c} rows`).join(', ');
+          logMsg += ` (${roundList})`;
+        } else if (result.target_round) {
+          logMsg += ` (applied to R${result.target_round})`;
+        } else {
+          logMsg += ` (${result.count} records)`;
+        }
+        setStepLog((prev) => [...prev, logMsg]);
       }
 
       // Process draft if parsed
@@ -199,10 +235,11 @@ export default function UploadTab() {
       if (filesProcessed === 0) {
         setProcessResult('No files to process. Upload at least one CSV first.');
       } else {
-        setProcessResult(
-          `Round ${roundNumber} processed! ${totalRows} records across ${filesProcessed} file${filesProcessed > 1 ? 's' : ''}.`
-        );
+        setProcessResult(`Done! ${filesProcessed} file${filesProcessed > 1 ? 's' : ''} processed.`);
       }
+
+      // Refresh DB summary
+      await loadDbSummary();
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : 'Unknown error';
       setStepLog((prev) => [...prev, `Error: ${errorMsg}`]);
@@ -213,25 +250,83 @@ export default function UploadTab() {
   };
 
   const csvSlots: { type: CsvType; label: string; description: string }[] = [
-    { type: 'lineups', label: 'Lineups CSV', description: 'Player lineups with positions and scoring status' },
-    { type: 'teams', label: 'Teams CSV', description: 'Team standings, wins, losses, points' },
-    { type: 'points_grid', label: 'Points Grid CSV', description: 'Scoring grid with player points' },
+    { type: 'lineups', label: 'Lineups CSV', description: 'Player lineups — auto-detects rounds from round_id column' },
+    { type: 'teams', label: 'Teams CSV', description: 'Team standings — applied to latest round' },
+    { type: 'points_grid', label: 'Points Grid CSV', description: 'Wide format scores (R0, R1, R2... columns)' },
   ];
 
-  // Show button when at least one file is parsed and we have a round number
   const hasAnyParsed = Object.values(uploads).some((u) => u.status === 'parsed');
-  const canProcess = hasAnyParsed && roundNumber !== null;
 
   return (
     <div>
-      {/* Round indicator */}
-      <div className="flex items-center gap-4 mb-6">
-        <label className="text-sm text-muted-foreground font-medium">Round:</label>
-        {roundNumber ? (
-          <span className="bg-primary/10 text-primary font-bold px-3 py-1 rounded-full text-sm">R{roundNumber}</span>
-        ) : (
-          <span className="text-muted-foreground text-sm italic">Auto-detected from lineups CSV</span>
-        )}
+      {/* DB Status Summary */}
+      <div className="bg-card border border-border rounded-lg p-5 mb-6 shadow-sm">
+        <div className="flex items-center gap-2 mb-3">
+          <Database size={18} className="text-primary" />
+          <h3 className="font-semibold text-sm">Current Data in Database</h3>
+        </div>
+        {loadingDb ? (
+          <p className="text-sm text-muted-foreground">Loading...</p>
+        ) : dbSummary ? (
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+            <div>
+              <span className="text-muted-foreground block text-xs">Player Rounds</span>
+              {Object.keys(dbSummary.playerRounds).length > 0 ? (
+                <div className="font-medium">
+                  {Object.entries(dbSummary.playerRounds)
+                    .sort(([a], [b]) => Number(a) - Number(b))
+                    .map(([r, c]) => (
+                      <span key={r} className="inline-block bg-muted px-2 py-0.5 rounded text-xs mr-1 mb-1">
+                        R{r}: {c}
+                      </span>
+                    ))}
+                </div>
+              ) : (
+                <span className="text-muted-foreground">None</span>
+              )}
+            </div>
+            <div>
+              <span className="text-muted-foreground block text-xs">Team Snapshots</span>
+              {Object.keys(dbSummary.teamSnapshots).length > 0 ? (
+                <div className="font-medium">
+                  {Object.entries(dbSummary.teamSnapshots)
+                    .sort(([a], [b]) => Number(a) - Number(b))
+                    .map(([r, c]) => (
+                      <span key={r} className="inline-block bg-muted px-2 py-0.5 rounded text-xs mr-1 mb-1">
+                        R{r}: {c}
+                      </span>
+                    ))}
+                </div>
+              ) : (
+                <span className="text-muted-foreground">None</span>
+              )}
+            </div>
+            <div>
+              <span className="text-muted-foreground block text-xs">Draft Picks</span>
+              <span className="font-medium">{dbSummary.draftPicks || 'None'}</span>
+            </div>
+            <div>
+              <span className="text-muted-foreground block text-xs">PWRNKGs</span>
+              {dbSummary.pwrnkgsRounds.length > 0 ? (
+                <div className="font-medium">
+                  {dbSummary.pwrnkgsRounds.map((r) => (
+                    <span
+                      key={r.round_number}
+                      className={cn(
+                        'inline-block px-2 py-0.5 rounded text-xs mr-1 mb-1',
+                        r.status === 'published' ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'
+                      )}
+                    >
+                      R{r.round_number} ({r.status})
+                    </span>
+                  ))}
+                </div>
+              ) : (
+                <span className="text-muted-foreground">None</span>
+              )}
+            </div>
+          </div>
+        ) : null}
       </div>
 
       {/* Auto-detect drop zone */}
@@ -278,7 +373,7 @@ export default function UploadTab() {
       </div>
 
       {/* Process button */}
-      {canProcess && (
+      {hasAnyParsed && (
         <button
           onClick={processRound}
           disabled={processing}
@@ -292,17 +387,17 @@ export default function UploadTab() {
           {processing ? (
             <span className="flex items-center justify-center gap-2">
               <Loader2 size={16} className="animate-spin" />
-              Processing Round {roundNumber}...
+              Processing...
             </span>
           ) : (
-            `Process Round ${roundNumber}`
+            'Process Upload'
           )}
         </button>
       )}
 
       {/* Step-by-step log */}
       {stepLog.length > 0 && (
-        <div className="mt-4 bg-card border border-border rounded-lg p-4 space-y-1">
+        <div className="mt-4 bg-card border border-border rounded-lg p-4 space-y-1 shadow-sm">
           {stepLog.map((log, i) => (
             <p
               key={i}

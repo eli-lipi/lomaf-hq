@@ -7,71 +7,94 @@ const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 );
 
+function parseRoundFromId(roundId: string | number): number {
+  const str = String(roundId);
+  if (str.length === 6) {
+    return parseInt(str.slice(4), 10);
+  }
+  return parseInt(str, 10);
+}
+
 export async function POST(request: Request) {
   try {
-    const { round_number, data } = await request.json();
+    const { data } = await request.json();
 
-    if (!round_number || !data || !Array.isArray(data)) {
-      return NextResponse.json({ error: 'Missing round_number or data' }, { status: 400 });
+    if (!data || !Array.isArray(data)) {
+      return NextResponse.json({ error: 'Missing data' }, { status: 400 });
     }
 
-    // Map CSV rows to player_rounds format
-    // Expected CSV columns vary — we normalize common patterns
-    const rows = data.map((row: Record<string, unknown>) => {
-      const teamName = String(row['team_name'] || row['Team'] || row['team'] || '');
-      const team = TEAMS.find(
-        (t) => t.team_name.toLowerCase() === teamName.toLowerCase() || t.team_id === Number(row['team_id'])
-      );
+    // Group rows by round (each row has its own round_id)
+    const rowsByRound = new Map<number, Record<string, unknown>[]>();
 
-      const pos = String(row['pos'] || row['position'] || row['Position'] || 'BN').toUpperCase();
-      const isEmg = row['is_emg'] === 1 || row['is_emg'] === '1' || row['is_emg'] === true;
-      const isScoring = row['is_scoring'] === 1 || row['is_scoring'] === '1' || row['is_scoring'] === true;
-      const points = row['points'] !== undefined && row['points'] !== null && row['points'] !== '' ? Number(row['points']) : null;
+    for (const row of data) {
+      const roundId = row['round_id'] || row['Round ID'] || row['roundId'];
+      if (!roundId) continue;
 
-      // Detect round from round_id column if present
-      let playerRound = round_number;
-      if (row['round_id']) {
-        const rid = String(row['round_id']);
-        if (rid.length === 6) {
-          playerRound = parseInt(rid.slice(4), 10);
-        }
+      const roundNum = parseRoundFromId(roundId);
+      if (!rowsByRound.has(roundNum)) {
+        rowsByRound.set(roundNum, []);
+      }
+      rowsByRound.get(roundNum)!.push(row);
+    }
+
+    if (rowsByRound.size === 0) {
+      return NextResponse.json({ error: 'No round_id found in CSV data' }, { status: 400 });
+    }
+
+    const roundSummary: Record<number, number> = {};
+
+    // Process each round
+    for (const [roundNum, rows] of rowsByRound) {
+      const playerRows = rows.map((row) => {
+        const teamName = String(row['team_name'] || row['Team'] || row['team'] || '');
+        const team = TEAMS.find(
+          (t) => t.team_name.toLowerCase() === teamName.toLowerCase() || t.team_id === Number(row['team_id'])
+        );
+
+        const pos = String(row['pos'] || row['position'] || row['Position'] || 'BN').toUpperCase();
+        const isEmg = row['is_emg'] === 1 || row['is_emg'] === '1' || row['is_emg'] === true || row['is_emg'] === 'true';
+        const isScoring = row['is_scoring'] === 1 || row['is_scoring'] === '1' || row['is_scoring'] === true || row['is_scoring'] === 'true';
+        const points = row['points'] !== undefined && row['points'] !== null && row['points'] !== '' ? Number(row['points']) : null;
+
+        return {
+          round_number: roundNum,
+          team_id: team?.team_id || Number(row['team_id'] || 0),
+          team_name: team?.team_name || teamName,
+          player_id: Number(row['player_id'] || row['Player ID'] || 0),
+          player_name: String(row['player_name'] || row['Player'] || row['player'] || ''),
+          pos,
+          is_emg: isEmg,
+          is_scoring: isScoring,
+          points,
+        };
+      });
+
+      // Upsert in batches of 500
+      for (let i = 0; i < playerRows.length; i += 500) {
+        const batch = playerRows.slice(i, i + 500);
+        const { error } = await supabase
+          .from('player_rounds')
+          .upsert(batch, { onConflict: 'round_number,team_id,player_id' });
+
+        if (error) throw error;
       }
 
-      return {
-        round_number: playerRound,
-        team_id: team?.team_id || Number(row['team_id'] || 0),
-        team_name: team?.team_name || teamName,
-        player_id: Number(row['player_id'] || row['Player ID'] || 0),
-        player_name: String(row['player_name'] || row['Player'] || row['player'] || ''),
-        pos,
-        is_emg: isEmg,
-        is_scoring: isScoring,
-        points,
-      };
-    });
-
-    // Filter to only the specified round (CSV may be cumulative)
-    const roundRows = rows.filter((r: { round_number: number }) => r.round_number === round_number);
-
-    if (roundRows.length === 0) {
-      return NextResponse.json({ error: `No data found for round ${round_number}` }, { status: 400 });
+      roundSummary[roundNum] = playerRows.length;
     }
 
-    // Upsert into player_rounds
-    const { error: upsertError } = await supabase
-      .from('player_rounds')
-      .upsert(roundRows, { onConflict: 'round_number,team_id,player_id' });
-
-    if (upsertError) throw upsertError;
-
     // Log the upload
+    const rounds = Array.from(rowsByRound.keys()).sort((a, b) => a - b);
     await supabase.from('csv_uploads').insert({
-      round_number,
+      round_number: rounds[rounds.length - 1], // latest round
       upload_type: 'lineups',
-      raw_data: data,
+      raw_data: { rounds: roundSummary, total: data.length },
     });
 
-    return NextResponse.json({ success: true, count: roundRows.length });
+    return NextResponse.json({
+      success: true,
+      count: data.length,
+      rounds: roundSummary,
+    });
   } catch (err) {
     console.error('Lineups upload error:', err);
     return NextResponse.json(

@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { TEAMS, POSITION_GROUPS } from '@/lib/constants';
+import { TEAMS } from '@/lib/constants';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -9,13 +9,29 @@ const supabase = createClient(
 
 export async function POST(request: Request) {
   try {
-    const { round_number, data } = await request.json();
+    const { data } = await request.json();
 
-    if (!round_number || !data || !Array.isArray(data)) {
-      return NextResponse.json({ error: 'Missing round_number or data' }, { status: 400 });
+    if (!data || !Array.isArray(data)) {
+      return NextResponse.json({ error: 'Missing data' }, { status: 400 });
     }
 
-    // Parse teams CSV and create team_snapshots
+    // Teams CSV has cumulative standings (no round column).
+    // Find the latest round that has player_rounds data.
+    const { data: latestRound } = await supabase
+      .from('player_rounds')
+      .select('round_number')
+      .order('round_number', { ascending: false })
+      .limit(1);
+
+    const targetRound = latestRound?.[0]?.round_number;
+    if (!targetRound) {
+      return NextResponse.json(
+        { error: 'Upload lineups first so we know which round to assign standings to' },
+        { status: 400 }
+      );
+    }
+
+    // Parse teams CSV and create team_snapshots for the latest round
     const snapshots = data.map((row: Record<string, unknown>) => {
       const teamName = String(row['team_name'] || row['Team'] || row['team'] || '');
       const team = TEAMS.find(
@@ -23,7 +39,7 @@ export async function POST(request: Request) {
       );
 
       return {
-        round_number,
+        round_number: targetRound,
         team_id: team?.team_id || Number(row['team_id'] || 0),
         team_name: team?.team_name || teamName,
         wins: Number(row['wins'] || row['Wins'] || row['W'] || 0),
@@ -36,27 +52,60 @@ export async function POST(request: Request) {
       };
     });
 
-    // Upsert team snapshots
+    // Upsert team snapshots for the latest round
     const { error: snapError } = await supabase
       .from('team_snapshots')
       .upsert(snapshots, { onConflict: 'round_number,team_id' });
 
     if (snapError) throw snapError;
 
-    // Compute line totals from player_rounds
-    await computeLineScores(round_number);
+    // Now compute line scores for ALL rounds that have player data
+    const { data: allRounds } = await supabase
+      .from('player_rounds')
+      .select('round_number');
 
-    // Compute line rankings
-    await computeLineRankings(round_number);
+    const uniqueRounds = [...new Set(allRounds?.map((r) => r.round_number) || [])].sort((a, b) => a - b);
+
+    // Ensure team_snapshots exist for each round (create minimal entries if needed)
+    for (const roundNum of uniqueRounds) {
+      if (roundNum === targetRound) continue; // already done
+
+      // Check if snapshots exist for this round
+      const { count } = await supabase
+        .from('team_snapshots')
+        .select('*', { count: 'exact', head: true })
+        .eq('round_number', roundNum);
+
+      if (!count || count === 0) {
+        // Create minimal snapshots for this round
+        const minSnapshots = TEAMS.map((t) => ({
+          round_number: roundNum,
+          team_id: t.team_id,
+          team_name: t.team_name,
+        }));
+        await supabase.from('team_snapshots').upsert(minSnapshots, { onConflict: 'round_number,team_id' });
+      }
+    }
+
+    // Compute line scores and rankings for all rounds
+    for (const roundNum of uniqueRounds) {
+      await computeLineScores(roundNum);
+      await computeLineRankings(roundNum, uniqueRounds);
+    }
 
     // Log upload
     await supabase.from('csv_uploads').insert({
-      round_number,
+      round_number: targetRound,
       upload_type: 'teams',
       raw_data: data,
     });
 
-    return NextResponse.json({ success: true, count: snapshots.length });
+    return NextResponse.json({
+      success: true,
+      count: snapshots.length,
+      target_round: targetRound,
+      rounds_computed: uniqueRounds,
+    });
   } catch (err) {
     console.error('Teams upload error:', err);
     return NextResponse.json(
@@ -67,7 +116,6 @@ export async function POST(request: Request) {
 }
 
 async function computeLineScores(roundNumber: number) {
-  // Get all scoring players for this round
   const { data: players } = await supabase
     .from('player_rounds')
     .select('team_id, pos, points')
@@ -76,7 +124,6 @@ async function computeLineScores(roundNumber: number) {
 
   if (!players) return;
 
-  // Group by team and position
   const teamTotals = new Map<number, Record<string, number>>();
 
   for (const p of players) {
@@ -90,7 +137,6 @@ async function computeLineScores(roundNumber: number) {
     }
   }
 
-  // Update team_snapshots with line totals
   for (const [teamId, totals] of teamTotals) {
     await supabase
       .from('team_snapshots')
@@ -106,7 +152,7 @@ async function computeLineScores(roundNumber: number) {
   }
 }
 
-async function computeLineRankings(roundNumber: number) {
+async function computeLineRankings(roundNumber: number, allRounds: number[]) {
   const { data: snapshots } = await supabase
     .from('team_snapshots')
     .select('*')
@@ -123,12 +169,10 @@ async function computeLineRankings(roundNumber: number) {
   ];
 
   for (const { field, rankField } of positions) {
-    // Sort teams by this position total (descending)
     const sorted = [...snapshots].sort(
       (a, b) => (Number(b[field]) || 0) - (Number(a[field]) || 0)
     );
 
-    // Assign ranks
     for (let i = 0; i < sorted.length; i++) {
       await supabase
         .from('team_snapshots')
@@ -138,16 +182,15 @@ async function computeLineRankings(roundNumber: number) {
     }
   }
 
-  // Compute season line rankings (average across all rounds)
+  // Compute season line rankings (average across all rounds up to this one)
+  const roundsUpTo = allRounds.filter((r) => r <= roundNumber && r > 0);
   const { data: allSnapshots } = await supabase
     .from('team_snapshots')
     .select('*')
-    .lte('round_number', roundNumber)
-    .gt('round_number', 0);
+    .in('round_number', roundsUpTo);
 
   if (!allSnapshots || allSnapshots.length === 0) return;
 
-  // Compute averages per team per position
   const teamAvgs = new Map<number, Record<string, { total: number; count: number }>>();
 
   for (const snap of allSnapshots) {
