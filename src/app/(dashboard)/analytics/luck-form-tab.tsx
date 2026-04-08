@@ -59,48 +59,16 @@ export default function LuckFormTab() {
       });
       const snapshotRounds = [...new Set(snapshots.map((s: TeamSnapshot) => s.round_number))].sort((a, b) => a - b);
 
-      // === Build per-round W/L/T results ===
+      // === Build per-round W/L/T results from matchup_rounds ===
       // actualResult: 1 = win, 0.5 = tie, 0 = loss
       const perRoundResult: Record<string, number> = {};
 
-      // Source 1: matchup_rounds (direct per-round W/L — most reliable)
       const { data: matchups } = await supabase
         .from('matchup_rounds')
         .select('round_number, team_id, win, loss, tie');
       if (matchups && matchups.length > 0) {
         matchups.forEach((m: { round_number: number; team_id: number; win: boolean; loss: boolean; tie: boolean }) => {
           perRoundResult[`${m.round_number}-${m.team_id}`] = m.win ? 1 : m.tie ? 0.5 : 0;
-        });
-      }
-
-      // Source 2: diff consecutive team_snapshots
-      for (let ri = 0; ri < snapshotRounds.length; ri++) {
-        const round = snapshotRounds[ri];
-        const prevRound = ri > 0 ? snapshotRounds[ri - 1] : null;
-        TEAMS.forEach(t => {
-          const key = `${round}-${t.team_id}`;
-          if (perRoundResult[key] !== undefined) return; // matchup data takes priority
-          const curr = snapshotsByRound[round]?.[t.team_id];
-          if (!curr) return;
-
-          let winsThisRound: number;
-          let tiesThisRound: number;
-
-          if (prevRound !== null) {
-            // Normal case: diff against previous snapshot
-            const prev = snapshotsByRound[prevRound]?.[t.team_id];
-            if (!prev) return;
-            winsThisRound = curr.wins - prev.wins;
-            tiesThisRound = curr.ties - prev.ties;
-          } else {
-            // First snapshot round: cumulative IS the result if only 1 game played
-            const totalGames = curr.wins + curr.losses + curr.ties;
-            if (totalGames > 1) return; // can't determine single-round result from multi-game cumulative
-            winsThisRound = curr.wins;
-            tiesThisRound = curr.ties;
-          }
-
-          perRoundResult[key] = winsThisRound > 0 ? 1 : tiesThisRound > 0 ? 0.5 : 0;
         });
       }
 
@@ -290,8 +258,8 @@ export default function LuckFormTab() {
       {/* Luck-O-Meter */}
       {noResultData ? (
         <div className="bg-amber-50 border border-amber-200 rounded-lg p-4">
-          <p className="text-sm text-amber-800 font-medium">Luck-O-Meter requires per-round W/L data.</p>
-          <p className="text-xs text-amber-600 mt-1">Upload a matchups CSV on the This Week page, or ensure team snapshots are uploaded for consecutive rounds so results can be calculated.</p>
+          <p className="text-sm text-amber-800 font-medium">Luck-O-Meter requires matchup data.</p>
+          <p className="text-xs text-amber-600 mt-1">Upload the matchups CSV on the <strong>This Week</strong> page to populate per-round W/L results. The Luck-O-Meter compares actual wins vs expected wins based on score ranking.</p>
         </div>
       ) : luckData.length > 0 && (
         <div className="bg-card border border-border rounded-lg shadow-sm overflow-hidden">
