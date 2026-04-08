@@ -1,25 +1,37 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { supabase } from '@/lib/supabase';
 import { TEAMS } from '@/lib/constants';
-import { cn } from '@/lib/utils';
+import { cn, formatScore } from '@/lib/utils';
 import type { DraftPick } from '@/lib/types';
 import {
-  ScatterChart, Scatter, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
-  Cell,
+  ScatterChart, Scatter, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, ReferenceLine,
 } from 'recharts';
 
-// Position-based expected averages — forwards/rucks are more scarce so lower scores = higher value
-const POSITION_BENCHMARKS: Record<string, { elite: number; good: number; avg: number }> = {
+// Team abbreviations for compact draft board
+const TEAM_ABBREV: Record<number, string> = {
+  3194002: 'Mansion', 3194005: 'STAD', 3194009: 'SEANO', 3194003: 'LIPI',
+  3194006: 'Melech', 3194010: 'CDL', 3194008: 'TMHCR', 3194001: 'Doge',
+  3194004: 'Gun M', 3194007: 'Warner',
+};
+
+const TEAM_COLOR_MAP: Record<number, string> = {
+  3194002: '#1A56DB', 3194005: '#DC2626', 3194009: '#16A34A', 3194003: '#F59E0B',
+  3194006: '#9333EA', 3194010: '#0891B2', 3194008: '#EA580C', 3194001: '#DB2777',
+  3194004: '#4F46E5', 3194007: '#059669',
+};
+
+// Position benchmarks — forwards/rucks more scarce
+const POS_BENCHMARKS: Record<string, { elite: number; good: number; avg: number }> = {
   MID: { elite: 110, good: 95, avg: 80 },
   DEF: { elite: 100, good: 85, avg: 70 },
   FWD: { elite: 90, good: 75, avg: 60 },
   RUC: { elite: 95, good: 80, avg: 65 },
 };
 
-function getPositionGroup(pos: string | null): string {
-  if (!pos) return 'MID'; // default
+function getPosGroup(pos: string | null): string {
+  if (!pos) return 'MID';
   const p = pos.toUpperCase();
   if (p.includes('DEF')) return 'DEF';
   if (p.includes('FWD')) return 'FWD';
@@ -27,113 +39,115 @@ function getPositionGroup(pos: string | null): string {
   return 'MID';
 }
 
-interface DraftPickWithStats extends DraftPick {
-  avg_score: number | null;
-  total_score: number | null;
-  rounds_played: number;
-  rating: 'steal' | 'value' | 'fair' | 'bust' | 'unknown';
-  posGroup: string;
-  posAvgDiff: number | null; // how far above/below position average
+type Rating = 'steal' | 'value' | 'fair' | 'bust' | 'unknown';
+
+interface DraftPickEnriched {
+  id: string; round: number; round_pick: number; overall_pick: number;
+  team_name: string; team_id: number; player_name: string; player_id: number;
+  position: string | null; posGroup: string;
+  avg_score: number | null; total_score: number | null; rounds_played: number;
+  rating: Rating; posAvgDiff: number | null;
 }
 
-export default function DraftTab() {
-  const [picks, setPicks] = useState<DraftPickWithStats[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [viewMode, setViewMode] = useState<'board' | 'chart'>('board');
+const RATING_COLORS: Record<Rating, string> = {
+  steal: 'bg-green-100 text-green-800 border-green-300',
+  value: 'bg-blue-100 text-blue-700 border-blue-300',
+  fair: 'bg-gray-100 text-gray-600 border-gray-300',
+  bust: 'bg-red-100 text-red-700 border-red-300',
+  unknown: 'bg-gray-50 text-gray-400 border-gray-200',
+};
 
-  useEffect(() => {
-    loadDraftData();
-  }, []);
+const RATING_DOT_COLORS: Record<Rating, string> = {
+  steal: '#16A34A', value: '#2563EB', fair: '#6B7280', bust: '#DC2626', unknown: '#D1D5DB',
+};
+
+export default function DraftTab() {
+  const [picks, setPicks] = useState<DraftPickEnriched[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [viewMode, setViewMode] = useState<'board' | 'chart' | 'value'>('board');
+  const [filterTeam, setFilterTeam] = useState<number | null>(null);
+
+  useEffect(() => { loadDraftData(); }, []);
 
   const loadDraftData = async () => {
     try {
-      const { data: draftPicks } = await supabase
+      const { data: rawPicks } = await supabase
         .from('draft_picks')
         .select('*')
         .order('overall_pick', { ascending: true });
 
-      if (!draftPicks || draftPicks.length === 0) {
-        setLoading(false);
-        return;
+      if (!rawPicks || rawPicks.length === 0) { setLoading(false); return; }
+
+      // Deduplicate: keep one per player_id+team_id
+      const seen = new Set<string>();
+      const draftPicks: DraftPick[] = [];
+      for (const p of rawPicks) {
+        const key = `${p.player_id}-${p.team_id}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          draftPicks.push(p);
+        }
       }
 
-      // Get all player_rounds to compute averages
-      const { data: playerRounds } = await supabase
-        .from('player_rounds')
-        .select('player_id, points, is_scoring, pos, round_number');
-
-      // Filter out incomplete rounds
-      const roundTeamCounts: Record<number, Set<number>> = {};
-      playerRounds?.forEach((pr) => {
-        if (pr.is_scoring && pr.points != null && Number(pr.points) > 0) {
-          if (!roundTeamCounts[pr.round_number]) roundTeamCounts[pr.round_number] = new Set();
-          // We don't have team_id here, but we can approximate by checking if enough data exists
-        }
-      });
+      // Get player stats from player_rounds
+      const allPlayerRounds: { player_id: number; points: number | null; is_scoring: boolean; pos: string }[] = [];
+      let offset = 0;
+      while (true) {
+        const { data } = await supabase
+          .from('player_rounds')
+          .select('player_id, points, is_scoring, pos')
+          .range(offset, offset + 999);
+        if (!data || data.length === 0) break;
+        allPlayerRounds.push(...data);
+        if (data.length < 1000) break;
+        offset += 1000;
+      }
 
       const playerStats: Record<number, { totalPts: number; count: number }> = {};
-      playerRounds?.forEach((pr) => {
-        if (pr.points != null && pr.is_scoring) {
+      allPlayerRounds.forEach(pr => {
+        if (pr.points != null && pr.is_scoring && Number(pr.points) > 0) {
           if (!playerStats[pr.player_id]) playerStats[pr.player_id] = { totalPts: 0, count: 0 };
           playerStats[pr.player_id].totalPts += Number(pr.points);
           playerStats[pr.player_id].count++;
         }
       });
 
-      // Compute position averages across all scoring players
-      const positionAvgs: Record<string, { total: number; count: number }> = {};
-      playerRounds?.forEach((pr) => {
-        if (pr.points != null && pr.is_scoring && Number(pr.points) > 0) {
-          const pg = getPositionGroup(pr.pos);
-          if (!positionAvgs[pg]) positionAvgs[pg] = { total: 0, count: 0 };
-          positionAvgs[pg].total += Number(pr.points);
-          positionAvgs[pg].count++;
-        }
-      });
-
-      const enriched: DraftPickWithStats[] = draftPicks.map((pick) => {
+      const enriched: DraftPickEnriched[] = draftPicks.map(pick => {
         const stats = playerStats[pick.player_id];
         const avg = stats && stats.count >= 2 ? Math.round(stats.totalPts / stats.count) : null;
         const total = stats ? Math.round(stats.totalPts) : null;
         const rounds = stats?.count || 0;
-        const posGroup = getPositionGroup(pick.position);
-        const benchmark = POSITION_BENCHMARKS[posGroup] || POSITION_BENCHMARKS.MID;
-
-        // Position-relative difference
+        const posGroup = getPosGroup(pick.position);
+        const benchmark = POS_BENCHMARKS[posGroup] || POS_BENCHMARKS.MID;
         const posAvgDiff = avg !== null ? avg - benchmark.avg : null;
 
-        // Rating system:
-        // - First 20 picks: no one is a "steal" (expected to be elite). Only bust/fair/value.
-        // - Compare against position-specific benchmarks
-        let rating: DraftPickWithStats['rating'] = 'unknown';
+        let rating: Rating = 'unknown';
         if (avg !== null && rounds >= 2) {
           const isTopPick = pick.overall_pick <= 20;
+          const isTop10 = pick.overall_pick <= 10;
 
           if (avg >= benchmark.elite) {
-            rating = isTopPick ? 'fair' : 'steal'; // Elite from a top pick is just expected
+            rating = isTopPick ? 'fair' : 'steal';
           } else if (avg >= benchmark.good) {
             rating = isTopPick ? 'fair' : 'value';
           } else if (avg >= benchmark.avg) {
             rating = 'fair';
           } else {
-            // Below position average
             const deficit = benchmark.avg - avg;
-            if (deficit > 20) {
+            if (deficit > 20 || (isTop10 && deficit > 10) || (isTopPick && deficit > 15)) {
               rating = 'bust';
-            } else if (isTopPick && deficit > 10) {
-              rating = 'bust'; // Higher standards for top picks
             } else {
               rating = 'fair';
             }
           }
-
-          // Top 10 picks have even higher standards
-          if (pick.overall_pick <= 10 && avg < benchmark.good) {
-            rating = avg < benchmark.avg ? 'bust' : 'fair';
-          }
         }
 
-        return { ...pick, avg_score: avg, total_score: total, rounds_played: rounds, rating, posGroup, posAvgDiff };
+        return {
+          id: pick.id, round: pick.round, round_pick: pick.round_pick, overall_pick: pick.overall_pick,
+          team_name: pick.team_name, team_id: pick.team_id, player_name: pick.player_name,
+          player_id: pick.player_id, position: pick.position, posGroup,
+          avg_score: avg, total_score: total, rounds_played: rounds, rating, posAvgDiff,
+        };
       });
 
       setPicks(enriched);
@@ -144,139 +158,103 @@ export default function DraftTab() {
     }
   };
 
-  if (loading) {
-    return (
-      <div className="text-center py-12 bg-card border border-border rounded-lg shadow-sm">
-        <p className="text-muted-foreground">Loading draft data...</p>
-      </div>
-    );
-  }
+  // Draft order: determined by Round 1 pick order
+  const draftOrder = useMemo(() => {
+    const r1Picks = picks.filter(p => p.round === 1).sort((a, b) => a.round_pick - b.round_pick);
+    return r1Picks.map(p => p.team_id);
+  }, [picks]);
 
-  if (picks.length === 0) {
-    return (
-      <div className="text-center py-12 bg-card border border-border rounded-lg shadow-sm">
-        <p className="text-muted-foreground">Upload draft data to see draft vs reality analysis.</p>
-      </div>
-    );
-  }
+  // Value list (combined steals + busts, sorted by posAvgDiff)
+  const valueList = useMemo(() => {
+    return picks
+      .filter(p => p.rating !== 'unknown' && p.rating !== 'fair' && p.posAvgDiff !== null)
+      .sort((a, b) => (b.posAvgDiff || 0) - (a.posAvgDiff || 0));
+  }, [picks]);
 
-  const maxRound = Math.max(...picks.map((p) => p.round));
-  const draftRounds = Array.from({ length: maxRound }, (_, i) => i + 1);
-  const teamOrder = TEAMS.map((t) => t.team_id);
-
-  const ratingColors: Record<string, string> = {
-    steal: 'bg-green-100 text-green-700 border-green-300',
-    value: 'bg-blue-100 text-blue-700 border-blue-300',
-    fair: 'bg-gray-100 text-gray-600 border-gray-300',
-    bust: 'bg-red-100 text-red-700 border-red-300',
-    unknown: 'bg-gray-50 text-gray-400 border-gray-200',
-  };
-
-  const ratingDotColors: Record<string, string> = {
-    steal: '#16A34A',
-    value: '#2563EB',
-    fair: '#6B7280',
-    bust: '#DC2626',
-    unknown: '#D1D5DB',
-  };
-
-  const posGroupColors: Record<string, string> = {
-    DEF: 'text-blue-600',
-    MID: 'text-green-600',
-    FWD: 'text-red-600',
-    RUC: 'text-purple-600',
-  };
-
-  // Scatter data: position-adjusted value
-  const scatterData = picks
-    .filter((p) => p.avg_score !== null)
-    .map((p) => ({
-      pick: p.overall_pick,
-      avg: p.avg_score,
-      name: p.player_name,
-      team: p.team_name,
-      rating: p.rating,
-      pos: p.posGroup,
-      posAvgDiff: p.posAvgDiff,
+  // Scatter data
+  const scatterData = useMemo(() => {
+    let data = picks.filter(p => p.avg_score !== null && p.posAvgDiff !== null);
+    if (filterTeam) data = data.filter(p => p.team_id === filterTeam);
+    return data.map(p => ({
+      pick: p.overall_pick, avg: p.avg_score, posAvgDiff: p.posAvgDiff,
+      name: p.player_name, team: p.team_name, teamId: p.team_id,
+      rating: p.rating, pos: p.posGroup,
     }));
+  }, [picks, filterTeam]);
+
+  if (loading) return <div className="text-center py-12 bg-card border border-border rounded-lg shadow-sm"><p className="text-muted-foreground">Loading draft data...</p></div>;
+  if (picks.length === 0) return <div className="text-center py-12 bg-card border border-border rounded-lg shadow-sm"><p className="text-muted-foreground">Upload draft data to see draft vs reality analysis.</p></div>;
+
+  const maxRound = Math.max(...picks.map(p => p.round));
+  const draftRounds = Array.from({ length: maxRound }, (_, i) => i + 1);
+  const posColors: Record<string, string> = { DEF: 'text-blue-600', MID: 'text-green-600', FWD: 'text-red-600', RUC: 'text-purple-600' };
 
   return (
     <div className="space-y-6">
-      {/* View toggle + Legend */}
+      {/* Controls */}
       <div className="flex flex-wrap items-center gap-3">
-        <button
-          onClick={() => setViewMode('board')}
-          className={cn(
-            'px-4 py-2 text-sm font-medium rounded-lg transition-colors',
-            viewMode === 'board' ? 'bg-primary text-primary-foreground' : 'bg-card border border-border hover:bg-muted/50'
-          )}
-        >
-          Draft Board
-        </button>
-        <button
-          onClick={() => setViewMode('chart')}
-          className={cn(
-            'px-4 py-2 text-sm font-medium rounded-lg transition-colors',
-            viewMode === 'chart' ? 'bg-primary text-primary-foreground' : 'bg-card border border-border hover:bg-muted/50'
-          )}
-        >
-          Position Value Chart
-        </button>
+        {(['board', 'chart', 'value'] as const).map(mode => (
+          <button key={mode} onClick={() => setViewMode(mode)}
+            className={cn('px-4 py-2 text-sm font-medium rounded-lg transition-colors capitalize',
+              viewMode === mode ? 'bg-primary text-primary-foreground' : 'bg-card border border-border hover:bg-muted/50')}>
+            {mode === 'board' ? 'Draft Board' : mode === 'chart' ? 'Value Chart' : 'Steals & Busts'}
+          </button>
+        ))}
         <div className="flex flex-wrap gap-3 text-xs ml-auto">
-          {['steal', 'value', 'fair', 'bust'].map((r) => (
+          {(['steal', 'value', 'fair', 'bust'] as const).map(r => (
             <div key={r} className="flex items-center gap-1.5">
-              <div className={cn('w-3 h-3 rounded-sm border', ratingColors[r])} />
+              <div className={cn('w-3 h-3 rounded-sm border', RATING_COLORS[r])} />
               <span className="capitalize text-muted-foreground">{r}</span>
             </div>
           ))}
         </div>
       </div>
 
-      {/* Position benchmarks info */}
-      <div className="bg-muted/30 rounded-lg p-4 text-xs text-muted-foreground">
-        <p className="font-medium text-foreground mb-1">Position-Adjusted Ratings</p>
-        <p>
-          Ratings account for positional scarcity: a FWD averaging 90 is elite, while a MID needs 110+.
-          Top-20 picks are held to higher standards — elite output is expected, not a steal.
-        </p>
-        <div className="flex flex-wrap gap-4 mt-2">
-          {Object.entries(POSITION_BENCHMARKS).map(([pos, b]) => (
-            <span key={pos}>
-              <strong className={posGroupColors[pos]}>{pos}:</strong> Elite {b.elite}+ · Good {b.good}+ · Avg {b.avg}+
-            </span>
-          ))}
-        </div>
+      {/* Position benchmarks */}
+      <div className="bg-muted/30 rounded-lg p-3 text-xs text-muted-foreground">
+        <span className="font-medium text-foreground">Position-adjusted ratings: </span>
+        {Object.entries(POS_BENCHMARKS).map(([pos, b]) => (
+          <span key={pos} className="mr-3">
+            <strong className={posColors[pos]}>{pos}</strong> Elite {b.elite}+ / Good {b.good}+ / Avg {b.avg}+
+          </span>
+        ))}
+        <span className="block mt-1">Top-20 picks can&apos;t be steals — elite output is expected at that range.</span>
       </div>
 
-      {viewMode === 'board' ? (
+      {/* === DRAFT BOARD === */}
+      {viewMode === 'board' && (
         <div className="bg-card border border-border rounded-lg shadow-sm overflow-hidden">
           <div className="overflow-x-auto">
-            <table className="w-full text-xs">
+            <table className="w-full text-[11px]" style={{ tableLayout: 'fixed' }}>
               <thead>
                 <tr className="bg-muted/50">
-                  <th className="px-3 py-2.5 text-left font-medium text-muted-foreground sticky left-0 bg-muted/50 z-10 w-14">Rd</th>
-                  {TEAMS.map((t) => (
-                    <th key={t.team_id} className="px-2 py-2.5 text-center font-medium text-muted-foreground min-w-[120px]">
-                      <span className="truncate block">{t.team_name.length > 14 ? t.team_name.slice(0, 12) + '...' : t.team_name}</span>
+                  <th className="px-2 py-2 text-left font-medium text-muted-foreground w-8 sticky left-0 bg-muted/50 z-10">Rd</th>
+                  {draftOrder.map(teamId => (
+                    <th key={teamId} className="px-1 py-2 text-center font-bold text-muted-foreground" style={{ width: `${92 / draftOrder.length}%` }}>
+                      {TEAM_ABBREV[teamId] || 'Team'}
                     </th>
                   ))}
                 </tr>
               </thead>
               <tbody>
-                {draftRounds.map((round) => (
+                {draftRounds.map(round => (
                   <tr key={round} className={round % 2 === 0 ? 'bg-muted/10' : ''}>
-                    <td className="px-3 py-2 font-semibold text-muted-foreground sticky left-0 bg-card z-10">{round}</td>
-                    {teamOrder.map((teamId) => {
-                      const pick = picks.find((p) => p.round === round && p.team_id === teamId);
-                      if (!pick) return <td key={teamId} className="px-2 py-2 text-center text-muted-foreground">—</td>;
+                    <td className="px-2 py-1.5 font-bold text-muted-foreground sticky left-0 bg-card z-10">{round}</td>
+                    {draftOrder.map(teamId => {
+                      const pick = picks.find(p => p.round === round && p.team_id === teamId);
+                      if (!pick) return <td key={teamId} className="px-1 py-1.5 text-center text-muted-foreground">—</td>;
                       return (
-                        <td key={teamId} className="px-2 py-2">
-                          <div className={cn('rounded-md p-1.5 border text-center', ratingColors[pick.rating])}>
-                            <p className="font-medium truncate">{pick.player_name}</p>
-                            <p className="text-[10px] opacity-70">
-                              {pick.avg_score !== null ? `Avg: ${pick.avg_score}` : 'No data'}
-                              {pick.posGroup ? ` · ${pick.posGroup}` : ''}
-                              {pick.posAvgDiff !== null ? ` (${pick.posAvgDiff > 0 ? '+' : ''}${pick.posAvgDiff})` : ''}
+                        <td key={teamId} className="px-1 py-1.5">
+                          <div className={cn('rounded p-1 border text-center', RATING_COLORS[pick.rating])}>
+                            <p className="font-semibold truncate leading-tight">{pick.player_name}</p>
+                            <p className="text-[9px] opacity-80 leading-tight">
+                              {pick.avg_score !== null ? `${pick.avg_score}` : '—'}
+                              <span className={posColors[pick.posGroup] || ''}> {pick.posGroup}</span>
+                              {pick.posAvgDiff !== null && (
+                                <span className={pick.posAvgDiff > 0 ? 'text-green-700' : 'text-red-700'}>
+                                  {' '}{pick.posAvgDiff > 0 ? '+' : ''}{pick.posAvgDiff}
+                                </span>
+                              )}
                             </p>
                           </div>
                         </td>
@@ -288,112 +266,101 @@ export default function DraftTab() {
             </table>
           </div>
         </div>
-      ) : (
-        <div className="bg-card border border-border rounded-lg shadow-sm p-5">
-          <h3 className="font-semibold mb-1">Draft Pick vs Position-Adjusted Score</h3>
-          <p className="text-xs text-muted-foreground mb-4">
-            Y-axis shows how far above/below position average each player scores. Color = value rating.
-          </p>
-          <ResponsiveContainer width="100%" height={400}>
-            <ScatterChart>
-              <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
-              <XAxis
-                dataKey="pick"
-                name="Pick #"
-                tick={{ fontSize: 12 }}
-                label={{ value: 'Overall Pick', position: 'insideBottom', offset: -5, fontSize: 12 }}
-              />
-              <YAxis
-                dataKey="posAvgDiff"
-                name="vs Pos Avg"
-                tick={{ fontSize: 12 }}
-                label={{ value: 'vs Position Average', angle: -90, position: 'insideLeft', fontSize: 12 }}
-              />
-              <Tooltip
-                content={({ active, payload }) => {
+      )}
+
+      {/* === VALUE CHART === */}
+      {viewMode === 'chart' && (
+        <div className="space-y-4">
+          {/* Team filter for chart */}
+          <div className="flex flex-wrap gap-2">
+            <button onClick={() => setFilterTeam(null)}
+              className={cn('px-3 py-1.5 text-xs rounded-lg transition-colors',
+                !filterTeam ? 'bg-primary text-primary-foreground' : 'bg-card border border-border hover:bg-muted/50')}>
+              All Teams
+            </button>
+            {TEAMS.map(t => (
+              <button key={t.team_id} onClick={() => setFilterTeam(prev => prev === t.team_id ? null : t.team_id)}
+                className={cn('px-3 py-1.5 text-xs rounded-lg transition-colors border',
+                  filterTeam === t.team_id ? 'text-white' : 'bg-card border-border hover:bg-muted/50')}
+                style={filterTeam === t.team_id ? { backgroundColor: TEAM_COLOR_MAP[t.team_id] } : {}}>
+                {TEAM_ABBREV[t.team_id]}
+              </button>
+            ))}
+          </div>
+
+          <div className="bg-card border border-border rounded-lg shadow-sm p-5">
+            <h3 className="font-semibold mb-1">Draft Pick vs Position-Adjusted Score</h3>
+            <p className="text-xs text-muted-foreground mb-4">Y-axis: performance above/below position average. Dot size = draft pick value.</p>
+            <ResponsiveContainer width="100%" height={420}>
+              <ScatterChart>
+                <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
+                <XAxis dataKey="pick" name="Pick #" tick={{ fontSize: 12 }}
+                  ticks={[1, 10, 20, 30, 40, 50, 60, 70, 80, 100, 120, 150, 180, 200, 250]}
+                  label={{ value: 'Overall Pick', position: 'insideBottom', offset: -5, fontSize: 12 }} />
+                <YAxis dataKey="posAvgDiff" name="vs Pos Avg" tick={{ fontSize: 12 }}
+                  label={{ value: 'vs Position Average', angle: -90, position: 'insideLeft', fontSize: 12 }} />
+                <ReferenceLine y={0} stroke="#9CA3AF" strokeDasharray="5 5" />
+                <Tooltip content={({ active, payload }) => {
                   if (!active || !payload?.length) return null;
                   const d = payload[0].payload;
                   return (
                     <div className="bg-white border border-border rounded-lg p-3 shadow-lg text-xs">
                       <p className="font-bold">{d.name}</p>
-                      <p className="text-muted-foreground">{d.team}</p>
-                      <p>Pick #{d.pick} · {d.pos} · Avg: {d.avg}</p>
+                      <p className="text-muted-foreground">{d.team} · {d.pos}</p>
+                      <p>Pick #{d.pick} · Avg: {d.avg}</p>
                       <p>{d.posAvgDiff > 0 ? '+' : ''}{d.posAvgDiff} vs {d.pos} average</p>
-                      <p className="capitalize font-medium" style={{ color: ratingDotColors[d.rating] }}>{d.rating}</p>
+                      <p className="capitalize font-medium" style={{ color: RATING_DOT_COLORS[d.rating as Rating] }}>{d.rating}</p>
                     </div>
                   );
-                }}
-              />
-              <Scatter data={scatterData.filter((s) => s.posAvgDiff !== null)}>
-                {scatterData.filter((s) => s.posAvgDiff !== null).map((entry, i) => (
-                  <Cell key={i} fill={ratingDotColors[entry.rating]} fillOpacity={0.8} r={5} />
-                ))}
-              </Scatter>
-            </ScatterChart>
-          </ResponsiveContainer>
+                }} />
+                <Scatter data={scatterData}>
+                  {scatterData.map((entry, i) => (
+                    <Cell key={i}
+                      fill={filterTeam ? TEAM_COLOR_MAP[entry.teamId] || '#6B7280' : RATING_DOT_COLORS[entry.rating]}
+                      fillOpacity={0.85} r={5} />
+                  ))}
+                </Scatter>
+              </ScatterChart>
+            </ResponsiveContainer>
+          </div>
         </div>
       )}
 
-      {/* Top Steals & Biggest Busts */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+      {/* === COMBINED STEALS & BUSTS === */}
+      {viewMode === 'value' && (
         <div className="bg-card border border-border rounded-lg shadow-sm overflow-hidden">
-          <div className="p-4 border-b border-border bg-green-50">
-            <h3 className="font-semibold text-green-700">Top Steals</h3>
-            <p className="text-xs text-green-600 mt-0.5">Late picks outperforming position expectations</p>
+          <div className="p-4 border-b border-border">
+            <h3 className="font-semibold">Draft Value Rankings</h3>
+            <p className="text-xs text-muted-foreground mt-1">Sorted by value differential — steals at top, busts at bottom</p>
           </div>
           <div className="divide-y divide-border">
-            {picks
-              .filter((p) => p.rating === 'steal')
-              .sort((a, b) => (b.posAvgDiff || 0) - (a.posAvgDiff || 0))
-              .slice(0, 8)
-              .map((p) => (
-                <div key={p.id} className="flex items-center gap-3 px-4 py-2.5">
-                  <span className="text-xs font-mono text-muted-foreground w-8">#{p.overall_pick}</span>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium truncate">{p.player_name}</p>
-                    <p className="text-xs text-muted-foreground truncate">{p.team_name} · {p.posGroup}</p>
-                  </div>
-                  <div className="text-right">
-                    <span className="text-sm font-bold text-green-600">Avg {p.avg_score}</span>
-                    <p className="text-[10px] text-green-500">+{p.posAvgDiff} vs pos avg</p>
-                  </div>
+            {valueList.map((p, i) => (
+              <div key={p.id} className={cn('flex items-center gap-3 px-4 py-2.5',
+                p.rating === 'steal' ? 'bg-green-50/50' :
+                p.rating === 'value' ? 'bg-blue-50/50' :
+                p.rating === 'bust' ? 'bg-red-50/50' : '')}>
+                <span className="text-xs font-mono text-muted-foreground w-6">{i + 1}</span>
+                <span className={cn('text-xs px-1.5 py-0.5 rounded border font-semibold capitalize shrink-0', RATING_COLORS[p.rating])}>
+                  {p.rating}
+                </span>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium truncate">{p.player_name}</p>
+                  <p className="text-xs text-muted-foreground truncate">
+                    {p.team_name} · Rd {p.round} Pick #{p.overall_pick} · {p.posGroup}
+                  </p>
                 </div>
-              ))}
-            {picks.filter((p) => p.rating === 'steal').length === 0 && (
-              <p className="px-4 py-6 text-sm text-muted-foreground text-center">No steals identified yet</p>
-            )}
+                <div className="text-right shrink-0">
+                  <p className="text-sm font-bold">Avg {p.avg_score}</p>
+                  <p className={cn('text-xs font-semibold',
+                    (p.posAvgDiff || 0) > 0 ? 'text-green-600' : 'text-red-600')}>
+                    {(p.posAvgDiff || 0) > 0 ? '+' : ''}{p.posAvgDiff} vs pos avg
+                  </p>
+                </div>
+              </div>
+            ))}
           </div>
         </div>
-
-        <div className="bg-card border border-border rounded-lg shadow-sm overflow-hidden">
-          <div className="p-4 border-b border-border bg-red-50">
-            <h3 className="font-semibold text-red-700">Biggest Busts</h3>
-            <p className="text-xs text-red-600 mt-0.5">Players significantly underperforming position expectations</p>
-          </div>
-          <div className="divide-y divide-border">
-            {picks
-              .filter((p) => p.rating === 'bust')
-              .sort((a, b) => (a.posAvgDiff || 0) - (b.posAvgDiff || 0))
-              .slice(0, 8)
-              .map((p) => (
-                <div key={p.id} className="flex items-center gap-3 px-4 py-2.5">
-                  <span className="text-xs font-mono text-muted-foreground w-8">#{p.overall_pick}</span>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium truncate">{p.player_name}</p>
-                    <p className="text-xs text-muted-foreground truncate">{p.team_name} · {p.posGroup}</p>
-                  </div>
-                  <div className="text-right">
-                    <span className="text-sm font-bold text-red-600">Avg {p.avg_score}</span>
-                    <p className="text-[10px] text-red-500">{p.posAvgDiff} vs pos avg</p>
-                  </div>
-                </div>
-              ))}
-            {picks.filter((p) => p.rating === 'bust').length === 0 && (
-              <p className="px-4 py-6 text-sm text-muted-foreground text-center">No busts identified yet</p>
-            )}
-          </div>
-        </div>
-      </div>
+      )}
     </div>
   );
 }

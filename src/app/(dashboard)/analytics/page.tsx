@@ -3,13 +3,13 @@
 import { useState } from 'react';
 import { cn } from '@/lib/utils';
 import OverviewTab from './overview-tab';
-import PositionDeepDiveTab from './position-tab';
+import LineRankingsTab from './line-rankings-tab';
 import DraftTab from './draft-tab';
 import PlayersTab from './players-tab';
 
 const TABS = [
   { id: 'overview', label: 'Overview' },
-  { id: 'position', label: 'Position Deep Dive' },
+  { id: 'lines', label: 'Line Rankings' },
   { id: 'draft', label: 'Draft vs Reality' },
   { id: 'players', label: 'Player Rankings' },
 ] as const;
@@ -44,7 +44,7 @@ export default function AnalyticsPage() {
 
       {/* Tab content */}
       {activeTab === 'overview' && <OverviewTab />}
-      {activeTab === 'position' && <PositionDeepDiveTab />}
+      {activeTab === 'lines' && <LineRankingsTab />}
       {activeTab === 'draft' && <DraftTab />}
       {activeTab === 'players' && <PlayersTab />}
     </div>

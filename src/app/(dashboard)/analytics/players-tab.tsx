@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { supabase } from '@/lib/supabase';
 import { TEAMS } from '@/lib/constants';
 import { cn } from '@/lib/utils';
@@ -17,10 +17,26 @@ interface PlayerStat {
   high_score: number;
   low_score: number;
   rounds_played: number;
-  games_scoring: number;
+  latest_score: number | null;
+  roundScores: Record<number, number | null>;
+  isBestInPos: boolean;
 }
 
-type SortKey = 'avg_score' | 'total_score' | 'high_score' | 'rounds_played' | 'player_name';
+type SortKey = 'avg_score' | 'total_score' | 'high_score' | 'low_score' | 'rounds_played' | 'player_name' | 'latest_score';
+
+// Score color: green 100+, yellow 70-99, red <70
+function scoreColor(score: number | null): string {
+  if (score === null) return 'text-muted-foreground';
+  if (score >= 100) return 'text-green-600 font-semibold';
+  if (score >= 70) return 'text-yellow-600';
+  return 'text-red-600';
+}
+
+function avgBadge(avg: number): string {
+  if (avg >= 100) return 'bg-green-100 text-green-700';
+  if (avg >= 70) return 'bg-yellow-100 text-yellow-700';
+  return 'bg-red-100 text-red-700';
+}
 
 export default function PlayersTab() {
   const [players, setPlayers] = useState<PlayerStat[]>([]);
@@ -30,71 +46,90 @@ export default function PlayersTab() {
   const [filterTeam, setFilterTeam] = useState<number | null>(null);
   const [filterPos, setFilterPos] = useState<string | null>(null);
   const [search, setSearch] = useState('');
-  const [page, setPage] = useState(0);
-  const perPage = 30;
+  const [validRounds, setValidRounds] = useState<number[]>([]);
+  const tableRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
-    loadPlayers();
-  }, []);
+  useEffect(() => { loadPlayers(); }, []);
 
   const loadPlayers = async () => {
     try {
-      const { data: playerRounds } = await supabase
-        .from('player_rounds')
-        .select('player_id, player_name, team_id, team_name, pos, points, is_scoring');
-
-      if (!playerRounds || playerRounds.length === 0) {
-        setLoading(false);
-        return;
+      // Fetch all player_rounds (paginated)
+      const allRows: { player_id: number; player_name: string; team_id: number; team_name: string; pos: string; points: number | null; is_scoring: boolean; round_number: number }[] = [];
+      let offset = 0;
+      while (true) {
+        const { data } = await supabase
+          .from('player_rounds')
+          .select('player_id, player_name, team_id, team_name, pos, points, is_scoring, round_number')
+          .range(offset, offset + 999);
+        if (!data || data.length === 0) break;
+        allRows.push(...data);
+        if (data.length < 1000) break;
+        offset += 1000;
       }
+
+      if (allRows.length === 0) { setLoading(false); return; }
+
+      // Valid rounds
+      const rounds = [...new Set(allRows.map(r => r.round_number))].sort((a, b) => a - b);
+      const valid = rounds.filter(round => {
+        const teamsWithScores = new Set(
+          allRows.filter(r => r.round_number === round && r.is_scoring && r.points != null && Number(r.points) > 0).map(r => r.team_id)
+        );
+        return teamsWithScores.size >= 8;
+      });
+      setValidRounds(valid);
 
       // Aggregate stats per player
       const playerMap: Record<string, {
-        player_id: number;
-        player_name: string;
-        team_name: string;
-        team_id: number;
-        position: string;
-        scores: number[];
-        scoringGames: number;
+        player_id: number; player_name: string; team_name: string; team_id: number;
+        position: string; scores: number[]; roundScores: Record<number, number | null>;
       }> = {};
 
-      playerRounds.forEach((pr) => {
+      allRows.forEach(pr => {
+        if (!valid.includes(pr.round_number)) return;
         const key = `${pr.player_id}-${pr.team_id}`;
         if (!playerMap[key]) {
           playerMap[key] = {
-            player_id: pr.player_id,
-            player_name: pr.player_name,
-            team_name: pr.team_name,
-            team_id: pr.team_id,
-            position: pr.pos,
-            scores: [],
-            scoringGames: 0,
+            player_id: pr.player_id, player_name: pr.player_name,
+            team_name: pr.team_name, team_id: pr.team_id,
+            position: pr.pos, scores: [], roundScores: {},
           };
         }
-        if (pr.points != null) {
+        if (pr.points != null && Number(pr.points) > 0) {
           playerMap[key].scores.push(Number(pr.points));
-        }
-        if (pr.is_scoring) {
-          playerMap[key].scoringGames++;
+          playerMap[key].roundScores[pr.round_number] = Number(pr.points);
         }
       });
 
+      // Find best in each position
+      const bestByPos: Record<string, number> = {};
+      Object.values(playerMap).forEach(p => {
+        if (p.scores.length === 0) return;
+        const avg = p.scores.reduce((a, b) => a + b, 0) / p.scores.length;
+        if (!bestByPos[p.position] || avg > bestByPos[p.position]) {
+          bestByPos[p.position] = avg;
+        }
+      });
+
+      const latestRound = valid.length > 0 ? valid[valid.length - 1] : 0;
+
       const stats: PlayerStat[] = Object.values(playerMap)
-        .filter((p) => p.scores.length > 0)
-        .map((p) => ({
-          player_id: p.player_id,
-          player_name: p.player_name,
-          team_name: p.team_name,
-          team_id: p.team_id,
-          position: p.position,
-          avg_score: Math.round(p.scores.reduce((a, b) => a + b, 0) / p.scores.length),
-          total_score: Math.round(p.scores.reduce((a, b) => a + b, 0)),
-          high_score: Math.max(...p.scores),
-          low_score: Math.min(...p.scores),
-          rounds_played: p.scores.length,
-          games_scoring: p.scoringGames,
-        }));
+        .filter(p => p.scores.length > 0)
+        .map(p => {
+          const avg = Math.round(p.scores.reduce((a, b) => a + b, 0) / p.scores.length);
+          return {
+            player_id: p.player_id, player_name: p.player_name,
+            team_name: p.team_name, team_id: p.team_id, position: p.position,
+            avg_score: avg,
+            total_score: Math.round(p.scores.reduce((a, b) => a + b, 0)),
+            high_score: Math.max(...p.scores),
+            low_score: Math.min(...p.scores),
+            rounds_played: p.scores.length,
+            latest_score: p.roundScores[latestRound] ?? null,
+            roundScores: p.roundScores,
+            isBestInPos: Math.abs(avg - (bestByPos[p.position] || 0)) < 1,
+          };
+        });
 
       setPlayers(stats);
     } catch (err) {
@@ -104,208 +139,156 @@ export default function PlayersTab() {
     }
   };
 
-  const handleSort = (key: SortKey) => {
-    if (sortKey === key) {
-      setSortAsc(!sortAsc);
-    } else {
-      setSortKey(key);
-      setSortAsc(key === 'player_name');
-    }
-    setPage(0);
-  };
+  const handleSort = useCallback((key: SortKey) => {
+    if (sortKey === key) setSortAsc(!sortAsc);
+    else { setSortKey(key); setSortAsc(key === 'player_name'); }
+  }, [sortKey, sortAsc]);
 
   const filteredPlayers = useMemo(() => {
     let result = [...players];
-
-    if (filterTeam) result = result.filter((p) => p.team_id === filterTeam);
-    if (filterPos) result = result.filter((p) => p.position === filterPos);
+    if (filterTeam) result = result.filter(p => p.team_id === filterTeam);
+    if (filterPos) result = result.filter(p => p.position === filterPos);
     if (search) {
       const lower = search.toLowerCase();
-      result = result.filter((p) => p.player_name.toLowerCase().includes(lower));
+      result = result.filter(p => p.player_name.toLowerCase().includes(lower));
     }
-
     result.sort((a, b) => {
-      const aVal = a[sortKey];
-      const bVal = b[sortKey];
-      if (typeof aVal === 'string' && typeof bVal === 'string') {
+      const aVal = a[sortKey]; const bVal = b[sortKey];
+      if (typeof aVal === 'string' && typeof bVal === 'string')
         return sortAsc ? aVal.localeCompare(bVal) : bVal.localeCompare(aVal);
-      }
+      if (aVal === null && bVal === null) return 0;
+      if (aVal === null) return 1;
+      if (bVal === null) return -1;
       return sortAsc ? (aVal as number) - (bVal as number) : (bVal as number) - (aVal as number);
     });
-
     return result;
   }, [players, filterTeam, filterPos, search, sortKey, sortAsc]);
 
-  const pagedPlayers = filteredPlayers.slice(page * perPage, (page + 1) * perPage);
-  const totalPages = Math.ceil(filteredPlayers.length / perPage);
+  const positions = useMemo(() => [...new Set(players.map(p => p.position))].sort(), [players]);
 
-  const positions = [...new Set(players.map((p) => p.position))].sort();
+  const posBadgeColor = (pos: string) => {
+    if (pos === 'DEF') return 'bg-blue-100 text-blue-700';
+    if (pos === 'MID') return 'bg-green-100 text-green-700';
+    if (pos === 'FWD') return 'bg-red-100 text-red-700';
+    if (pos === 'RUC') return 'bg-purple-100 text-purple-700';
+    if (pos === 'UTL') return 'bg-orange-100 text-orange-700';
+    return 'bg-gray-100 text-gray-600';
+  };
 
-  if (loading) {
-    return (
-      <div className="text-center py-12 bg-card border border-border rounded-lg shadow-sm">
-        <p className="text-muted-foreground">Loading player data...</p>
-      </div>
-    );
-  }
-
-  if (players.length === 0) {
-    return (
-      <div className="text-center py-12 bg-card border border-border rounded-lg shadow-sm">
-        <p className="text-muted-foreground">Upload round data to see player rankings.</p>
-      </div>
-    );
-  }
+  if (loading) return <div className="text-center py-12 bg-card border border-border rounded-lg shadow-sm"><p className="text-muted-foreground">Loading player data...</p></div>;
+  if (players.length === 0) return <div className="text-center py-12 bg-card border border-border rounded-lg shadow-sm"><p className="text-muted-foreground">Upload round data to see player rankings.</p></div>;
 
   return (
     <div className="space-y-4">
       {/* Filters */}
       <div className="flex flex-wrap gap-3 items-center">
-        {/* Search */}
         <div className="relative">
           <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
-          <input
-            type="text"
-            placeholder="Search player..."
-            value={search}
-            onChange={(e) => { setSearch(e.target.value); setPage(0); }}
-            className="pl-8 pr-3 py-2 text-sm border border-border rounded-lg bg-card w-56 focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary"
-          />
+          <input type="text" placeholder="Search player..." value={search}
+            onChange={e => setSearch(e.target.value)}
+            className="pl-8 pr-3 py-2 text-sm border border-border rounded-lg bg-card w-56 focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary" />
         </div>
 
-        {/* Team filter */}
-        <select
-          value={filterTeam || ''}
-          onChange={(e) => { setFilterTeam(e.target.value ? Number(e.target.value) : null); setPage(0); }}
-          className="px-3 py-2 text-sm border border-border rounded-lg bg-card focus:outline-none focus:ring-2 focus:ring-primary/20"
-        >
+        {/* Position pills */}
+        <div className="flex gap-1">
+          <button onClick={() => setFilterPos(null)}
+            className={cn('px-3 py-1.5 text-xs rounded-lg transition-colors',
+              !filterPos ? 'bg-primary text-primary-foreground' : 'bg-card border border-border hover:bg-muted/50')}>
+            ALL
+          </button>
+          {positions.map(pos => (
+            <button key={pos} onClick={() => setFilterPos(prev => prev === pos ? null : pos)}
+              className={cn('px-3 py-1.5 text-xs rounded-lg transition-colors font-medium',
+                filterPos === pos ? 'bg-primary text-primary-foreground' : 'bg-card border border-border hover:bg-muted/50')}>
+              {pos}
+            </button>
+          ))}
+        </div>
+
+        <select value={filterTeam || ''} onChange={e => setFilterTeam(e.target.value ? Number(e.target.value) : null)}
+          className="px-3 py-2 text-sm border border-border rounded-lg bg-card focus:outline-none focus:ring-2 focus:ring-primary/20">
           <option value="">All Teams</option>
-          {TEAMS.map((t) => (
-            <option key={t.team_id} value={t.team_id}>{t.team_name}</option>
-          ))}
+          {TEAMS.map(t => <option key={t.team_id} value={t.team_id}>{t.team_name}</option>)}
         </select>
 
-        {/* Position filter */}
-        <select
-          value={filterPos || ''}
-          onChange={(e) => { setFilterPos(e.target.value || null); setPage(0); }}
-          className="px-3 py-2 text-sm border border-border rounded-lg bg-card focus:outline-none focus:ring-2 focus:ring-primary/20"
-        >
-          <option value="">All Positions</option>
-          {positions.map((pos) => (
-            <option key={pos} value={pos}>{pos}</option>
-          ))}
-        </select>
-
-        <span className="text-xs text-muted-foreground ml-auto">
-          {filteredPlayers.length} player{filteredPlayers.length !== 1 ? 's' : ''}
-        </span>
+        <span className="text-xs text-muted-foreground ml-auto">{filteredPlayers.length} players</span>
       </div>
 
-      {/* Table */}
+      {/* Scrollable table with pinned header */}
       <div className="bg-card border border-border rounded-lg shadow-sm overflow-hidden">
-        <div className="overflow-x-auto">
+        <div ref={tableRef} className="overflow-auto max-h-[700px]">
           <table className="w-full text-sm">
-            <thead>
-              <tr className="bg-muted/50 text-left">
-                <th className="px-4 py-2.5 font-medium text-muted-foreground w-10">#</th>
-                <SortHeader label="Player" sortKey="player_name" currentKey={sortKey} asc={sortAsc} onSort={handleSort} />
-                <th className="px-4 py-2.5 font-medium text-muted-foreground">Team</th>
-                <th className="px-4 py-2.5 font-medium text-muted-foreground text-center">Pos</th>
-                <SortHeader label="Avg" sortKey="avg_score" currentKey={sortKey} asc={sortAsc} onSort={handleSort} align="right" />
-                <SortHeader label="Total" sortKey="total_score" currentKey={sortKey} asc={sortAsc} onSort={handleSort} align="right" />
-                <SortHeader label="High" sortKey="high_score" currentKey={sortKey} asc={sortAsc} onSort={handleSort} align="right" />
-                <th className="px-4 py-2.5 font-medium text-muted-foreground text-right">Low</th>
-                <SortHeader label="GP" sortKey="rounds_played" currentKey={sortKey} asc={sortAsc} onSort={handleSort} align="center" />
+            <thead className="sticky top-0 z-10">
+              <tr className="bg-muted/95 backdrop-blur text-left">
+                <th className="px-3 py-2.5 font-medium text-muted-foreground w-10">#</th>
+                <SortTh label="Player" sortKey="player_name" current={sortKey} asc={sortAsc} onSort={handleSort} />
+                <th className="px-3 py-2.5 font-medium text-muted-foreground">Team</th>
+                <th className="px-3 py-2.5 font-medium text-muted-foreground text-center w-12">Pos</th>
+                <SortTh label="Avg" sortKey="avg_score" current={sortKey} asc={sortAsc} onSort={handleSort} align="right" />
+                <SortTh label="Total" sortKey="total_score" current={sortKey} asc={sortAsc} onSort={handleSort} align="right" />
+                <SortTh label="This Wk" sortKey="latest_score" current={sortKey} asc={sortAsc} onSort={handleSort} align="right" />
+                <SortTh label="High" sortKey="high_score" current={sortKey} asc={sortAsc} onSort={handleSort} align="right" />
+                <th className="px-3 py-2.5 font-medium text-muted-foreground text-right">Low</th>
+                <SortTh label="GP" sortKey="rounds_played" current={sortKey} asc={sortAsc} onSort={handleSort} align="center" />
+                {validRounds.map(r => (
+                  <th key={r} className="px-2 py-2.5 font-medium text-muted-foreground text-center min-w-[42px]">R{r}</th>
+                ))}
               </tr>
             </thead>
             <tbody>
-              {pagedPlayers.map((player, i) => (
-                <tr
-                  key={`${player.player_id}-${player.team_id}`}
-                  className={i % 2 === 0 ? 'bg-card' : 'bg-muted/20'}
-                >
-                  <td className="px-4 py-2.5 text-muted-foreground text-xs font-mono">
-                    {page * perPage + i + 1}
+              {filteredPlayers.map((player, i) => (
+                <tr key={`${player.player_id}-${player.team_id}`} className={cn(i % 2 === 0 ? 'bg-card' : 'bg-muted/20', 'hover:bg-primary/5 transition-colors')}>
+                  <td className="px-3 py-2 text-muted-foreground text-xs font-mono">{i + 1}</td>
+                  <td className="px-3 py-2">
+                    <div className="flex items-center gap-1.5">
+                      <span className="font-medium">{player.player_name}</span>
+                      {player.isBestInPos && (
+                        <span className="text-[9px] bg-yellow-100 text-yellow-700 border border-yellow-300 px-1 rounded font-bold">★</span>
+                      )}
+                    </div>
                   </td>
-                  <td className="px-4 py-2.5 font-medium">{player.player_name}</td>
-                  <td className="px-4 py-2.5 text-muted-foreground text-xs truncate max-w-[140px]">{player.team_name}</td>
-                  <td className="px-4 py-2.5 text-center">
-                    <span className={cn(
-                      'inline-block px-1.5 py-0.5 rounded text-[10px] font-bold',
-                      player.position === 'DEF' ? 'bg-blue-100 text-blue-700' :
-                      player.position === 'MID' ? 'bg-green-100 text-green-700' :
-                      player.position === 'FWD' ? 'bg-red-100 text-red-700' :
-                      player.position === 'RUC' ? 'bg-purple-100 text-purple-700' :
-                      'bg-gray-100 text-gray-600'
-                    )}>
+                  <td className="px-3 py-2 text-xs text-muted-foreground truncate max-w-[120px]">{player.team_name}</td>
+                  <td className="px-3 py-2 text-center">
+                    <span className={cn('inline-block px-1.5 py-0.5 rounded text-[10px] font-bold', posBadgeColor(player.position))}>
                       {player.position}
                     </span>
                   </td>
-                  <td className="px-4 py-2.5 text-right font-bold">{player.avg_score}</td>
-                  <td className="px-4 py-2.5 text-right">{player.total_score}</td>
-                  <td className="px-4 py-2.5 text-right text-green-600 font-medium">{player.high_score}</td>
-                  <td className="px-4 py-2.5 text-right text-red-600">{player.low_score}</td>
-                  <td className="px-4 py-2.5 text-center text-muted-foreground">{player.rounds_played}</td>
+                  <td className="px-3 py-2 text-right">
+                    <span className={cn('inline-block px-1.5 py-0.5 rounded text-xs font-bold', avgBadge(player.avg_score))}>
+                      {player.avg_score}
+                    </span>
+                  </td>
+                  <td className="px-3 py-2 text-right font-medium">{player.total_score}</td>
+                  <td className={cn('px-3 py-2 text-right', scoreColor(player.latest_score))}>
+                    {player.latest_score ?? '—'}
+                  </td>
+                  <td className="px-3 py-2 text-right text-green-600 font-medium">{player.high_score}</td>
+                  <td className="px-3 py-2 text-right text-red-600">{player.low_score}</td>
+                  <td className="px-3 py-2 text-center text-muted-foreground">{player.rounds_played}</td>
+                  {validRounds.map(r => (
+                    <td key={r} className={cn('px-2 py-2 text-center text-xs', scoreColor(player.roundScores[r] ?? null))}>
+                      {player.roundScores[r] ?? '—'}
+                    </td>
+                  ))}
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
       </div>
-
-      {/* Pagination */}
-      {totalPages > 1 && (
-        <div className="flex items-center justify-center gap-2">
-          <button
-            onClick={() => setPage(Math.max(0, page - 1))}
-            disabled={page === 0}
-            className="px-3 py-1.5 text-sm rounded-lg border border-border bg-card hover:bg-muted/50 disabled:opacity-40 disabled:cursor-not-allowed"
-          >
-            Prev
-          </button>
-          <span className="text-sm text-muted-foreground">
-            Page {page + 1} of {totalPages}
-          </span>
-          <button
-            onClick={() => setPage(Math.min(totalPages - 1, page + 1))}
-            disabled={page >= totalPages - 1}
-            className="px-3 py-1.5 text-sm rounded-lg border border-border bg-card hover:bg-muted/50 disabled:opacity-40 disabled:cursor-not-allowed"
-          >
-            Next
-          </button>
-        </div>
-      )}
     </div>
   );
 }
 
-function SortHeader({
-  label,
-  sortKey,
-  currentKey,
-  asc,
-  onSort,
-  align = 'left',
-}: {
-  label: string;
-  sortKey: SortKey;
-  currentKey: SortKey;
-  asc: boolean;
-  onSort: (key: SortKey) => void;
-  align?: 'left' | 'right' | 'center';
+function SortTh({ label, sortKey, current, asc, onSort, align = 'left' }: {
+  label: string; sortKey: SortKey; current: SortKey; asc: boolean;
+  onSort: (key: SortKey) => void; align?: 'left' | 'right' | 'center';
 }) {
-  const isActive = currentKey === sortKey;
+  const isActive = current === sortKey;
   return (
-    <th
-      className={cn(
-        'px-4 py-2.5 font-medium text-muted-foreground cursor-pointer hover:text-foreground select-none',
-        align === 'right' && 'text-right',
-        align === 'center' && 'text-center'
-      )}
-      onClick={() => onSort(sortKey)}
-    >
-      <span className="inline-flex items-center gap-1">
+    <th className={cn('px-3 py-2.5 font-medium text-muted-foreground cursor-pointer hover:text-foreground select-none whitespace-nowrap',
+      align === 'right' && 'text-right', align === 'center' && 'text-center')} onClick={() => onSort(sortKey)}>
+      <span className="inline-flex items-center gap-0.5">
         {label}
         {isActive && (asc ? <ChevronUp size={12} /> : <ChevronDown size={12} />)}
       </span>
