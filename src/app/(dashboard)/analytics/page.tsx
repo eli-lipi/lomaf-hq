@@ -5,6 +5,7 @@ import { cn } from '@/lib/utils';
 import OverviewTab from './overview-tab';
 import RoundRangeTab from './round-range-tab';
 import LineRankingsTab from './line-rankings-tab';
+import LuckFormTab from './luck-form-tab';
 import DraftTab from './draft-tab';
 import PlayersTab from './players-tab';
 
@@ -12,6 +13,7 @@ const TABS = [
   { id: 'overview', label: 'Overview' },
   { id: 'range', label: 'Round Range' },
   { id: 'lines', label: 'Line Rankings' },
+  { id: 'luck', label: 'Luck & Form' },
   { id: 'draft', label: 'Draft vs Reality' },
   { id: 'players', label: 'Player Rankings' },
 ] as const;
@@ -48,6 +50,7 @@ export default function AnalyticsPage() {
       {activeTab === 'overview' && <OverviewTab />}
       {activeTab === 'range' && <RoundRangeTab />}
       {activeTab === 'lines' && <LineRankingsTab />}
+      {activeTab === 'luck' && <LuckFormTab />}
       {activeTab === 'draft' && <DraftTab />}
       {activeTab === 'players' && <PlayersTab />}
     </div>
