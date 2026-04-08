@@ -173,7 +173,20 @@ export default function OverviewTab() {
       if (snapshots && snapshots.length > 0 && validRounds.length > 0) {
         setLuckRounds(validRounds);
 
-        // Build per-round W/L/T by diffing cumulative snapshots
+        // Build per-round W/L/T from matchup_rounds (most reliable) or snapshot diffs (fallback)
+        const perRoundResult: Record<string, number> = {}; // key: "round-teamId"
+
+        // Try matchup_rounds first
+        const { data: matchups } = await supabase
+          .from('matchup_rounds')
+          .select('round_number, team_id, win, loss, tie');
+        if (matchups && matchups.length > 0) {
+          matchups.forEach((m: { round_number: number; team_id: number; win: boolean; loss: boolean; tie: boolean }) => {
+            perRoundResult[`${m.round_number}-${m.team_id}`] = m.win ? 1 : m.tie ? 0.5 : 0;
+          });
+        }
+
+        // Fallback: diff cumulative snapshots for rounds not covered by matchups
         const snapshotsByRound: Record<number, Record<number, TeamSnapshot>> = {};
         snapshots.forEach((s: TeamSnapshot) => {
           if (!snapshotsByRound[s.round_number]) snapshotsByRound[s.round_number] = {};
@@ -181,19 +194,18 @@ export default function OverviewTab() {
         });
         const snapshotRounds = [...new Set(snapshots.map((s: TeamSnapshot) => s.round_number))].sort((a, b) => a - b);
 
-        // Per-round actual results: 1=win, 0.5=tie, 0=loss
-        const perRoundResult: Record<string, number> = {}; // key: "round-teamId"
         for (let ri = 0; ri < snapshotRounds.length; ri++) {
           const round = snapshotRounds[ri];
           const prevRound = ri > 0 ? snapshotRounds[ri - 1] : null;
           TEAMS.forEach(t => {
+            const key = `${round}-${t.team_id}`;
+            if (perRoundResult[key] !== undefined) return; // already have matchup data
             const curr = snapshotsByRound[round]?.[t.team_id];
             const prev = prevRound ? snapshotsByRound[prevRound]?.[t.team_id] : null;
             if (!curr) return;
             const winsThisRound = prev ? curr.wins - prev.wins : curr.wins;
             const tiesThisRound = prev ? curr.ties - prev.ties : curr.ties;
-            // winsThisRound > 0 means they won, tiesThisRound > 0 means tie, else loss
-            perRoundResult[`${round}-${t.team_id}`] = winsThisRound > 0 ? 1 : tiesThisRound > 0 ? 0.5 : 0;
+            perRoundResult[key] = winsThisRound > 0 ? 1 : tiesThisRound > 0 ? 0.5 : 0;
           });
         }
 
@@ -233,7 +245,7 @@ export default function OverviewTab() {
             perRound,
           };
         });
-        luckRows.sort((a, b) => a.luckScore - b.luckScore); // unluckiest first
+        luckRows.sort((a, b) => b.luckScore - a.luckScore); // luckiest first
         setLuckData(luckRows);
 
         // Form Ladder: points by weekly score rank
@@ -341,8 +353,8 @@ export default function OverviewTab() {
 
     // 1. Luck-based insights
     if (luck.length > 0) {
-      const unluckiest = luck[0]; // sorted unluckiest first
-      const luckiest = luck[luck.length - 1];
+      const luckiest = luck[0]; // sorted luckiest first
+      const unluckiest = luck[luck.length - 1];
       if (unluckiest.luckScore <= -0.5) {
         const pfRank = [...standings].sort((a, b) => b.pts_for - a.pts_for).findIndex(s => s.team_id === unluckiest.team_id) + 1;
         ins.push(`${unluckiest.team_name} has the ${ordinal(pfRank)} highest points-for but is ${unluckiest.wins}-${unluckiest.losses}${unluckiest.ties ? `-${unluckiest.ties}` : ''}. They would have won ${unluckiest.expectedWins} games against a random schedule — luck score: ${unluckiest.luckScore.toFixed(2)}.`);
