@@ -17,8 +17,8 @@ export const TEAMS: LeagueTeam[] = [
   { team_name: 'Warnered613', team_id: 3194007, coach: 'Lior Davis', coach_photo_key: 'lior' },
 ];
 
-// The 4 real AFL Fantasy positions (used for display/rankings)
-export const LINE_GROUPS = ['DEF', 'MID', 'FWD', 'RUC'] as const;
+// The 5 scored lines (used for display/rankings)
+export const LINE_GROUPS = ['DEF', 'MID', 'FWD', 'RUC', 'UTL'] as const;
 
 // All lineup slots including UTL and BN (used for score calculation only)
 export const LINEUP_SLOTS = ['DEF', 'MID', 'FWD', 'RUC', 'UTL', 'BN'] as const;

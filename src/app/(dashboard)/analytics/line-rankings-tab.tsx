@@ -14,6 +14,7 @@ const POSITIONS = [
   { id: 'MID', label: 'Midfield', slots: 7 },
   { id: 'RUC', label: 'Ruck', slots: 1 },
   { id: 'FWD', label: 'Forward', slots: 4 },
+  { id: 'UTL', label: 'Utility', slots: 1 },
 ] as const;
 
 type PosId = (typeof POSITIONS)[number]['id'];
@@ -121,7 +122,7 @@ export default function LineRankingsTab() {
   // === Cross-position summary (ALL view) ===
   const crossPosSummary = useMemo(() => {
     if (validRounds.length === 0) return [];
-    const posIds = ['DEF', 'MID', 'RUC', 'FWD'] as const;
+    const posIds = ['DEF', 'MID', 'RUC', 'FWD', 'UTL'] as const;
 
     // For each position + team, compute season average
     const teamPosAvg: Record<string, Record<string, number>> = {};
@@ -347,6 +348,7 @@ export default function LineRankingsTab() {
                   <th className="px-3 py-2.5 font-medium text-muted-foreground text-center">MID</th>
                   <th className="px-3 py-2.5 font-medium text-muted-foreground text-center">RUC</th>
                   <th className="px-3 py-2.5 font-medium text-muted-foreground text-center">FWD</th>
+                  <th className="px-3 py-2.5 font-medium text-muted-foreground text-center">UTL</th>
                   <th className="px-4 py-2.5 font-medium text-muted-foreground text-right">Total Avg</th>
                 </tr>
               </thead>
@@ -360,7 +362,7 @@ export default function LineRankingsTab() {
                         <span className="font-medium">{team.team_name}</span>
                       </div>
                     </td>
-                    {(['DEF', 'MID', 'RUC', 'FWD'] as const).map(pos => (
+                    {(['DEF', 'MID', 'RUC', 'FWD', 'UTL'] as const).map(pos => (
                       <td key={pos} className="px-3 py-3 text-center">
                         <div className="flex flex-col items-center gap-0.5">
                           <RankBadge rank={team.posRanks[pos]} />
