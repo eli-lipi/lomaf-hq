@@ -547,10 +547,11 @@ export default function RankingsTab() {
                 value={selectedItem.writeup}
                 onChange={(e) => updateWriteup(selectedItem.team_id, e.target.value)}
                 placeholder="Write about this team..."
-                rows={5}
+                rows={8}
                 disabled={isPublished}
-                className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary disabled:opacity-50 resize-y"
+                className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary disabled:opacity-50 resize-y"
               />
+              <p className="text-xs text-muted-foreground mt-1">Tip: Start a line with <code className="bg-muted px-1 rounded">##</code> to create a section header on the slide</p>
             </div>
 
             {/* Slide preview */}
