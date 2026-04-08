@@ -9,6 +9,100 @@ const supabase = createClient(
 
 export const runtime = 'nodejs';
 
+// Color scheme
+const BG = '#0B1120';
+const CARD = '#151D2E';
+const PRIMARY = '#00FF87';
+const FG = '#FFFFFF';
+const MUTED = '#8B95A5';
+const GREEN = '#22C55E';
+const RED = '#EF4444';
+
+// Helpers
+const fmt = (n: number) => n.toLocaleString('en-US');
+const ord = (n: number) => {
+  const s = ['th', 'st', 'nd', 'rd'];
+  const v = n % 100;
+  return n + (s[(v - 20) % 10] || s[v] || s[0]);
+};
+const rankColor = (rank: number | null) => {
+  if (!rank) return FG;
+  if (rank <= 3) return GREEN;
+  if (rank <= 7) return FG;
+  return RED;
+};
+
+// Shared layout wrapper: top bar + bottom accent + BG + padding
+function SlideWrapper({
+  roundNumber,
+  children,
+}: {
+  roundNumber: number;
+  children: React.ReactNode;
+}) {
+  return (
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        width: '100%',
+        height: '100%',
+        backgroundColor: BG,
+        padding: '50px',
+      }}
+    >
+      {/* Top bar */}
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          marginBottom: '24px',
+        }}
+      >
+        <div
+          style={{
+            display: 'flex',
+            fontSize: '16px',
+            fontWeight: 600,
+            color: MUTED,
+            letterSpacing: '2px',
+          }}
+        >
+          LOMAF HQ
+        </div>
+        <div
+          style={{
+            display: 'flex',
+            fontSize: '16px',
+            fontWeight: 600,
+            color: MUTED,
+            letterSpacing: '2px',
+          }}
+        >
+          R{roundNumber} PWRNKGS
+        </div>
+      </div>
+
+      {/* Content area */}
+      <div style={{ display: 'flex', flexDirection: 'column', flex: 1 }}>
+        {children}
+      </div>
+
+      {/* Bottom accent line */}
+      <div
+        style={{
+          display: 'flex',
+          height: '4px',
+          width: '100%',
+          backgroundColor: PRIMARY,
+          marginTop: '24px',
+        }}
+      />
+    </div>
+  );
+}
+
 export async function GET(
   request: Request,
   { params }: { params: Promise<{ slideIndex: string }> }
@@ -57,66 +151,111 @@ export async function GET(
     sparklineMap.get(r.team_id)!.push(r.ranking);
   });
 
-  // Common styles
-  const BG = '#0A0F1C';
-  const CARD = '#111827';
-  const CARD_EL = '#1A2332';
-  const PRIMARY = '#A3FF12';
-  const FG = '#E2E8F0';
-  const MUTED = '#64748B';
-  const GREEN = '#22C55E';
-  const RED = '#EF4444';
-  const BLUE = '#3B82F6';
-
   let element: React.ReactElement;
 
+  // ============================================================
+  // SLIDE 0 — Preview
+  // ============================================================
   if (slideIndex === 0) {
-    // === SLIDE 1: PREVIEW ===
     element = (
-      <div style={{ display: 'flex', flexDirection: 'column', width: '100%', height: '100%', backgroundColor: BG, padding: '60px' }}>
-        {/* Top branding */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '40px' }}>
-          <div style={{ display: 'flex', fontSize: '24px', fontWeight: 700, color: MUTED }}>LOMAF HQ</div>
-          <div style={{ display: 'flex', fontSize: '18px', color: MUTED }}>2026</div>
-        </div>
+      <SlideWrapper roundNumber={roundNumber}>
+        <div
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            flex: 1,
+            justifyContent: 'center',
+            alignItems: 'center',
+          }}
+        >
+          <div
+            style={{
+              display: 'flex',
+              fontSize: '64px',
+              fontWeight: 800,
+              color: PRIMARY,
+              letterSpacing: '3px',
+              marginBottom: '24px',
+            }}
+          >
+            R{roundNumber} PWRNKGS
+          </div>
 
-        {/* Main content */}
-        <div style={{ display: 'flex', flexDirection: 'column', flex: 1, justifyContent: 'center', alignItems: 'center' }}>
-          <div style={{ display: 'flex', fontSize: '72px', fontWeight: 800, color: PRIMARY, marginBottom: '16px' }}>PWRNKGS</div>
-          <div style={{ display: 'flex', fontSize: '48px', fontWeight: 700, color: FG, marginBottom: '24px' }}>ROUND {roundNumber}</div>
           {roundData.theme && (
-            <div style={{ display: 'flex', fontSize: '28px', color: PRIMARY, marginBottom: '40px' }}>
-              &quot;{roundData.theme}&quot;
+            <div
+              style={{
+                display: 'flex',
+                fontSize: '28px',
+                fontWeight: 400,
+                color: FG,
+                marginBottom: '32px',
+              }}
+            >
+              {roundData.theme}
             </div>
           )}
+
           {roundData.preview_text && (
-            <div style={{ display: 'flex', fontSize: '18px', color: MUTED, textAlign: 'center', maxWidth: '800px', lineHeight: '1.6' }}>
-              {roundData.preview_text.length > 400 ? roundData.preview_text.slice(0, 400) + '...' : roundData.preview_text}
+            <div
+              style={{
+                display: 'flex',
+                fontSize: '20px',
+                color: FG,
+                textAlign: 'center',
+                maxWidth: '800px',
+                lineHeight: '1.7',
+              }}
+            >
+              {roundData.preview_text.length > 500
+                ? roundData.preview_text.slice(0, 500) + '...'
+                : roundData.preview_text}
             </div>
           )}
         </div>
-
-        {/* Bottom accent line */}
-        <div style={{ display: 'flex', height: '4px', backgroundColor: PRIMARY, borderRadius: '2px' }} />
-      </div>
+      </SlideWrapper>
     );
+
+  // ============================================================
+  // SLIDE 11 — Summary
+  // ============================================================
   } else if (slideIndex === 11) {
-    // === SLIDE 12: SUMMARY ===
     element = (
-      <div style={{ display: 'flex', flexDirection: 'column', width: '100%', height: '100%', backgroundColor: BG, padding: '50px' }}>
-        {/* Header */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '30px' }}>
-          <div style={{ display: 'flex', fontSize: '36px', fontWeight: 800, color: PRIMARY }}>PWRNKGS LADDER</div>
-          <div style={{ display: 'flex', fontSize: '24px', color: MUTED }}>R{roundNumber}</div>
+      <SlideWrapper roundNumber={roundNumber}>
+        {/* Title */}
+        <div
+          style={{
+            display: 'flex',
+            fontSize: '40px',
+            fontWeight: 800,
+            color: PRIMARY,
+            marginBottom: '28px',
+            letterSpacing: '1px',
+          }}
+        >
+          R{roundNumber} PWRNKGS SUMMARY
         </div>
 
-        {/* Rankings table */}
+        {/* Ladder rows */}
         <div style={{ display: 'flex', flexDirection: 'column', flex: 1 }}>
-          {rankings?.map((r, i) => {
-            const movement = r.previous_ranking ? r.previous_ranking - r.ranking : 0;
-            const moveText = r.previous_ranking === null ? 'NEW' : movement > 0 ? `↑${movement}` : movement < 0 ? `↓${Math.abs(movement)}` : '—';
-            const moveColor = r.previous_ranking === null ? BLUE : movement > 0 ? GREEN : movement < 0 ? RED : MUTED;
-            const snap = snapshotMap.get(r.team_id);
+          {rankings?.map((r) => {
+            const movement = r.previous_ranking
+              ? r.previous_ranking - r.ranking
+              : 0;
+            const isNew = r.previous_ranking === null;
+            const moveText = isNew
+              ? 'NEW'
+              : movement > 0
+                ? `↑${movement}`
+                : movement < 0
+                  ? `↓${Math.abs(movement)}`
+                  : '—';
+            const moveColor = isNew
+              ? PRIMARY
+              : movement > 0
+                ? GREEN
+                : movement < 0
+                  ? RED
+                  : MUTED;
 
             return (
               <div
@@ -124,17 +263,43 @@ export async function GET(
                 style={{
                   display: 'flex',
                   alignItems: 'center',
-                  padding: '12px 16px',
-                  backgroundColor: i % 2 === 0 ? CARD : 'transparent',
-                  borderRadius: '8px',
-                  marginBottom: '4px',
+                  height: '56px',
+                  paddingLeft: '16px',
+                  paddingRight: '16px',
                 }}
               >
-                <div style={{ display: 'flex', width: '50px', fontSize: '24px', fontWeight: 800, color: PRIMARY }}>{r.ranking}</div>
-                <div style={{ display: 'flex', width: '60px', fontSize: '16px', fontWeight: 600, color: moveColor }}>{moveText}</div>
-                <div style={{ display: 'flex', flex: 1, fontSize: '18px', fontWeight: 600, color: FG }}>{r.team_name}</div>
-                <div style={{ display: 'flex', fontSize: '16px', color: MUTED }}>
-                  {snap ? Math.round(Number(snap.pts_for)) : '—'}
+                <div
+                  style={{
+                    display: 'flex',
+                    width: '60px',
+                    fontSize: '24px',
+                    fontWeight: 800,
+                    color: PRIMARY,
+                  }}
+                >
+                  {r.ranking}
+                </div>
+                <div
+                  style={{
+                    display: 'flex',
+                    width: '80px',
+                    fontSize: '18px',
+                    fontWeight: 600,
+                    color: moveColor,
+                  }}
+                >
+                  {moveText}
+                </div>
+                <div
+                  style={{
+                    display: 'flex',
+                    flex: 1,
+                    fontSize: '20px',
+                    fontWeight: 600,
+                    color: FG,
+                  }}
+                >
+                  {r.team_name}
                 </div>
               </div>
             );
@@ -143,126 +308,364 @@ export async function GET(
 
         {/* Week ahead */}
         {roundData.week_ahead_text && (
-          <div style={{ display: 'flex', flexDirection: 'column', marginTop: '20px', padding: '16px', backgroundColor: CARD_EL, borderRadius: '12px' }}>
-            <div style={{ display: 'flex', fontSize: '14px', fontWeight: 700, color: PRIMARY, marginBottom: '8px' }}>WEEK AHEAD</div>
-            <div style={{ display: 'flex', fontSize: '14px', color: MUTED, lineHeight: '1.5' }}>
-              {roundData.week_ahead_text.length > 200 ? roundData.week_ahead_text.slice(0, 200) + '...' : roundData.week_ahead_text}
-            </div>
+          <div
+            style={{
+              display: 'flex',
+              fontSize: '18px',
+              color: FG,
+              lineHeight: '1.5',
+              marginTop: '16px',
+            }}
+          >
+            {roundData.week_ahead_text.length > 300
+              ? roundData.week_ahead_text.slice(0, 300) + '...'
+              : roundData.week_ahead_text}
           </div>
         )}
-
-        {/* Bottom accent */}
-        <div style={{ display: 'flex', height: '4px', backgroundColor: PRIMARY, borderRadius: '2px', marginTop: '16px' }} />
-      </div>
+      </SlideWrapper>
     );
+
+  // ============================================================
+  // SLIDES 1–10 — Team Rankings (10th down to 1st)
+  // ============================================================
   } else {
-    // === SLIDES 2-11: TEAM RANKINGS (10th to 1st) ===
     const rankIndex = 11 - slideIndex; // slideIndex 1 = rank 10, slideIndex 10 = rank 1
     const ranking = rankings?.find((r) => r.ranking === rankIndex);
 
     if (!ranking) {
-      return new Response(`No ranking found for position ${rankIndex}`, { status: 404 });
+      return new Response(`No ranking found for position ${rankIndex}`, {
+        status: 404,
+      });
     }
 
     const team = TEAMS.find((t) => t.team_id === ranking.team_id);
     const snapshot = snapshotMap.get(ranking.team_id);
     const sparkline = sparklineMap.get(ranking.team_id) || [];
 
-    const movement = ranking.previous_ranking ? ranking.previous_ranking - ranking.ranking : 0;
-    const moveText = ranking.previous_ranking === null ? 'NEW' : movement > 0 ? `↑${movement}` : movement < 0 ? `↓${Math.abs(movement)}` : '—';
-    const moveColor = ranking.previous_ranking === null ? BLUE : movement > 0 ? GREEN : movement < 0 ? RED : MUTED;
+    const movement = ranking.previous_ranking
+      ? ranking.previous_ranking - ranking.ranking
+      : 0;
+    const isNew = ranking.previous_ranking === null;
+    const moveText = isNew
+      ? 'NEW'
+      : movement > 0
+        ? `↑${movement}`
+        : movement < 0
+          ? `↓${Math.abs(movement)}`
+          : '—';
+    const moveColor = isNew
+      ? PRIMARY
+      : movement > 0
+        ? GREEN
+        : movement < 0
+          ? RED
+          : MUTED;
 
-    // Generate sparkline SVG path
+    // Sparkline SVG points
     let sparklinePath = '';
     if (sparkline.length > 1) {
       const maxRank = 10;
-      const w = 180;
+      const w = 160;
       const h = 40;
       const points = sparkline.map((rank, i) => {
         const x = (i / (sparkline.length - 1)) * w;
-        const y = ((rank - 1) / (maxRank - 1)) * h; // rank 1 = top (y=0), rank 10 = bottom (y=h)
+        const y = ((rank - 1) / (maxRank - 1)) * h;
         return `${x},${y}`;
       });
       sparklinePath = points.join(' ');
     }
 
-    // Ordinal helper
-    const ord = (n: number) => {
-      const s = ['th', 'st', 'nd', 'rd'];
-      const v = n % 100;
-      return n + (s[(v - 20) % 10] || s[v] || s[0]);
-    };
+    // Snapshot-derived stats
+    // Weekly score = sum of line totals (DEF + MID + FWD + RUC + UTL)
+    const computeWeekScore = (s: typeof snapshot) =>
+      s
+        ? Math.round(
+            Number(s.def_total || 0) +
+              Number(s.mid_total || 0) +
+              Number(s.fwd_total || 0) +
+              Number(s.ruc_total || 0) +
+              Number(s.utl_total || 0)
+          )
+        : 0;
+    const weekScore = snapshot ? computeWeekScore(snapshot) : null;
+    const seasonTotal = snapshot ? Math.round(Number(snapshot.pts_for || 0)) : null;
+
+    // Compute weekly score rank among all snapshots
+    let weekRank: number | null = null;
+    let seasonRank: number | null = null;
+    if (snapshot && snapshots) {
+      const weekScores = snapshots
+        .map((s) => computeWeekScore(s))
+        .sort((a, b) => b - a);
+      weekRank = weekScores.indexOf(weekScore!) + 1;
+
+      const seasonTotals = snapshots
+        .map((s) => Math.round(Number(s.pts_for || 0)))
+        .sort((a, b) => b - a);
+      seasonRank = seasonTotals.indexOf(seasonTotal!) + 1;
+    }
+
+    const ladderPos = snapshot?.league_rank ?? null;
+
+    // Line rank items
+    const lineRanks = [
+      { label: 'DEF', rank: snapshot?.def_rank ?? null },
+      { label: 'MID', rank: snapshot?.mid_rank ?? null },
+      { label: 'FWD', rank: snapshot?.fwd_rank ?? null },
+      { label: 'RUC', rank: snapshot?.ruc_rank ?? null },
+      { label: 'UTL', rank: snapshot?.utl_rank ?? null },
+    ];
 
     element = (
-      <div style={{ display: 'flex', flexDirection: 'column', width: '100%', height: '100%', backgroundColor: BG, padding: '50px' }}>
-        {/* Top branding bar */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '30px' }}>
-          <div style={{ display: 'flex', fontSize: '18px', color: MUTED }}>LOMAF HQ</div>
-          <div style={{ display: 'flex', fontSize: '18px', color: MUTED }}>R{ranking.round_number} PWRNKGS</div>
-        </div>
-
-        {/* Main content */}
-        <div style={{ display: 'flex', flex: 1 }}>
-          {/* Left: Rank + Movement */}
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-start', width: '280px', paddingTop: '40px' }}>
-            <div style={{ display: 'flex', fontSize: '140px', fontWeight: 900, color: PRIMARY, lineHeight: 1 }}>
+      <SlideWrapper roundNumber={roundNumber}>
+        {/* ---- Header area ---- */}
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'flex-start',
+            marginBottom: '24px',
+          }}
+        >
+          {/* Left: rank + movement */}
+          <div style={{ display: 'flex', flexDirection: 'column' }}>
+            <div
+              style={{
+                display: 'flex',
+                fontSize: '120px',
+                fontWeight: 900,
+                color: PRIMARY,
+                lineHeight: '1',
+              }}
+            >
               {ranking.ranking}
             </div>
-            <div style={{ display: 'flex', fontSize: '28px', fontWeight: 700, color: moveColor, marginTop: '8px' }}>
+            <div
+              style={{
+                display: 'flex',
+                fontSize: '24px',
+                fontWeight: 700,
+                color: moveColor,
+                marginTop: '4px',
+              }}
+            >
               {moveText}
             </div>
           </div>
 
-          {/* Right: Team info + writeup */}
-          <div style={{ display: 'flex', flexDirection: 'column', flex: 1, paddingLeft: '30px', paddingTop: '20px' }}>
-            <div style={{ display: 'flex', fontSize: '32px', fontWeight: 800, color: FG, marginBottom: '4px' }}>
+          {/* Right: team name + coach */}
+          <div
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'flex-end',
+              paddingTop: '16px',
+            }}
+          >
+            <div
+              style={{
+                display: 'flex',
+                fontSize: '36px',
+                fontWeight: 800,
+                color: FG,
+                marginBottom: '4px',
+              }}
+            >
               {ranking.team_name}
             </div>
-            <div style={{ display: 'flex', fontSize: '18px', color: MUTED, marginBottom: '24px' }}>
+            <div
+              style={{
+                display: 'flex',
+                fontSize: '18px',
+                color: MUTED,
+              }}
+            >
               {team?.coach || ''}
-            </div>
-            <div style={{ display: 'flex', fontSize: '18px', color: '#94A3B8', lineHeight: '1.6', flex: 1 }}>
-              {ranking.writeup.length > 500 ? ranking.writeup.slice(0, 500) + '...' : ranking.writeup}
             </div>
           </div>
         </div>
 
-        {/* Stats strip */}
-        <div style={{ display: 'flex', backgroundColor: CARD_EL, borderRadius: '12px', padding: '16px 20px', gap: '24px' }}>
-          {snapshot ? (
-            <>
+        {/* ---- Writeup area ---- */}
+        <div
+          style={{
+            display: 'flex',
+            flex: 1,
+            fontSize: '20px',
+            color: FG,
+            lineHeight: '1.7',
+            paddingTop: '8px',
+            paddingBottom: '8px',
+          }}
+        >
+          {ranking.writeup.length > 550
+            ? ranking.writeup.slice(0, 550) + '...'
+            : ranking.writeup}
+        </div>
+
+        {/* ---- Stats panel ---- */}
+        {snapshot ? (
+          <div
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              backgroundColor: CARD,
+              borderRadius: '16px',
+              padding: '20px',
+            }}
+          >
+            {/* Row 1: main stats */}
+            <div
+              style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                marginBottom: '16px',
+              }}
+            >
+              {/* This Week */}
               <div style={{ display: 'flex', flexDirection: 'column' }}>
-                <div style={{ display: 'flex', fontSize: '11px', color: MUTED }}>SCORE</div>
-                <div style={{ display: 'flex', fontSize: '18px', fontWeight: 700, color: FG }}>{Math.round(Number(snapshot.pts_for))}</div>
+                <div
+                  style={{
+                    display: 'flex',
+                    fontSize: '11px',
+                    fontWeight: 700,
+                    color: MUTED,
+                    letterSpacing: '1px',
+                    marginBottom: '4px',
+                  }}
+                >
+                  THIS WEEK
+                </div>
+                <div
+                  style={{
+                    display: 'flex',
+                    fontSize: '16px',
+                    fontWeight: 600,
+                    color: FG,
+                  }}
+                >
+                  {weekScore !== null ? fmt(weekScore) : '—'}
+                  {weekRank ? ` (${ord(weekRank)})` : ''}
+                </div>
               </div>
+
+              {/* Season */}
               <div style={{ display: 'flex', flexDirection: 'column' }}>
-                <div style={{ display: 'flex', fontSize: '11px', color: MUTED }}>RECORD</div>
-                <div style={{ display: 'flex', fontSize: '18px', fontWeight: 700, color: FG }}>{snapshot.wins}W-{snapshot.losses}L</div>
+                <div
+                  style={{
+                    display: 'flex',
+                    fontSize: '11px',
+                    fontWeight: 700,
+                    color: MUTED,
+                    letterSpacing: '1px',
+                    marginBottom: '4px',
+                  }}
+                >
+                  SEASON
+                </div>
+                <div
+                  style={{
+                    display: 'flex',
+                    fontSize: '16px',
+                    fontWeight: 600,
+                    color: FG,
+                  }}
+                >
+                  {seasonTotal !== null ? fmt(seasonTotal) : '—'}
+                  {seasonRank ? ` (${ord(seasonRank)})` : ''}
+                </div>
               </div>
+
+              {/* Record + Ladder */}
               <div style={{ display: 'flex', flexDirection: 'column' }}>
-                <div style={{ display: 'flex', fontSize: '11px', color: MUTED }}>DEF</div>
-                <div style={{ display: 'flex', fontSize: '14px', color: FG }}>{snapshot.def_rank ? ord(snapshot.def_rank) : '—'}</div>
+                <div
+                  style={{
+                    display: 'flex',
+                    fontSize: '11px',
+                    fontWeight: 700,
+                    color: MUTED,
+                    letterSpacing: '1px',
+                    marginBottom: '4px',
+                  }}
+                >
+                  RECORD
+                </div>
+                <div
+                  style={{
+                    display: 'flex',
+                    fontSize: '16px',
+                    fontWeight: 600,
+                    color: FG,
+                  }}
+                >
+                  {snapshot.wins}W-{snapshot.losses}L
+                  {ladderPos ? ` · Ladder: ${ord(ladderPos)}` : ''}
+                </div>
               </div>
-              <div style={{ display: 'flex', flexDirection: 'column' }}>
-                <div style={{ display: 'flex', fontSize: '11px', color: MUTED }}>MID</div>
-                <div style={{ display: 'flex', fontSize: '14px', color: FG }}>{snapshot.mid_rank ? ord(snapshot.mid_rank) : '—'}</div>
+            </div>
+
+            {/* Row 2: line rankings + sparkline */}
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+              }}
+            >
+              {/* Line rankings */}
+              <div style={{ display: 'flex', gap: '24px' }}>
+                {lineRanks.map((lr) => (
+                  <div
+                    key={lr.label}
+                    style={{ display: 'flex', flexDirection: 'column' }}
+                  >
+                    <div
+                      style={{
+                        display: 'flex',
+                        fontSize: '11px',
+                        fontWeight: 700,
+                        color: MUTED,
+                        letterSpacing: '1px',
+                        marginBottom: '4px',
+                      }}
+                    >
+                      {lr.label}
+                    </div>
+                    <div
+                      style={{
+                        display: 'flex',
+                        fontSize: '16px',
+                        fontWeight: 600,
+                        color: lr.rank ? rankColor(lr.rank) : MUTED,
+                      }}
+                    >
+                      {lr.rank ? ord(lr.rank) : '—'}
+                    </div>
+                  </div>
+                ))}
               </div>
-              <div style={{ display: 'flex', flexDirection: 'column' }}>
-                <div style={{ display: 'flex', fontSize: '11px', color: MUTED }}>FWD</div>
-                <div style={{ display: 'flex', fontSize: '14px', color: FG }}>{snapshot.fwd_rank ? ord(snapshot.fwd_rank) : '—'}</div>
-              </div>
-              <div style={{ display: 'flex', flexDirection: 'column' }}>
-                <div style={{ display: 'flex', fontSize: '11px', color: MUTED }}>RUC</div>
-                <div style={{ display: 'flex', fontSize: '14px', color: FG }}>{snapshot.ruc_rank ? ord(snapshot.ruc_rank) : '—'}</div>
-              </div>
-              <div style={{ display: 'flex', flexDirection: 'column' }}>
-                <div style={{ display: 'flex', fontSize: '11px', color: MUTED }}>UTL</div>
-                <div style={{ display: 'flex', fontSize: '14px', color: FG }}>{snapshot.utl_rank ? ord(snapshot.utl_rank) : '—'}</div>
-              </div>
+
+              {/* Sparkline */}
               {sparkline.length > 1 && (
-                <div style={{ display: 'flex', flexDirection: 'column', marginLeft: 'auto' }}>
-                  <div style={{ display: 'flex', fontSize: '11px', color: MUTED, marginBottom: '4px' }}>TREND</div>
-                  <svg width="180" height="40" viewBox="0 0 180 40">
+                <div
+                  style={{
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'flex-end',
+                  }}
+                >
+                  <div
+                    style={{
+                      display: 'flex',
+                      fontSize: '11px',
+                      fontWeight: 700,
+                      color: MUTED,
+                      letterSpacing: '1px',
+                      marginBottom: '4px',
+                    }}
+                  >
+                    TREND
+                  </div>
+                  <svg width="160" height="40" viewBox="0 0 160 40">
                     <polyline
                       points={sparklinePath}
                       fill="none"
@@ -274,15 +677,23 @@ export async function GET(
                   </svg>
                 </div>
               )}
-            </>
-          ) : (
-            <div style={{ display: 'flex', fontSize: '14px', color: MUTED }}>No stats available for this round</div>
-          )}
-        </div>
-
-        {/* Bottom accent */}
-        <div style={{ display: 'flex', height: '4px', backgroundColor: PRIMARY, borderRadius: '2px', marginTop: '16px' }} />
-      </div>
+            </div>
+          </div>
+        ) : (
+          <div
+            style={{
+              display: 'flex',
+              backgroundColor: CARD,
+              borderRadius: '16px',
+              padding: '20px',
+              fontSize: '14px',
+              color: MUTED,
+            }}
+          >
+            No stats available for this round
+          </div>
+        )}
+      </SlideWrapper>
     );
   }
 
