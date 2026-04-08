@@ -104,8 +104,8 @@ export async function POST(request: Request) {
         };
       });
 
-      // Compute per-round rankings
-      const positions = ['def', 'mid', 'fwd', 'ruc', 'utl'] as const;
+      // Compute per-round rankings (4 real lines only — UTL is not ranked)
+      const positions = ['def', 'mid', 'fwd', 'ruc'] as const;
       for (const pos of positions) {
         const sorted = [...roundTeams].sort(
           (a, b) => (b[`${pos}_total`] as number) - (a[`${pos}_total`] as number)
@@ -121,9 +121,9 @@ export async function POST(request: Request) {
     // Compute season rankings (average across all rounds up to each round)
     for (const roundNum of uniqueRounds) {
       const roundsUpTo = uniqueRounds.filter((r) => r <= roundNum);
-      const positions = ['def', 'mid', 'fwd', 'ruc', 'utl'] as const;
+      const seasonPositions = ['def', 'mid', 'fwd', 'ruc'] as const;
 
-      for (const pos of positions) {
+      for (const pos of seasonPositions) {
         // Compute average per team across rounds up to this one
         const teamAvgs = TEAMS.map((t) => {
           const vals = roundsUpTo

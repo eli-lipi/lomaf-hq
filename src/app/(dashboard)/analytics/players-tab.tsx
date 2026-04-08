@@ -53,6 +53,19 @@ export default function PlayersTab() {
 
   const loadPlayers = async () => {
     try {
+      // Fetch draft picks to get real player positions
+      const { data: draftPicks } = await supabase
+        .from('draft_picks')
+        .select('player_id, position');
+
+      // Build position lookup from draft CSV (deduplicated)
+      const draftPositionMap: Record<number, string> = {};
+      draftPicks?.forEach(dp => {
+        if (dp.position && !draftPositionMap[dp.player_id]) {
+          draftPositionMap[dp.player_id] = dp.position;
+        }
+      });
+
       // Fetch all player_rounds (paginated)
       const allRows: { player_id: number; player_name: string; team_id: number; team_name: string; pos: string; points: number | null; is_scoring: boolean; round_number: number }[] = [];
       let offset = 0;
@@ -85,6 +98,9 @@ export default function PlayersTab() {
         position: string; scores: number[]; roundScores: Record<number, number | null>;
       }> = {};
 
+      // Track most common lineup slot per player (fallback for waiver players)
+      const playerSlotCounts: Record<string, Record<string, number>> = {};
+
       allRows.forEach(pr => {
         if (!valid.includes(pr.round_number)) return;
         const key = `${pr.player_id}-${pr.team_id}`;
@@ -92,8 +108,13 @@ export default function PlayersTab() {
           playerMap[key] = {
             player_id: pr.player_id, player_name: pr.player_name,
             team_name: pr.team_name, team_id: pr.team_id,
-            position: pr.pos, scores: [], roundScores: {},
+            position: '', scores: [], roundScores: {},
           };
+        }
+        // Track lineup slot frequency (exclude UTL and BN for fallback position)
+        if (pr.pos !== 'UTL' && pr.pos !== 'BN' && pr.is_scoring) {
+          if (!playerSlotCounts[key]) playerSlotCounts[key] = {};
+          playerSlotCounts[key][pr.pos] = (playerSlotCounts[key][pr.pos] || 0) + 1;
         }
         if (pr.points != null && Number(pr.points) > 0) {
           playerMap[key].scores.push(Number(pr.points));
@@ -101,14 +122,28 @@ export default function PlayersTab() {
         }
       });
 
-      // Find best in each position
+      // Assign real positions from draft CSV, with lineup slot fallback
+      Object.entries(playerMap).forEach(([key, p]) => {
+        const draftPos = draftPositionMap[p.player_id];
+        if (draftPos) {
+          p.position = draftPos;
+        } else {
+          // Fallback: most common lineup slot (excluding UTL/BN)
+          const slots = playerSlotCounts[key] || {};
+          const sorted = Object.entries(slots).sort((a, b) => b[1] - a[1]);
+          p.position = sorted.length > 0 ? sorted[0][0] : 'MID';
+        }
+      });
+
+      // Find best in each real position (DEF, MID, FWD, RUC — expand dual positions)
       const bestByPos: Record<string, number> = {};
       Object.values(playerMap).forEach(p => {
         if (p.scores.length === 0) return;
         const avg = p.scores.reduce((a, b) => a + b, 0) / p.scores.length;
-        if (!bestByPos[p.position] || avg > bestByPos[p.position]) {
-          bestByPos[p.position] = avg;
-        }
+        const posGroups = p.position.split('/');
+        posGroups.forEach(pg => {
+          if (!bestByPos[pg] || avg > bestByPos[pg]) bestByPos[pg] = avg;
+        });
       });
 
       const latestRound = valid.length > 0 ? valid[valid.length - 1] : 0;
@@ -127,7 +162,7 @@ export default function PlayersTab() {
             rounds_played: p.scores.length,
             latest_score: p.roundScores[latestRound] ?? null,
             roundScores: p.roundScores,
-            isBestInPos: Math.abs(avg - (bestByPos[p.position] || 0)) < 1,
+            isBestInPos: p.position.split('/').some(pg => Math.abs(avg - (bestByPos[pg] || 0)) < 1),
           };
         });
 
@@ -147,7 +182,7 @@ export default function PlayersTab() {
   const filteredPlayers = useMemo(() => {
     let result = [...players];
     if (filterTeam) result = result.filter(p => p.team_id === filterTeam);
-    if (filterPos) result = result.filter(p => p.position === filterPos);
+    if (filterPos) result = result.filter(p => p.position.split('/').includes(filterPos));
     if (search) {
       const lower = search.toLowerCase();
       result = result.filter(p => p.player_name.toLowerCase().includes(lower));
@@ -164,14 +199,15 @@ export default function PlayersTab() {
     return result;
   }, [players, filterTeam, filterPos, search, sortKey, sortAsc]);
 
-  const positions = useMemo(() => [...new Set(players.map(p => p.position))].sort(), [players]);
+  // Fixed position filter options — the 4 real AFL Fantasy positions
+  const positions = ['DEF', 'MID', 'FWD', 'RUC'];
 
   const posBadgeColor = (pos: string) => {
-    if (pos === 'DEF') return 'bg-blue-100 text-blue-700';
-    if (pos === 'MID') return 'bg-green-100 text-green-700';
-    if (pos === 'FWD') return 'bg-red-100 text-red-700';
-    if (pos === 'RUC') return 'bg-purple-100 text-purple-700';
-    if (pos === 'UTL') return 'bg-orange-100 text-orange-700';
+    const primary = pos.split('/')[0];
+    if (primary === 'DEF') return 'bg-blue-100 text-blue-700';
+    if (primary === 'MID') return 'bg-green-100 text-green-700';
+    if (primary === 'FWD') return 'bg-red-100 text-red-700';
+    if (primary === 'RUC') return 'bg-purple-100 text-purple-700';
     return 'bg-gray-100 text-gray-600';
   };
 

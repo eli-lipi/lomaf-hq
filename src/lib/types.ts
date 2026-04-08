@@ -119,4 +119,5 @@ export interface SlideData {
   sparklineData?: number[];
 }
 
-export type PositionGroup = 'DEF' | 'MID' | 'FWD' | 'RUC' | 'UTL';
+export type LineGroup = 'DEF' | 'MID' | 'FWD' | 'RUC';
+export type LineupSlot = 'DEF' | 'MID' | 'FWD' | 'RUC' | 'UTL' | 'BN';

@@ -255,10 +255,6 @@ export async function GET(
                 <div style={{ display: 'flex', fontSize: '11px', color: MUTED }}>RUC</div>
                 <div style={{ display: 'flex', fontSize: '14px', color: FG }}>{snapshot.ruc_rank ? ord(snapshot.ruc_rank) : '—'}</div>
               </div>
-              <div style={{ display: 'flex', flexDirection: 'column' }}>
-                <div style={{ display: 'flex', fontSize: '11px', color: MUTED }}>UTL</div>
-                <div style={{ display: 'flex', fontSize: '14px', color: FG }}>{snapshot.utl_rank ? ord(snapshot.utl_rank) : '—'}</div>
-              </div>
               {sparkline.length > 1 && (
                 <div style={{ display: 'flex', flexDirection: 'column', marginLeft: 'auto' }}>
                   <div style={{ display: 'flex', fontSize: '11px', color: MUTED, marginBottom: '4px' }}>TREND</div>
