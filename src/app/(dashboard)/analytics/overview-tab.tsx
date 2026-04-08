@@ -340,7 +340,6 @@ export default function OverviewTab() {
                   <th className="px-4 py-2.5 font-medium text-muted-foreground text-center">T</th>
                   <th className="px-4 py-2.5 font-medium text-muted-foreground text-right">PF</th>
                   <th className="px-4 py-2.5 font-medium text-muted-foreground text-right">PA</th>
-                  <th className="px-4 py-2.5 font-medium text-muted-foreground text-right">%</th>
                   <th className="px-4 py-2.5 font-medium text-muted-foreground text-center">PWRNKG</th>
                 </tr>
               </thead>
@@ -366,7 +365,6 @@ export default function OverviewTab() {
                     <td className="px-4 py-2.5 text-center text-muted-foreground">{team.ties}</td>
                     <td className="px-4 py-2.5 text-right font-medium">{formatScore(team.pts_for)}</td>
                     <td className="px-4 py-2.5 text-right text-muted-foreground">{formatScore(team.pts_against)}</td>
-                    <td className="px-4 py-2.5 text-right">{(team.pct * 100).toFixed(1)}%</td>
                     <td className="px-4 py-2.5 text-center">
                       {team.pwrnkg ? (
                         <span className="inline-flex items-center justify-center w-7 h-7 rounded-full bg-primary/10 text-primary font-bold text-xs">{team.pwrnkg}</span>
