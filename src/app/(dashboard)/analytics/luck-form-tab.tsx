@@ -60,9 +60,10 @@ export default function LuckFormTab() {
       const snapshotRounds = [...new Set(snapshots.map((s: TeamSnapshot) => s.round_number))].sort((a, b) => a - b);
 
       // === Build per-round W/L/T results ===
+      // actualResult: 1 = win, 0.5 = tie, 0 = loss
       const perRoundResult: Record<string, number> = {};
 
-      // Source 1: matchup_rounds (direct per-round W/L, most reliable)
+      // Source 1: matchup_rounds (direct per-round W/L — most reliable)
       const { data: matchups } = await supabase
         .from('matchup_rounds')
         .select('round_number, team_id, win, loss, tie');
@@ -72,30 +73,44 @@ export default function LuckFormTab() {
         });
       }
 
-      // Source 2: diff consecutive snapshots (skip first — no previous to diff against)
-      for (let ri = 1; ri < snapshotRounds.length; ri++) {
+      // Source 2: diff consecutive team_snapshots
+      for (let ri = 0; ri < snapshotRounds.length; ri++) {
         const round = snapshotRounds[ri];
-        const prevRound = snapshotRounds[ri - 1];
+        const prevRound = ri > 0 ? snapshotRounds[ri - 1] : null;
         TEAMS.forEach(t => {
           const key = `${round}-${t.team_id}`;
-          if (perRoundResult[key] !== undefined) return; // already have matchup data
+          if (perRoundResult[key] !== undefined) return; // matchup data takes priority
           const curr = snapshotsByRound[round]?.[t.team_id];
-          const prev = snapshotsByRound[prevRound]?.[t.team_id];
-          if (!curr || !prev) return; // need BOTH snapshots
-          const winsThisRound = curr.wins - prev.wins;
-          const tiesThisRound = curr.ties - prev.ties;
+          if (!curr) return;
+
+          let winsThisRound: number;
+          let tiesThisRound: number;
+
+          if (prevRound !== null) {
+            // Normal case: diff against previous snapshot
+            const prev = snapshotsByRound[prevRound]?.[t.team_id];
+            if (!prev) return;
+            winsThisRound = curr.wins - prev.wins;
+            tiesThisRound = curr.ties - prev.ties;
+          } else {
+            // First snapshot round: cumulative IS the result if only 1 game played
+            const totalGames = curr.wins + curr.losses + curr.ties;
+            if (totalGames > 1) return; // can't determine single-round result from multi-game cumulative
+            winsThisRound = curr.wins;
+            tiesThisRound = curr.ties;
+          }
+
           perRoundResult[key] = winsThisRound > 0 ? 1 : tiesThisRound > 0 ? 0.5 : 0;
         });
       }
 
-      // Only include rounds where ALL 10 teams have results
+      // Only include rounds where ALL 10 teams have W/L results
       const roundsWithResults = validRounds.filter(round =>
         TEAMS.every(t => perRoundResult[`${round}-${t.team_id}`] !== undefined)
       );
 
       if (roundsWithResults.length === 0) {
         setNoResultData(true);
-        // Still compute form ladder (doesn't need W/L data)
         computeFormLadder(validRounds, teamRoundScores, snapshotsByRound, snapshotRounds);
         setLuckRounds(validRounds);
         setLoading(false);
@@ -105,6 +120,12 @@ export default function LuckFormTab() {
       setLuckRounds(roundsWithResults);
 
       // === Compute Luck-O-Meter ===
+      // Per round, per team:
+      //   1. Count teams outscored (ties = 0.5)
+      //   2. Expected win rate = teams_outscored / 9
+      //   3. Luck = actual_result - expected_win_rate
+      //   Sanity: sum of luck per round = 0.0
+
       const luckRows: LuckRow[] = TEAMS.map(team => {
         let totalExpected = 0;
         let totalLuck = 0;
@@ -113,17 +134,19 @@ export default function LuckFormTab() {
         roundsWithResults.forEach(round => {
           const myScore = teamRoundScores[`${round}-${team.team_id}`] || 0;
 
-          // Count teams outscored
-          let outscored = 0;
+          // Count how many of the other 9 teams this team outscored
+          let teamsOutscored = 0;
           TEAMS.forEach(other => {
             if (other.team_id === team.team_id) return;
             const otherScore = teamRoundScores[`${round}-${other.team_id}`] || 0;
-            if (myScore > otherScore) outscored += 1;
-            else if (myScore === otherScore) outscored += 0.5;
+            if (myScore > otherScore) teamsOutscored += 1;
+            else if (myScore === otherScore) teamsOutscored += 0.5;
           });
 
-          const expectedWinRate = outscored / 9;
-          const actualResult = perRoundResult[`${round}-${team.team_id}`];
+          const expectedWinRate = teamsOutscored / 9;
+          const actualResult = perRoundResult[`${round}-${team.team_id}`]!;
+
+          // LUCK = ACTUAL minus EXPECTED
           const roundLuck = actualResult - expectedWinRate;
 
           totalExpected += expectedWinRate;
@@ -144,15 +167,18 @@ export default function LuckFormTab() {
         };
       });
 
+      // SANITY CHECK: sum of all luck scores must be 0 (zero-sum)
+      const totalLuckSum = luckRows.reduce((sum, r) => sum + r.luckScore, 0);
+      if (Math.abs(totalLuckSum) > 0.1) {
+        console.error(`Luck-O-Meter sanity check FAILED: total luck = ${totalLuckSum}, should be 0`);
+      }
+
       // Sort: luckiest first (descending)
       luckRows.sort((a, b) => b.luckScore - a.luckScore);
       setLuckData(luckRows);
 
       // === Form Ladder ===
       computeFormLadder(validRounds, teamRoundScores, snapshotsByRound, snapshotRounds);
-
-      // === Insights ===
-      generateInsights(luckRows, formData.length > 0 ? formData : []);
     } catch (err) {
       console.error('Failed to load luck/form data:', err);
     } finally {
