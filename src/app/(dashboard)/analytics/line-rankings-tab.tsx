@@ -161,24 +161,14 @@ export default function LineRankingsTab() {
     }).sort((a, b) => b.total - a.total).map((t, i) => ({ ...t, overallRank: i + 1 }));
   }, [allData, validRounds]);
 
-  // On-field slot count for active position
-  const onFieldSlots = POSITIONS.find(p => p.id === activePos)?.slots || 1;
-
   // === Single position data ===
   const positionData = useMemo((): TeamLineStat[] => {
     if (activePos === 'ALL' || validRounds.length === 0) return [];
 
-    // Get all rows for this position slot (scoring = on-field line total)
+    // All rows for this position slot (scoring players contribute to line total)
     const scoringData = allData.filter(r => r.pos === activePos && r.is_scoring && validRounds.includes(r.round_number));
-    // Also get EMG and BN players in this pos slot
+    // All appearances in this pos slot (for building player averages)
     const allPosData = allData.filter(r => r.pos === activePos && validRounds.includes(r.round_number));
-    // EMG players: is_emg=true for this pos
-    const emgData = allData.filter(r => r.pos === activePos && r.is_emg && validRounds.includes(r.round_number));
-    // Bench players for this pos: not scoring, not emg, pos matches or BN
-    const benchData = allData.filter(r => r.pos === 'BN' && validRounds.includes(r.round_number));
-
-    // Latest round for determining current roles
-    const latestRound = validRounds[validRounds.length - 1];
 
     const teamStats: TeamLineStat[] = TEAMS.map(team => {
       // Line totals per round (on-field only)
@@ -190,68 +180,28 @@ export default function LineRankingsTab() {
       const validScores = roundScores.map(r => r.score).filter(s => s > 0);
       const avg = validScores.length > 0 ? Math.round(validScores.reduce((a, b) => a + b, 0) / validScores.length) : 0;
 
-      // === Player breakdown with roles ===
-      // Determine each player's role from the latest round
-      const latestOnField = new Set(
-        scoringData.filter(r => r.team_id === team.team_id && r.round_number === latestRound).map(r => r.player_id)
-      );
-      const latestEmg = new Set(
-        emgData.filter(r => r.team_id === team.team_id && r.round_number === latestRound).map(r => r.player_id)
-      );
-
-      // Build player stats from all their scoring appearances in this pos
+      // === Player breakdown by average (top N by avg = "best", rest = "depth") ===
+      const slots = POSITIONS.find(p => p.id === activePos)?.slots || 1;
       const playerMap: Record<number, { name: string; scores: number[]; player_id: number }> = {};
-      // Include scoring appearances
-      scoringData.filter(r => r.team_id === team.team_id && r.points != null).forEach(r => {
+      // Collect all players who have appeared in this position slot for this team
+      allPosData.filter(r => r.team_id === team.team_id && r.points != null).forEach(r => {
         if (!playerMap[r.player_id]) playerMap[r.player_id] = { name: r.player_name, scores: [], player_id: r.player_id };
         playerMap[r.player_id].scores.push(Number(r.points));
-      });
-      // Include EMG appearances (they may have scored too)
-      emgData.filter(r => r.team_id === team.team_id && r.points != null && Number(r.points) > 0).forEach(r => {
-        if (!playerMap[r.player_id]) playerMap[r.player_id] = { name: r.player_name, scores: [], player_id: r.player_id };
-        if (!playerMap[r.player_id].scores.includes(Number(r.points))) {
-          // Don't double-count if already counted via scoring
-        }
-      });
-      // Include bench players who play this position (from bench data — need to match by checking if they've ever played this pos slot)
-      const teamBenchLatest = benchData.filter(r => r.team_id === team.team_id && r.round_number === latestRound);
-      // Also check allData for bench players who have played this pos slot in other rounds
-      const teamAllRounds = allData.filter(r => r.team_id === team.team_id && validRounds.includes(r.round_number));
-      const benchPlayersInPos = new Set<number>();
-      teamAllRounds.forEach(r => {
-        if (r.pos === activePos && !latestOnField.has(r.player_id) && !latestEmg.has(r.player_id)) {
-          benchPlayersInPos.add(r.player_id);
-        }
-      });
-      // Add EMG player stats if not already tracked
-      emgData.filter(r => r.team_id === team.team_id && r.points != null).forEach(r => {
-        if (!playerMap[r.player_id]) {
-          playerMap[r.player_id] = { name: r.player_name, scores: [Number(r.points)], player_id: r.player_id };
-        }
       });
 
       const allPlayers: PlayerBreakdown[] = Object.values(playerMap)
         .filter(p => p.scores.length > 0)
-        .map(p => {
-          let role: 'onfield' | 'emg' | 'bench' = 'bench';
-          if (latestOnField.has(p.player_id)) role = 'onfield';
-          else if (latestEmg.has(p.player_id)) role = 'emg';
-          return {
-            name: p.name, player_id: p.player_id,
-            avg: Math.round(p.scores.reduce((a, b) => a + b, 0) / p.scores.length),
-            gp: p.scores.length, role,
-          };
-        })
-        .sort((a, b) => {
-          // Sort by role (onfield first, then emg, then bench), then by avg desc
-          const roleOrder = { onfield: 0, emg: 1, bench: 2 };
-          if (roleOrder[a.role] !== roleOrder[b.role]) return roleOrder[a.role] - roleOrder[b.role];
-          return b.avg - a.avg;
-        });
+        .map(p => ({
+          name: p.name, player_id: p.player_id,
+          avg: Math.round(p.scores.reduce((a, b) => a + b, 0) / p.scores.length),
+          gp: p.scores.length, role: 'bench' as const,
+        }))
+        .sort((a, b) => b.avg - a.avg);
 
-      const onField = allPlayers.filter(p => p.role === 'onfield').sort((a, b) => b.avg - a.avg);
-      const emg = allPlayers.filter(p => p.role === 'emg');
-      const bench = allPlayers.filter(p => p.role === 'bench').sort((a, b) => b.avg - a.avg);
+      // Top N by average = "best" (on-field calibre), rest = depth
+      const onField = allPlayers.slice(0, slots).map(p => ({ ...p, role: 'onfield' as const }));
+      const bench = allPlayers.slice(slots).map(p => ({ ...p, role: 'bench' as const }));
+      const tagged = [...onField, ...bench];
 
       return {
         team_name: team.team_name, team_id: team.team_id,
@@ -259,7 +209,7 @@ export default function LineRankingsTab() {
         high: validScores.length > 0 ? Math.max(...validScores) : 0,
         low: validScores.length > 0 ? Math.min(...validScores) : 0,
         deltaFromLeagueAvg: 0, roundScores,
-        players: allPlayers, onField, emg, bench,
+        players: tagged, onField, emg: [], bench,
       };
     });
 
@@ -487,47 +437,46 @@ export default function LineRankingsTab() {
           <div className="bg-card border border-border rounded-lg shadow-sm overflow-hidden">
             <div className="p-4 border-b border-border">
               <h3 className="font-semibold">{POSITIONS.find(p => p.id === activePos)?.label} — Line Composition</h3>
-              <p className="text-xs text-muted-foreground mt-1">On-field vs emergency vs bench players, sorted by line ranking</p>
+              <p className="text-xs text-muted-foreground mt-1">Top {POSITIONS.find(p => p.id === activePos)?.slots || 1} by average = best line, rest = depth. Sorted by line ranking.</p>
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-0">
               {positionData.map((team, i) => {
-                const onFieldSlots = POSITIONS.find(p => p.id === activePos)?.slots || 1;
+                const slots = POSITIONS.find(p => p.id === activePos)?.slots || 1;
                 const posLabel = POSITIONS.find(p => p.id === activePos)?.label || activePos;
 
-                // Smart insight generation
+                // Insight: line health + competitive ranking
                 let insight = '';
                 if (team.onField.length > 0) {
-                  const bestOnField = team.onField[0];
-                  const worstOnField = team.onField[team.onField.length - 1];
-                  const onFieldAvg = Math.round(team.onField.reduce((s, p) => s + p.avg, 0) / team.onField.length);
-                  const bestBench = team.bench[0];
+                  const best = team.onField[0];
+                  const worst = team.onField[team.onField.length - 1];
+                  const topAvg = Math.round(team.onField.reduce((s, p) => s + p.avg, 0) / team.onField.length);
+                  const gap = best.avg - worst.avg;
+                  const delta = team.deltaFromLeagueAvg;
 
-                  if (activePos === 'RUC') {
-                    // Ruck special case: single player
-                    if (bestOnField.avg >= leagueAvgForPos + 10) {
-                      insight = `${bestOnField.name} (${bestOnField.avg} avg) is a premium ruck — ${Math.round(bestOnField.avg - leagueAvgForPos)} pts above league average.`;
-                    } else if (bestOnField.avg < leagueAvgForPos - 10) {
-                      insight = `${bestOnField.name} averaging ${bestOnField.avg} — ${Math.abs(Math.round(bestOnField.avg - leagueAvgForPos))} pts below league average. Ruck upgrade needed.`;
+                  if (slots === 1) {
+                    // RUC / UTL: single-player line
+                    if (delta > 10) {
+                      insight = `${best.name} (${best.avg} avg) is a premium ${posLabel.toLowerCase()} — ${delta} pts above league average.`;
+                    } else if (delta < -10) {
+                      insight = `${best.name} averaging ${best.avg} — ${Math.abs(delta)} pts below league average. A clear weakness.`;
                     } else {
-                      insight = `${bestOnField.name} (${bestOnField.avg} avg) is a solid ruck option, tracking close to the league average.`;
+                      insight = `${best.name} (${best.avg} avg) — solid, tracking close to the ${leagueAvgForPos} league average.`;
                     }
-                    if (team.emg.length > 0) {
-                      insight += ` ${team.emg[0].name} (${team.emg[0].avg}) on standby.`;
+                    if (team.bench.length > 0) {
+                      insight += ` Depth: ${team.bench.map(p => `${p.name.split(' ').pop()} (${p.avg})`).join(', ')}.`;
                     }
-                  } else if (i < 3 && worstOnField.avg >= onFieldAvg - 15) {
-                    insight = `Top-3 line with balanced depth — weakest on-field starter ${worstOnField.name} still averaging ${worstOnField.avg}.`;
+                  } else if (i < 3 && gap < 30) {
+                    insight = `Ranked #${i + 1} with balanced depth — even ${worst.name} averaging ${worst.avg}. ${delta > 0 ? `+${delta}` : delta} vs league avg.`;
                   } else if (i < 3) {
-                    insight = `Elite top end led by ${bestOnField.name} (${bestOnField.avg}), but ${worstOnField.name} (${worstOnField.avg}) drags the floor down.`;
-                  } else if (i >= 7 && bestOnField.avg > 90) {
-                    insight = `${bestOnField.name} (${bestOnField.avg}) is carrying this line almost single-handedly.`;
+                    insight = `Elite top end (${best.name} ${best.avg}) but ${gap} pt gap to ${worst.name} (${worst.avg}). Depth is the vulnerability.`;
+                  } else if (i >= 7 && best.avg > 90) {
+                    insight = `${best.name} (${best.avg}) is propping up a weak line — the rest average ${Math.round(team.onField.slice(1).reduce((s, p) => s + p.avg, 0) / (team.onField.length - 1))}. Ranked #${i + 1}.`;
                   } else if (i >= 7) {
-                    insight = `Bottom-3 ${posLabel.toLowerCase()} — no on-field player averaging above ${bestOnField.avg}.`;
-                  } else if (bestBench && bestBench.avg > worstOnField.avg + 10) {
-                    insight = `${bestBench.name} (${bestBench.avg} avg on bench) outscoring on-field ${worstOnField.name} (${worstOnField.avg}) — potential lineup mistake?`;
-                  } else if (bestOnField.avg - worstOnField.avg > 40) {
-                    insight = `Top-heavy: ${bestOnField.name} (${bestOnField.avg}) is ${bestOnField.avg - worstOnField.avg} pts above ${worstOnField.name} (${worstOnField.avg}).`;
+                    insight = `Bottom-3 ${posLabel.toLowerCase()} line — best player ${best.name} only averaging ${best.avg}. ${Math.abs(delta)} pts below league avg.`;
+                  } else if (gap > 40) {
+                    insight = `Top-heavy: ${best.name} (${best.avg}) to ${worst.name} (${worst.avg}) is a ${gap} pt spread. Ranked #${i + 1} overall.`;
                   } else {
-                    insight = `Mid-table line averaging ${onFieldAvg}/rd across ${team.onField.length} starters — ${onFieldAvg > leagueAvgForPos ? 'above' : 'below'} the ${leagueAvgForPos} league average.`;
+                    insight = `Mid-table line averaging ${topAvg}/player across ${slots} — ${delta > 0 ? `+${delta}` : delta} vs the ${leagueAvgForPos} league average.`;
                   }
                 }
 
@@ -539,10 +488,10 @@ export default function LineRankingsTab() {
                       <span className="text-xs text-muted-foreground ml-auto">Avg: {team.avg}/rd</span>
                     </div>
 
-                    {/* ON FIELD */}
+                    {/* BEST (top N by avg) */}
                     <div className="mb-2">
                       <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide mb-1">
-                        On Field ({team.onField.length}/{onFieldSlots})
+                        Best {slots} by avg
                       </div>
                       <div className="flex flex-wrap gap-1.5">
                         {team.onField.map((p) => (
@@ -557,27 +506,11 @@ export default function LineRankingsTab() {
                       </div>
                     </div>
 
-                    {/* EMG */}
-                    {team.emg.length > 0 && (
-                      <div className="mb-2">
-                        <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide mb-1">
-                          EMG
-                        </div>
-                        <div className="flex flex-wrap gap-1.5">
-                          {team.emg.map((p) => (
-                            <span key={p.player_id} className="text-xs px-1.5 py-0.5 rounded border border-blue-200 bg-blue-50 text-blue-600 opacity-75">
-                              {p.name.split(' ').pop()} {p.avg}
-                            </span>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-
-                    {/* BENCH */}
+                    {/* DEPTH */}
                     {team.bench.length > 0 && (
                       <div className="mb-2">
                         <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide mb-1">
-                          Bench
+                          Depth
                         </div>
                         <div className="flex flex-wrap gap-1.5">
                           {team.bench.map((p) => (
