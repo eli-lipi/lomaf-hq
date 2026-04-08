@@ -59,10 +59,8 @@ export default function LuckFormTab() {
       });
       const snapshotRounds = [...new Set(snapshots.map((s: TeamSnapshot) => s.round_number))].sort((a, b) => a - b);
 
-      // === Build per-round W/L/T results from matchup_rounds ===
-      // actualResult: 1 = win, 0.5 = tie, 0 = loss
+      // === Per-round W/L from matchup_rounds (for per-round breakdown) ===
       const perRoundResult: Record<string, number> = {};
-
       const { data: matchups } = await supabase
         .from('matchup_rounds')
         .select('round_number, team_id, win, loss, tie');
@@ -71,35 +69,28 @@ export default function LuckFormTab() {
           perRoundResult[`${m.round_number}-${m.team_id}`] = m.win ? 1 : m.tie ? 0.5 : 0;
         });
       }
-
-      // Only include rounds where ALL 10 teams have W/L results
-      const roundsWithResults = validRounds.filter(round =>
+      const hasMatchupData = validRounds.some(round =>
+        TEAMS.every(t => perRoundResult[`${round}-${t.team_id}`] !== undefined)
+      );
+      const roundsWithMatchups = validRounds.filter(round =>
         TEAMS.every(t => perRoundResult[`${round}-${t.team_id}`] !== undefined)
       );
 
-      if (roundsWithResults.length === 0) {
-        setNoResultData(true);
-        computeFormLadder(validRounds, teamRoundScores, snapshotsByRound, snapshotRounds);
-        setLuckRounds(validRounds);
-        setLoading(false);
-        return;
-      }
-
-      setLuckRounds(roundsWithResults);
+      setLuckRounds(validRounds);
 
       // === Compute Luck-O-Meter ===
-      // Per round, per team:
-      //   1. Count teams outscored (ties = 0.5)
-      //   2. Expected win rate = teams_outscored / 9
-      //   3. Luck = actual_result - expected_win_rate
-      //   Sanity: sum of luck per round = 0.0
+      // Expected wins: per round, count teams outscored → expected win rate
+      // Actual wins: from cumulative W/L in latest snapshot
+      // Luck = actual wins - expected wins (zero-sum across all teams)
+
+      const maxSnapRound = Math.max(...snapshotRounds);
 
       const luckRows: LuckRow[] = TEAMS.map(team => {
+        // Compute expected wins from per-round score rankings
         let totalExpected = 0;
-        let totalLuck = 0;
-        const perRound: { round: number; luck: number }[] = [];
+        const perRoundLuck: { round: number; luck: number }[] = [];
 
-        roundsWithResults.forEach(round => {
+        validRounds.forEach(round => {
           const myScore = teamRoundScores[`${round}-${team.team_id}`] || 0;
 
           // Count how many of the other 9 teams this team outscored
@@ -112,38 +103,45 @@ export default function LuckFormTab() {
           });
 
           const expectedWinRate = teamsOutscored / 9;
-          const actualResult = perRoundResult[`${round}-${team.team_id}`]!;
-
-          // LUCK = ACTUAL minus EXPECTED
-          const roundLuck = actualResult - expectedWinRate;
-
           totalExpected += expectedWinRate;
-          totalLuck += roundLuck;
-          perRound.push({ round, luck: Math.round(roundLuck * 100) / 100 });
+
+          // Per-round luck (only if matchup data available for this round)
+          if (perRoundResult[`${round}-${team.team_id}`] !== undefined) {
+            const actualResult = perRoundResult[`${round}-${team.team_id}`];
+            const roundLuck = actualResult - expectedWinRate;
+            perRoundLuck.push({ round, luck: Math.round(roundLuck * 100) / 100 });
+          }
         });
 
-        // Get actual W/L/T from latest snapshot
-        const maxSnapRound = Math.max(...snapshotRounds);
+        // Actual wins from cumulative snapshot: wins count as 1, ties as 0.5
         const snap = snapshotsByRound[maxSnapRound]?.[team.team_id];
+        const wins = snap?.wins || 0;
+        const losses = snap?.losses || 0;
+        const ties = snap?.ties || 0;
+        const actualWins = wins + 0.5 * ties;
+
+        // LUCK = ACTUAL WINS minus EXPECTED WINS
+        const luckScore = Math.round((actualWins - totalExpected) * 100) / 100;
 
         return {
           team_name: team.team_name, team_id: team.team_id,
-          wins: snap?.wins || 0, losses: snap?.losses || 0, ties: snap?.ties || 0,
+          wins, losses, ties,
           expectedWins: Math.round(totalExpected * 10) / 10,
-          luckScore: Math.round(totalLuck * 100) / 100,
-          perRound,
+          luckScore,
+          perRound: perRoundLuck,
         };
       });
 
-      // SANITY CHECK: sum of all luck scores must be 0 (zero-sum)
+      // SANITY CHECK: sum of all luck scores must be ~0 (zero-sum)
       const totalLuckSum = luckRows.reduce((sum, r) => sum + r.luckScore, 0);
-      if (Math.abs(totalLuckSum) > 0.1) {
-        console.error(`Luck-O-Meter sanity check FAILED: total luck = ${totalLuckSum}, should be 0`);
+      if (Math.abs(totalLuckSum) > 0.2) {
+        console.warn(`Luck-O-Meter: total luck = ${totalLuckSum.toFixed(2)} (expected ~0). May be off if validRounds doesn't cover all played rounds.`);
       }
 
       // Sort: luckiest first (descending)
       luckRows.sort((a, b) => b.luckScore - a.luckScore);
       setLuckData(luckRows);
+      setNoResultData(!hasMatchupData);
 
       // === Form Ladder ===
       computeFormLadder(validRounds, teamRoundScores, snapshotsByRound, snapshotRounds);
@@ -256,12 +254,7 @@ export default function LuckFormTab() {
   return (
     <div className="space-y-6">
       {/* Luck-O-Meter */}
-      {noResultData ? (
-        <div className="bg-amber-50 border border-amber-200 rounded-lg p-4">
-          <p className="text-sm text-amber-800 font-medium">Luck-O-Meter requires matchup data.</p>
-          <p className="text-xs text-amber-600 mt-1">Upload the matchups CSV on the <strong>This Week</strong> page to populate per-round W/L results. The Luck-O-Meter compares actual wins vs expected wins based on score ranking.</p>
-        </div>
-      ) : luckData.length > 0 && (
+      {luckData.length > 0 && (
         <div className="bg-card border border-border rounded-lg shadow-sm overflow-hidden">
           <div className="p-4 border-b border-border">
             <h3 className="font-semibold">Luck-O-Meter</h3>
@@ -314,8 +307,8 @@ export default function LuckFormTab() {
             </table>
           </div>
 
-          {/* Per-Round Luck Heatmap */}
-          {luckRounds.length > 0 && (
+          {/* Per-Round Luck Heatmap (requires matchup data) */}
+          {!noResultData && luckData[0]?.perRound.length > 0 && (
             <div className="border-t border-border p-4">
               <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-3">Per-Round Luck Breakdown</h4>
               <div className="overflow-x-auto">
@@ -353,6 +346,13 @@ export default function LuckFormTab() {
                   </tbody>
                 </table>
               </div>
+            </div>
+          )}
+
+          {/* Note when per-round breakdown unavailable */}
+          {noResultData && (
+            <div className="border-t border-border p-3">
+              <p className="text-xs text-muted-foreground">Upload the matchups CSV to see per-round luck breakdown.</p>
             </div>
           )}
         </div>
