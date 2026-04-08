@@ -1,9 +1,9 @@
 'use client';
 
 import { useState, useEffect, useMemo } from 'react';
-import { supabase } from '@/lib/supabase';
 import { TEAMS } from '@/lib/constants';
 import { cn, formatScore } from '@/lib/utils';
+import { fetchResolvedScores } from '@/lib/scores';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell,
 } from 'recharts';
@@ -50,6 +50,8 @@ function RankBadge({ rank, size = 'sm' }: { rank: number; size?: 'sm' | 'md' }) 
 
 export default function RoundRangeTab() {
   const [allData, setAllData] = useState<PlayerRoundRow[]>([]);
+  const [resolvedScores, setResolvedScores] = useState<Record<string, number>>({});
+  const [lineAdj, setLineAdj] = useState<Record<string, Record<string, number>>>({});
   const [validRounds, setValidRounds] = useState<number[]>([]);
   const [fromRound, setFromRound] = useState<number>(0);
   const [toRound, setToRound] = useState<number>(0);
@@ -61,29 +63,14 @@ export default function RoundRangeTab() {
 
   const loadData = async () => {
     try {
-      const allRows: PlayerRoundRow[] = [];
-      let offset = 0;
-      while (true) {
-        const { data, error } = await supabase
-          .from('player_rounds')
-          .select('round_number, team_id, pos, is_scoring, points')
-          .range(offset, offset + 999);
-        if (error) throw error;
-        if (!data || data.length === 0) break;
-        allRows.push(...data);
-        if (data.length < 1000) break;
-        offset += 1000;
-      }
+      const { teamRoundScores: resolved, lineAdjustments, validRounds: valid, allPlayerRounds } = await fetchResolvedScores();
+      // Convert allPlayerRounds to the shape we need
+      const allRows: PlayerRoundRow[] = allPlayerRounds.map(r => ({
+        round_number: r.round_number, team_id: r.team_id, pos: r.pos, is_scoring: r.is_scoring, points: r.points,
+      }));
       setAllData(allRows);
-
-      const rounds = [...new Set(allRows.map(r => r.round_number))].sort((a, b) => a - b);
-      const valid = rounds.filter(round => {
-        const teamsWithScores = new Set(
-          allRows.filter(r => r.round_number === round && r.is_scoring && r.points != null && Number(r.points) > 0)
-            .map(r => r.team_id)
-        );
-        return teamsWithScores.size >= 8;
-      });
+      setResolvedScores(resolved);
+      setLineAdj(lineAdjustments);
       setValidRounds(valid);
       if (valid.length > 0) {
         setFromRound(valid[0]);
@@ -132,17 +119,25 @@ export default function RoundRangeTab() {
     const teams = TEAMS.map(team => {
       const lines: Record<string, { total: number; rank: number }> = {};
       LINE_IDS.forEach(pos => {
-        const total = selectedRounds.reduce((sum, round) => {
+        let total = selectedRounds.reduce((sum, round) => {
           const players = allData.filter(r => r.team_id === team.team_id && r.round_number === round && r.pos === pos && r.is_scoring && r.points != null);
           return sum + players.reduce((s, p) => s + Number(p.points), 0);
         }, 0);
+        // Apply line adjustments from score_adjustments
+        selectedRounds.forEach(round => {
+          const adj = lineAdj[`${round}-${team.team_id}`];
+          if (adj && adj[pos]) total += adj[pos];
+        });
         lines[pos] = { total: Math.round(total), rank: 0 };
       });
 
-      const total = LINE_IDS.reduce((sum, pos) => sum + lines[pos].total, 0);
+      // Use resolved scores for the total (not just the sum of lines)
+      const total = selectedRounds.reduce((sum, round) => {
+        return sum + (resolvedScores[`${round}-${team.team_id}`] || 0);
+      }, 0);
       return {
         team_name: team.team_name, team_id: team.team_id,
-        total, avgPerRound: Math.round(total / numRounds), rank: 0, lines,
+        total: Math.round(total), avgPerRound: Math.round(total / numRounds), rank: 0, lines,
       };
     });
 
@@ -157,7 +152,7 @@ export default function RoundRangeTab() {
     });
 
     return teams;
-  }, [allData, selectedRounds]);
+  }, [allData, selectedRounds, resolvedScores, lineAdj]);
 
   // Apply user sort
   const sortedData = useMemo(() => {

@@ -5,6 +5,7 @@ import { supabase } from '@/lib/supabase';
 import { TEAMS } from '@/lib/constants';
 import { formatScore, ordinal } from '@/lib/utils';
 import type { TeamSnapshot } from '@/lib/types';
+import { fetchResolvedScores } from '@/lib/scores';
 import { cn } from '@/lib/utils';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
@@ -99,19 +100,8 @@ export default function OverviewTab() {
 
   const loadData = async () => {
     try {
-      // Fetch all player_rounds (paginated to get past 1000 limit)
-      const allPlayerRounds: { round_number: number; team_id: number; team_name: string; points: number | null; is_scoring: boolean }[] = [];
-      let offset = 0;
-      while (true) {
-        const { data } = await supabase
-          .from('player_rounds')
-          .select('round_number, team_id, team_name, points, is_scoring')
-          .range(offset, offset + 999);
-        if (!data || data.length === 0) break;
-        allPlayerRounds.push(...data);
-        if (data.length < 1000) break;
-        offset += 1000;
-      }
+      // Use resolved scores (manual override > matchup CSV > lineup sum)
+      const { teamRoundScores, validRounds } = await fetchResolvedScores();
 
       const { data: snapshots } = await supabase
         .from('team_snapshots')
@@ -137,24 +127,6 @@ export default function OverviewTab() {
           pwrnkgsMap[r.team_id] = r.ranking;
         });
       }
-
-      // === Compute weekly scores from player_rounds ===
-      const teamRoundScores: Record<string, number> = {};
-      const roundsSet = new Set<number>();
-
-      allPlayerRounds.forEach((pr) => {
-        if (!pr.is_scoring || pr.points == null) return;
-        const key = `${pr.round_number}-${pr.team_id}`;
-        teamRoundScores[key] = (teamRoundScores[key] || 0) + Number(pr.points);
-        roundsSet.add(pr.round_number);
-      });
-
-      // Filter out incomplete rounds (need at least 8 teams with real scores)
-      const allRounds = [...roundsSet].sort((a, b) => a - b);
-      const validRounds = allRounds.filter((round) => {
-        const teamsWithScores = TEAMS.filter((t) => (teamRoundScores[`${round}-${t.team_id}`] || 0) > 500).length;
-        return teamsWithScores >= 8;
-      });
 
       // Build scoring trends
       const allScores: number[] = [];

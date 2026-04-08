@@ -6,7 +6,7 @@ import Papa from 'papaparse';
 import { cn } from '@/lib/utils';
 import { supabase } from '@/lib/supabase';
 
-type CsvType = 'lineups' | 'teams' | 'points_grid' | 'draft';
+type CsvType = 'lineups' | 'teams' | 'matchups' | 'points_grid' | 'draft';
 
 interface UploadState {
   status: 'idle' | 'parsed' | 'uploading' | 'uploaded' | 'error';
@@ -24,6 +24,7 @@ interface RoundStatus {
 function detectCsvType(filename: string): CsvType | null {
   const lower = filename.toLowerCase();
   if (lower.includes('lineup')) return 'lineups';
+  if (lower.includes('matchup')) return 'matchups';
   if (lower.includes('team')) return 'teams';
   if (lower.includes('points') || lower.includes('grid')) return 'points_grid';
   if (lower.includes('draft')) return 'draft';
@@ -36,6 +37,7 @@ export default function UploadTab() {
   const [uploads, setUploads] = useState<Record<CsvType, UploadState>>({
     lineups: { status: 'idle' },
     teams: { status: 'idle' },
+    matchups: { status: 'idle' },
     points_grid: { status: 'idle' },
     draft: { status: 'idle' },
   });
@@ -138,8 +140,8 @@ export default function UploadTab() {
     try {
       let filesProcessed = 0;
 
-      // Upload in correct order: lineups first, then teams, then points_grid
-      const uploadOrder: CsvType[] = ['lineups', 'teams', 'points_grid'];
+      // Upload in correct order: lineups first, then teams, then matchups, then points_grid
+      const uploadOrder: CsvType[] = ['lineups', 'teams', 'matchups', 'points_grid'];
       for (const type of uploadOrder) {
         const upload = uploads[type];
         if (upload.status !== 'parsed' || !upload.data) {
@@ -180,6 +182,9 @@ export default function UploadTab() {
           logMsg += ` (applied to R${result.target_round}, computed ${result.rounds_computed?.length || 0} rounds)`;
         } else {
           logMsg += ` (${result.count} records)`;
+        }
+        if (result.new_discrepancies > 0) {
+          logMsg += ` — ⚠️ ${result.new_discrepancies} score discrepancies detected`;
         }
         setStepLog((prev) => [...prev, logMsg]);
       }
@@ -224,6 +229,7 @@ export default function UploadTab() {
   const csvSlots: { type: CsvType; label: string }[] = [
     { type: 'lineups', label: 'Lineups' },
     { type: 'teams', label: 'Teams' },
+    { type: 'matchups', label: 'Matchups' },
     { type: 'points_grid', label: 'Points Grid' },
   ];
 
@@ -284,7 +290,7 @@ export default function UploadTab() {
           Drop all your CSVs here at once — types auto-detected from filenames
         </p>
         <p className="text-xs text-muted-foreground mb-3">
-          (lineups, teams, points-grid)
+          (lineups, teams, matchups, points-grid)
         </p>
         <label className="inline-flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg text-sm font-medium cursor-pointer hover:bg-primary/90 transition-colors">
           <Upload size={14} />
@@ -301,7 +307,7 @@ export default function UploadTab() {
 
       {/* Parsed files summary */}
       {csvSlots.some(({ type }) => uploads[type].status !== 'idle') && (
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-6">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mb-6">
           {csvSlots.map(({ type, label }) => {
             const upload = uploads[type];
             if (upload.status === 'idle') return (

@@ -4,41 +4,75 @@ import { useState, useEffect } from 'react';
 import { Upload, User, Trash2 } from 'lucide-react';
 import { TEAMS, LEAGUE_FULL_NAME, SEASON } from '@/lib/constants';
 import { supabase } from '@/lib/supabase';
+import { cn } from '@/lib/utils';
+import ScoreAdjustmentsTab from './score-adjustments-tab';
+
+const TABS = [
+  { id: 'general', label: 'General' },
+  { id: 'adjustments', label: 'Score Adjustments' },
+] as const;
+
+type TabId = (typeof TABS)[number]['id'];
 
 export default function SettingsPage() {
+  const [activeTab, setActiveTab] = useState<TabId>('general');
+
   return (
     <div>
       <h1 className="text-2xl font-bold mb-1">Settings</h1>
-      <p className="text-muted-foreground text-sm mb-6">Manage coach photos and league info</p>
+      <p className="text-muted-foreground text-sm mb-6">Manage league settings and score adjustments</p>
 
-      <section className="mb-8">
-        <h2 className="text-lg font-semibold mb-3">League Info</h2>
-        <div className="bg-card border border-border rounded-lg p-5 shadow-sm">
-          <div className="grid grid-cols-2 md:grid-cols-3 gap-4 text-sm">
-            <div>
-              <span className="text-muted-foreground">League</span>
-              <p className="font-medium">{LEAGUE_FULL_NAME}</p>
-            </div>
-            <div>
-              <span className="text-muted-foreground">Season</span>
-              <p className="font-medium">{SEASON}</p>
-            </div>
-            <div>
-              <span className="text-muted-foreground">Teams</span>
-              <p className="font-medium">{TEAMS.length}</p>
-            </div>
-          </div>
-        </div>
-      </section>
+      <div className="flex gap-1 border-b border-border mb-6 overflow-x-auto">
+        {TABS.map((tab) => (
+          <button
+            key={tab.id}
+            onClick={() => setActiveTab(tab.id)}
+            className={cn(
+              'px-4 py-2.5 text-sm font-medium transition-colors border-b-2 -mb-px whitespace-nowrap',
+              activeTab === tab.id
+                ? 'border-primary text-primary'
+                : 'border-transparent text-muted-foreground hover:text-foreground'
+            )}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
 
-      <section>
-        <h2 className="text-lg font-semibold mb-3">Coach Photos</h2>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          {TEAMS.map((team) => (
-            <CoachCard key={team.team_id} team={team} />
-          ))}
-        </div>
-      </section>
+      {activeTab === 'general' && (
+        <>
+          <section className="mb-8">
+            <h2 className="text-lg font-semibold mb-3">League Info</h2>
+            <div className="bg-card border border-border rounded-lg p-5 shadow-sm">
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-4 text-sm">
+                <div>
+                  <span className="text-muted-foreground">League</span>
+                  <p className="font-medium">{LEAGUE_FULL_NAME}</p>
+                </div>
+                <div>
+                  <span className="text-muted-foreground">Season</span>
+                  <p className="font-medium">{SEASON}</p>
+                </div>
+                <div>
+                  <span className="text-muted-foreground">Teams</span>
+                  <p className="font-medium">{TEAMS.length}</p>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section>
+            <h2 className="text-lg font-semibold mb-3">Coach Photos</h2>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+              {TEAMS.map((team) => (
+                <CoachCard key={team.team_id} team={team} />
+              ))}
+            </div>
+          </section>
+        </>
+      )}
+
+      {activeTab === 'adjustments' && <ScoreAdjustmentsTab />}
     </div>
   );
 }
@@ -50,7 +84,6 @@ function CoachCard({ team }: { team: (typeof TEAMS)[number] }) {
 
   const photoKeys = Array.isArray(team.coach_photo_key) ? team.coach_photo_key : [team.coach_photo_key];
 
-  // Load existing photos using storage.list()
   useEffect(() => {
     async function loadPhotos() {
       const { data: files } = await supabase.storage.from('coach-photos').list('', { limit: 100 });
@@ -84,7 +117,6 @@ function CoachCard({ team }: { team: (typeof TEAMS)[number] }) {
 
     setUploading(true);
     try {
-      // Delete old file first if exists
       if (fileNames[key]) {
         await supabase.storage.from('coach-photos').remove([fileNames[key]!]);
       }

@@ -5,7 +5,7 @@
 export interface CsvUpload {
   id: string;
   round_number: number;
-  upload_type: 'lineups' | 'teams' | 'points_grid' | 'draft';
+  upload_type: 'lineups' | 'teams' | 'points_grid' | 'draft' | 'matchups';
   uploaded_at: string;
   raw_data: Record<string, unknown>[];
 }
@@ -119,5 +119,37 @@ export interface SlideData {
   sparklineData?: number[];
 }
 
-export type LineGroup = 'DEF' | 'MID' | 'FWD' | 'RUC';
+export interface MatchupRound {
+  id: string;
+  round_number: number;
+  team_id: number;
+  team_name: string;
+  score_for: number;
+  score_against: number;
+  win: boolean;
+  loss: boolean;
+  tie: boolean;
+  opp_name: string;
+  opp_id: number;
+  fixture_id: number;
+  created_at: string;
+}
+
+export interface ScoreAdjustment {
+  id: string;
+  round_number: number;
+  team_id: number;
+  team_name: string;
+  correct_score: number;
+  lineup_score: number;
+  adjustment: number;
+  source: 'auto' | 'manual';
+  assigned_line: string | null;
+  note: string | null;
+  status: 'unconfirmed' | 'confirmed';
+  created_at: string;
+  updated_at: string;
+}
+
+export type LineGroup = 'DEF' | 'MID' | 'FWD' | 'RUC' | 'UTL';
 export type LineupSlot = 'DEF' | 'MID' | 'FWD' | 'RUC' | 'UTL' | 'BN';

@@ -1,8 +1,8 @@
 'use client';
 
 import { useState, useEffect, useMemo } from 'react';
-import { supabase } from '@/lib/supabase';
 import { TEAMS } from '@/lib/constants';
+import { fetchResolvedScores } from '@/lib/scores';
 import { cn, formatScore } from '@/lib/utils';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
@@ -80,6 +80,7 @@ export default function LineRankingsTab() {
   const [activePos, setActivePos] = useState<PosId | 'ALL'>('ALL');
   const [allData, setAllData] = useState<PlayerRoundRow[]>([]);
   const [validRounds, setValidRounds] = useState<number[]>([]);
+  const [lineAdj, setLineAdj] = useState<Record<string, Record<string, number>>>({});
   const [loading, setLoading] = useState(true);
   const [highlightTeam, setHighlightTeam] = useState<string | null>(null);
 
@@ -87,31 +88,10 @@ export default function LineRankingsTab() {
 
   const loadData = async () => {
     try {
-      const allRows: PlayerRoundRow[] = [];
-      let offset = 0;
-      while (true) {
-        const { data, error } = await supabase
-          .from('player_rounds')
-          .select('round_number, team_id, team_name, player_id, player_name, pos, is_scoring, is_emg, points')
-          .range(offset, offset + 999);
-        if (error) throw error;
-        if (!data || data.length === 0) break;
-        allRows.push(...data);
-        if (data.length < 1000) break;
-        offset += 1000;
-      }
-      setAllData(allRows);
-
-      // Filter valid rounds
-      const rounds = [...new Set(allRows.map(r => r.round_number))].sort((a, b) => a - b);
-      const valid = rounds.filter(round => {
-        const teamsWithScores = new Set(
-          allRows.filter(r => r.round_number === round && r.is_scoring && r.points != null && Number(r.points) > 0)
-            .map(r => r.team_id)
-        );
-        return teamsWithScores.size >= 8;
-      });
-      setValidRounds(valid);
+      const resolved = await fetchResolvedScores();
+      setAllData(resolved.allPlayerRounds);
+      setValidRounds(resolved.validRounds);
+      setLineAdj(resolved.lineAdjustments);
     } catch (err) {
       console.error('Failed to load position data:', err);
     } finally {
@@ -131,7 +111,11 @@ export default function LineRankingsTab() {
       posIds.forEach(pos => {
         const roundTotals = validRounds.map(round => {
           const players = allData.filter(r => r.team_id === t.team_id && r.round_number === round && r.pos === pos && r.is_scoring && r.points != null);
-          return players.reduce((sum, p) => sum + Number(p.points), 0);
+          let total = players.reduce((sum, p) => sum + Number(p.points), 0);
+          // Apply line adjustment if one exists for this round/team/position
+          const adj = lineAdj[`${round}-${t.team_id}`];
+          if (adj && adj[pos]) total += adj[pos];
+          return total;
         });
         const validTotals = roundTotals.filter(s => s > 0);
         teamPosAvg[t.team_name][pos] = validTotals.length > 0 ? Math.round(validTotals.reduce((a, b) => a + b, 0) / validTotals.length) : 0;
@@ -159,7 +143,7 @@ export default function LineRankingsTab() {
         total,
       };
     }).sort((a, b) => b.total - a.total).map((t, i) => ({ ...t, overallRank: i + 1 }));
-  }, [allData, validRounds]);
+  }, [allData, validRounds, lineAdj]);
 
   // === Single position data ===
   const positionData = useMemo((): TeamLineStat[] => {
@@ -171,10 +155,14 @@ export default function LineRankingsTab() {
     const allPosData = allData.filter(r => r.pos === activePos && validRounds.includes(r.round_number));
 
     const teamStats: TeamLineStat[] = TEAMS.map(team => {
-      // Line totals per round (on-field only)
+      // Line totals per round (on-field only, with adjustments)
       const roundScores = validRounds.map(round => {
         const players = scoringData.filter(r => r.team_id === team.team_id && r.round_number === round && r.points != null);
-        return { round, score: Math.round(players.reduce((sum, p) => sum + Number(p.points), 0)), rank: 0 };
+        let score = Math.round(players.reduce((sum, p) => sum + Number(p.points), 0));
+        // Apply line adjustment
+        const adj = lineAdj[`${round}-${team.team_id}`];
+        if (adj && adj[activePos]) score += adj[activePos];
+        return { round, score, rank: 0 };
       });
 
       const validScores = roundScores.map(r => r.score).filter(s => s > 0);
@@ -227,7 +215,7 @@ export default function LineRankingsTab() {
     teamStats.forEach(t => { t.deltaFromLeagueAvg = Math.round(t.avg - leagueAvg); });
 
     return teamStats.sort((a, b) => b.avg - a.avg);
-  }, [allData, activePos, validRounds]);
+  }, [allData, activePos, validRounds, lineAdj]);
 
   // Chart data for position
   const chartData = useMemo(() => {
