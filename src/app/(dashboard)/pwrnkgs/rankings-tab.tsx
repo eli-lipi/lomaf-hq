@@ -23,6 +23,7 @@ import { cn, ordinal, movementLabel, movementColor } from '@/lib/utils';
 import { TEAMS } from '@/lib/constants';
 import { supabase } from '@/lib/supabase';
 import type { PwrnkgsRound, TeamSnapshot } from '@/lib/types';
+import { computeSlideData, type SlideTeamData } from '@/lib/compute-slide-data';
 import SlidePreview, { getRankTheme, type SlidePreviewData } from './slide-preview';
 
 interface RankingItem {
@@ -47,8 +48,8 @@ export default function RankingsTab() {
 
   // Extra data for live preview
   const [sparklineMap, setSparklineMap] = useState<Map<number, { round: string; ranking: number }[]>>(new Map());
-  const [luckMap, setLuckMap] = useState<Map<number, { score: number; rank: number }>>(new Map());
   const [coachPhotoMap, setCoachPhotoMap] = useState<Map<string, string>>(new Map());
+  const [computedData, setComputedData] = useState<Map<number, SlideTeamData>>(new Map());
 
   // Preview scaling
   const previewContainerRef = useRef<HTMLDivElement>(null);
@@ -196,6 +197,10 @@ export default function RankingsTab() {
       if (items.length > 0) setSelectedTeamId(items[0].team_id);
       dataLoaded.current = true;
 
+      // ── Compute all slide data from raw sources ──
+      const computed = await computeSlideData(supabase, currentRound);
+      setComputedData(computed);
+
       // ── Fetch sparkline data ──
       const { data: allRankings } = await supabase
         .from('pwrnkgs_rankings')
@@ -204,52 +209,11 @@ export default function RankingsTab() {
         .order('round_number', { ascending: true });
 
       const sparkMap = new Map<number, { round: string; ranking: number }[]>();
-      allRankings?.forEach((r) => {
+      allRankings?.forEach((r: { team_id: number; ranking: number; round_number: number }) => {
         if (!sparkMap.has(r.team_id)) sparkMap.set(r.team_id, []);
         sparkMap.get(r.team_id)!.push({ round: `R${r.round_number}`, ranking: r.ranking });
       });
       setSparklineMap(sparkMap);
-
-      // ── Compute luck scores ──
-      const { data: allSnapshots } = await supabase
-        .from('team_snapshots')
-        .select('round_number, team_id, def_total, mid_total, fwd_total, ruc_total, utl_total')
-        .lte('round_number', currentRound);
-
-      if (allSnapshots && allSnapshots.length > 0) {
-        const roundsInData = [...new Set(allSnapshots.map(s => s.round_number))].sort((a, b) => a - b);
-        const validRounds = roundsInData.filter(r => allSnapshots.filter(s => s.round_number === r).length >= 8);
-        const roundScores = new Map<string, number>();
-        allSnapshots.forEach(s => {
-          roundScores.set(`${s.round_number}-${s.team_id}`, Math.round(
-            Number(s.def_total || 0) + Number(s.mid_total || 0) + Number(s.fwd_total || 0) + Number(s.ruc_total || 0) + Number(s.utl_total || 0)
-          ));
-        });
-
-        const luckScores: { teamId: number; luck: number }[] = [];
-        for (const team of TEAMS) {
-          const snap = snapshotMap.get(team.team_id);
-          if (!snap) continue;
-          let totalExpected = 0;
-          for (const round of validRounds) {
-            const myScore = roundScores.get(`${round}-${team.team_id}`) || 0;
-            let teamsOutscored = 0;
-            for (const other of TEAMS) {
-              if (other.team_id === team.team_id) continue;
-              const otherScore = roundScores.get(`${round}-${other.team_id}`) || 0;
-              if (myScore > otherScore) teamsOutscored += 1;
-              else if (myScore === otherScore) teamsOutscored += 0.5;
-            }
-            totalExpected += teamsOutscored / 9;
-          }
-          const actualWins = (snap.wins || 0) + 0.5 * (snap.ties || 0);
-          luckScores.push({ teamId: team.team_id, luck: Math.round((actualWins - totalExpected) * 100) / 100 });
-        }
-        luckScores.sort((a, b) => b.luck - a.luck);
-        const newLuckMap = new Map<number, { score: number; rank: number }>();
-        luckScores.forEach((ls, i) => newLuckMap.set(ls.teamId, { score: ls.luck, rank: i + 1 }));
-        setLuckMap(newLuckMap);
-      }
 
       // ── Fetch coach photos ──
       const { data: photoFiles } = await supabase.storage.from('coach-photos').list('', { limit: 100 });
@@ -348,30 +312,9 @@ export default function RankingsTab() {
     }
   };
 
-  // Build live preview data for the selected team
+  // Build live preview data for the selected team using computed data
   const buildPreviewData = (item: RankingItem): SlidePreviewData => {
-    const snap = item.snapshot;
-    const weekScore = snap ? Math.round(Number(snap.def_total || 0) + Number(snap.mid_total || 0) + Number(snap.fwd_total || 0) + Number(snap.ruc_total || 0) + Number(snap.utl_total || 0)) : null;
-    const seasonTotal = snap ? Math.round(Number(snap.pts_for || 0)) : null;
-
-    // Compute week/season ranks from all snapshots in rankings
-    let weekRank: number | null = null;
-    let seasonRank: number | null = null;
-    if (snap) {
-      const allWeekScores = rankings
-        .filter(r => r.snapshot)
-        .map(r => Math.round(Number(r.snapshot!.def_total || 0) + Number(r.snapshot!.mid_total || 0) + Number(r.snapshot!.fwd_total || 0) + Number(r.snapshot!.ruc_total || 0) + Number(r.snapshot!.utl_total || 0)))
-        .sort((a, b) => b - a);
-      weekRank = allWeekScores.indexOf(weekScore!) + 1;
-
-      const allSeasonTotals = rankings
-        .filter(r => r.snapshot)
-        .map(r => Math.round(Number(r.snapshot!.pts_for || 0)))
-        .sort((a, b) => b - a);
-      seasonRank = allSeasonTotals.indexOf(seasonTotal!) + 1;
-    }
-
-    const luck = luckMap.get(item.team_id);
+    const cd = computedData.get(item.team_id);
     const team = TEAMS.find(t => t.team_id === item.team_id);
     const photoKeys = team ? (Array.isArray(team.coach_photo_key) ? team.coach_photo_key : [team.coach_photo_key]) : [];
     const photoUrls = photoKeys.map(k => coachPhotoMap.get(k)).filter(Boolean) as string[];
@@ -382,21 +325,15 @@ export default function RankingsTab() {
       teamName: item.team_name,
       coachName: item.coach,
       coachPhotoUrls: photoUrls,
-      scoreThisWeek: weekScore,
-      scoreThisWeekRank: weekRank,
-      seasonTotal,
-      seasonTotalRank: seasonRank,
-      record: { wins: snap?.wins || 0, losses: snap?.losses || 0, ties: snap?.ties || 0 },
-      ladderPosition: snap?.league_rank ?? null,
-      luckScore: luck?.score ?? null,
-      luckRank: luck?.rank ?? null,
-      lineRanks: {
-        def: snap?.def_rank ?? null,
-        mid: snap?.mid_rank ?? null,
-        fwd: snap?.fwd_rank ?? null,
-        ruc: snap?.ruc_rank ?? null,
-        utl: snap?.utl_rank ?? null,
-      },
+      scoreThisWeek: cd?.scoreThisWeek ?? null,
+      scoreThisWeekRank: cd?.scoreThisWeekRank ?? null,
+      seasonTotal: cd?.seasonTotal ?? null,
+      seasonTotalRank: cd?.seasonTotalRank ?? null,
+      record: cd?.record ?? { wins: 0, losses: 0, ties: 0 },
+      ladderPosition: cd?.ladderPosition ?? null,
+      luckScore: cd?.luckScore ?? null,
+      luckRank: cd?.luckRank ?? null,
+      lineRanks: cd?.lineRanks ?? { def: null, mid: null, fwd: null, ruc: null, utl: null },
       pwrnkgsHistory: sparklineMap.get(item.team_id) || [],
       writeup: item.writeup,
       roundNumber: latestRound,
@@ -486,11 +423,14 @@ export default function RankingsTab() {
             {/* Live slide preview */}
             <div className="flex-1 flex flex-col min-h-0">
               <label className="text-xs text-muted-foreground font-semibold uppercase tracking-wide mb-2 shrink-0">Slide Preview</label>
-              <div ref={previewContainerRef} className="flex-1 bg-[#080C18] rounded-lg border border-border overflow-hidden flex items-start justify-center p-2">
-                <div style={{ width: 540 * previewScale, height: 540 * previewScale, overflow: 'hidden' }}>
-                  <div style={{ width: 540, height: 540, transform: `scale(${previewScale})`, transformOrigin: 'top left' }}>
-                    <SlidePreview data={buildPreviewData(selectedItem)} />
-                  </div>
+              <div ref={previewContainerRef} className="bg-[#080C18] rounded-lg border border-border overflow-hidden" style={{ width: '100%', aspectRatio: '1 / 1', position: 'relative' }}>
+                <div style={{
+                  position: 'absolute', top: 0, left: 0,
+                  width: 540, height: 540,
+                  transform: `scale(${previewScale})`,
+                  transformOrigin: 'top left',
+                }}>
+                  <SlidePreview data={buildPreviewData(selectedItem)} />
                 </div>
               </div>
             </div>

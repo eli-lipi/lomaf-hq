@@ -162,6 +162,17 @@ function Sparkline({ history, width = 190, height = 58, theme }: {
 
 function renderWriteup(text: string) {
   if (!text) return null;
+
+  // Auto-fit: reduce font size for longer writeups
+  const totalChars = text.length;
+  let bodySize = 12.5;
+  let headerSize = 11;
+  let lineH = 1.7;
+  let headerMargin = 22;
+  if (totalChars > 600) { bodySize = 9.5; headerSize = 9; lineH = 1.4; headerMargin = 12; }
+  else if (totalChars > 400) { bodySize = 11; headerSize = 10; lineH = 1.55; headerMargin = 16; }
+  else if (totalChars > 250) { bodySize = 12; headerSize = 10.5; lineH = 1.65; headerMargin = 18; }
+
   const lines = text.split('\n');
   const elements: React.ReactElement[] = [];
   let bodyBuffer: string[] = [];
@@ -169,7 +180,7 @@ function renderWriteup(text: string) {
   const flushBody = () => {
     if (bodyBuffer.length > 0) {
       elements.push(
-        <p key={`body-${elements.length}`} style={{ color: 'rgba(255,255,255,0.78)', fontSize: 12.5, lineHeight: 1.7, margin: '0 0 10px 0', fontFamily: "'DM Sans', sans-serif" }}>
+        <p key={`body-${elements.length}`} style={{ color: 'rgba(255,255,255,0.78)', fontSize: bodySize, lineHeight: lineH, margin: `0 0 ${Math.round(lineH * 4)}px 0`, fontFamily: "'DM Sans', sans-serif" }}>
           {bodyBuffer.join(' ')}
         </p>
       );
@@ -182,8 +193,8 @@ function renderWriteup(text: string) {
       flushBody();
       elements.push(
         <h3 key={`h-${elements.length}`} style={{
-          color: '#B0B8C8', fontSize: 11, fontWeight: 700, letterSpacing: 1.8, textTransform: 'uppercase' as const,
-          margin: elements.length === 0 ? '0 0 6px 0' : '22px 0 6px 0',
+          color: '#B0B8C8', fontSize: headerSize, fontWeight: 700, letterSpacing: 1.8, textTransform: 'uppercase' as const,
+          margin: elements.length === 0 ? '0 0 6px 0' : `${headerMargin}px 0 6px 0`,
           fontFamily: "'DM Sans', sans-serif",
           borderLeft: '2px solid rgba(176,184,200,0.25)', paddingLeft: 8,
         }}>
@@ -247,12 +258,12 @@ export default function SlidePreview({ data }: { data: SlidePreviewData }) {
             {[
               { label: 'THIS WEEK', value: d.scoreThisWeek !== null ? d.scoreThisWeek.toLocaleString() : '—', rank: d.scoreThisWeekRank },
               { label: 'SEASON', value: d.seasonTotal !== null ? d.seasonTotal.toLocaleString() : '—', rank: d.seasonTotalRank },
-              { label: 'LADDER', value: `${d.record.wins}W-${d.record.losses}L${d.record.ties ? `-${d.record.ties}T` : ''}`, rank: d.ladderPosition },
+              { label: 'LADDER', value: `${d.record.wins}W ${d.record.losses}L${d.record.ties ? ` ${d.record.ties}T` : ''}`, rank: d.ladderPosition },
               { label: 'LUCK', value: d.luckScore !== null ? (d.luckScore > 0 ? `+${d.luckScore.toFixed(2)}` : d.luckScore.toFixed(2)) : '—', rank: d.luckRank },
             ].map((stat) => (
               <div key={stat.label} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <span style={{ fontSize: 8, fontWeight: 700, letterSpacing: 1.5, color: '#8892A2', textTransform: 'uppercase' as const, width: 64 }}>{stat.label}</span>
-                <span style={{ fontSize: 13, fontWeight: 700, color: '#D0D5DD', fontFamily: "'JetBrains Mono', monospace", flex: 1, textAlign: 'right' as const, marginRight: 8 }}>{stat.value}</span>
+                <span style={{ fontSize: 13, fontWeight: 700, color: '#D0D5DD', fontFamily: "'JetBrains Mono', monospace", flex: 1, textAlign: 'right' as const, marginRight: 8, whiteSpace: 'nowrap' }}>{stat.value}</span>
                 <RankPill rank={stat.rank} />
               </div>
             ))}

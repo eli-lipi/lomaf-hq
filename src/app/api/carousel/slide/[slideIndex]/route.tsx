@@ -1,6 +1,7 @@
 import { ImageResponse } from 'next/og';
 import { createClient } from '@supabase/supabase-js';
 import { TEAMS } from '@/lib/constants';
+import { computeSlideData } from '@/lib/compute-slide-data';
 import { readFileSync } from 'fs';
 import { join } from 'path';
 
@@ -269,8 +270,30 @@ export async function GET(
     }
 
     const team = TEAMS.find((t) => t.team_id === ranking.team_id);
-    const snapshot = snapshotMap.get(ranking.team_id);
     const theme = getRankTheme(ranking.ranking);
+
+    // ── Use shared computation for all slide data ──
+    const allComputedData = await computeSlideData(supabase, roundNumber);
+    const cd = allComputedData.get(ranking.team_id);
+
+    const weekScore = cd?.scoreThisWeek ?? null;
+    const weekRank = cd?.scoreThisWeekRank ?? null;
+    const seasonTotal = cd?.seasonTotal ?? null;
+    const seasonRank = cd?.seasonTotalRank ?? null;
+    const ladderPos = cd?.ladderPosition ?? null;
+    const luckScore = cd?.luckScore ?? null;
+    const luckRank = cd?.luckRank ?? null;
+
+    const lineRanks = [
+      { label: 'DEF', rank: cd?.lineRanks.def ?? null },
+      { label: 'MID', rank: cd?.lineRanks.mid ?? null },
+      { label: 'FWD', rank: cd?.lineRanks.fwd ?? null },
+      { label: 'RUC', rank: cd?.lineRanks.ruc ?? null },
+      { label: 'UTL', rank: cd?.lineRanks.utl ?? null },
+    ];
+
+    const movement = ranking.previous_ranking ? ranking.previous_ranking - ranking.ranking : 0;
+    const isNew = ranking.previous_ranking === null;
 
     // Fetch all historical rankings for sparkline
     const { data: allRankings } = await supabase
@@ -280,92 +303,19 @@ export async function GET(
       .lte('round_number', roundNumber)
       .order('round_number', { ascending: true });
 
-    const sparklineData = allRankings?.map(r => ({ round: `R${r.round_number}`, ranking: r.ranking })) || [];
-
-    // Fetch all snapshots for luck calculation
-    const { data: allSnapshots } = await supabase
-      .from('team_snapshots')
-      .select('round_number, team_id, def_total, mid_total, fwd_total, ruc_total, utl_total')
-      .lte('round_number', roundNumber);
-
-    // Compute luck scores
-    let luckScore: number | null = null;
-    let luckRank: number | null = null;
-    if (allSnapshots && allSnapshots.length > 0 && snapshot) {
-      const roundsInData = [...new Set(allSnapshots.map(s => s.round_number))].sort((a, b) => a - b);
-      const validRounds = roundsInData.filter(r => allSnapshots.filter(s => s.round_number === r).length >= 8);
-      const roundScores = new Map<string, number>();
-      allSnapshots.forEach(s => {
-        const score = Number(s.def_total || 0) + Number(s.mid_total || 0) + Number(s.fwd_total || 0) + Number(s.ruc_total || 0) + Number(s.utl_total || 0);
-        roundScores.set(`${s.round_number}-${s.team_id}`, Math.round(score));
-      });
-
-      const luckScores: { teamId: number; luck: number }[] = [];
-      for (const t of TEAMS) {
-        const snap = snapshotMap.get(t.team_id);
-        if (!snap) continue;
-        let totalExpected = 0;
-        for (const round of validRounds) {
-          const myScore = roundScores.get(`${round}-${t.team_id}`) || 0;
-          let teamsOutscored = 0;
-          for (const other of TEAMS) {
-            if (other.team_id === t.team_id) continue;
-            const otherScore = roundScores.get(`${round}-${other.team_id}`) || 0;
-            if (myScore > otherScore) teamsOutscored += 1;
-            else if (myScore === otherScore) teamsOutscored += 0.5;
-          }
-          totalExpected += teamsOutscored / 9;
-        }
-        const actualWins = (snap.wins || 0) + 0.5 * (snap.ties || 0);
-        luckScores.push({ teamId: t.team_id, luck: Math.round((actualWins - totalExpected) * 100) / 100 });
-      }
-      luckScores.sort((a, b) => b.luck - a.luck);
-      const myLuck = luckScores.find(l => l.teamId === ranking.team_id);
-      if (myLuck) {
-        luckScore = myLuck.luck;
-        luckRank = luckScores.indexOf(myLuck) + 1;
-      }
-    }
-
-    const movement = ranking.previous_ranking ? ranking.previous_ranking - ranking.ranking : 0;
-    const isNew = ranking.previous_ranking === null;
-
-    // Weekly score
-    const weekScore = snapshot
-      ? Math.round(Number(snapshot.def_total || 0) + Number(snapshot.mid_total || 0) + Number(snapshot.fwd_total || 0) + Number(snapshot.ruc_total || 0) + Number(snapshot.utl_total || 0))
-      : null;
-    const seasonTotal = snapshot ? Math.round(Number(snapshot.pts_for || 0)) : null;
-
-    let weekRank: number | null = null;
-    let seasonRank: number | null = null;
-    if (snapshot && snapshots) {
-      const weekScores = snapshots.map(s => Math.round(Number(s.def_total || 0) + Number(s.mid_total || 0) + Number(s.fwd_total || 0) + Number(s.ruc_total || 0) + Number(s.utl_total || 0))).sort((a, b) => b - a);
-      weekRank = weekScores.indexOf(weekScore!) + 1;
-      const seasonTotals = snapshots.map(s => Math.round(Number(s.pts_for || 0))).sort((a, b) => b - a);
-      seasonRank = seasonTotals.indexOf(seasonTotal!) + 1;
-    }
-
-    const ladderPos = snapshot?.league_rank ?? null;
-
-    const lineRanks = [
-      { label: 'DEF', rank: snapshot?.def_rank ?? null },
-      { label: 'MID', rank: snapshot?.mid_rank ?? null },
-      { label: 'FWD', rank: snapshot?.fwd_rank ?? null },
-      { label: 'RUC', rank: snapshot?.ruc_rank ?? null },
-      { label: 'UTL', rank: snapshot?.utl_rank ?? null },
-    ];
+    const sparklineData = allRankings?.map((r: { round_number: number; ranking: number }) => ({ round: `R${r.round_number}`, ranking: r.ranking })) || [];
 
     // Sparkline SVG (2× scale: 380×116)
     const sparkW = 380, sparkH = 116;
     const sparkPad = { top: 12, bottom: 40, left: 44, right: 20 };
     const sw = sparkW - sparkPad.left - sparkPad.right;
     const sh = sparkH - sparkPad.top - sparkPad.bottom;
-    const sparkPoints = sparklineData.map((d, i) => ({
+    const sparkPoints = sparklineData.map((d: { round: string; ranking: number }, i: number) => ({
       x: sparkPad.left + (sparklineData.length === 1 ? sw / 2 : (i / (sparklineData.length - 1)) * sw),
       y: sparkPad.top + ((d.ranking - 1) / 9) * sh,
       round: d.round,
     }));
-    const sparkPath = sparkPoints.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x} ${p.y}`).join(' ');
+    const sparkPath = sparkPoints.map((p: { x: number; y: number }, i: number) => `${i === 0 ? 'M' : 'L'} ${p.x} ${p.y}`).join(' ');
     const sparkAreaPath = sparkPoints.length > 1
       ? `${sparkPath} L ${sparkPoints[sparkPoints.length - 1].x} ${sparkPad.top + sh} L ${sparkPoints[0].x} ${sparkPad.top + sh} Z`
       : '';
@@ -384,24 +334,27 @@ export async function GET(
     const photoUrls = photoKeys.map(k => photoUrlMap.get(k)).filter(Boolean) as string[];
     const coachInitials = (team?.coach || ranking.team_name).split(/[\s&]+/).filter(Boolean).map((n: string) => n[0]).join('').slice(0, 2).toUpperCase();
 
-    // Parse writeup
+    // Parse writeup with auto-fit sizing
     const writeupBlocks = parseWriteupBlocks(ranking.writeup || '');
-    let charCount = 0;
-    const maxChars = 500;
-    const displayBlocks = writeupBlocks.filter(b => {
-      if (charCount >= maxChars) return false;
-      charCount += b.text.length;
-      return true;
-    });
+    const totalWriteupChars = writeupBlocks.reduce((sum, b) => sum + b.text.length, 0);
+    // Auto-fit: reduce font size for longer writeups
+    let writeupBodySize = 25;
+    let writeupHeaderSize = 22;
+    let writeupLineHeight = 1.7;
+    if (totalWriteupChars > 600) { writeupBodySize = 19; writeupHeaderSize = 18; writeupLineHeight = 1.5; }
+    else if (totalWriteupChars > 400) { writeupBodySize = 22; writeupHeaderSize = 20; writeupLineHeight = 1.6; }
+    else if (totalWriteupChars > 250) { writeupBodySize = 24; writeupHeaderSize = 21; writeupLineHeight = 1.65; }
+    const displayBlocks = writeupBlocks; // Show all blocks, auto-fit handles overflow
 
     // Previous round label for movement badge
     const prevRound = sparklineData.length >= 2 ? sparklineData[sparklineData.length - 2].round : null;
 
     // Stats data
+    const record = cd?.record ?? { wins: 0, losses: 0, ties: 0 };
     const stats = [
       { label: 'THIS WEEK', value: weekScore !== null ? fmt(weekScore) : '—', rank: weekRank },
       { label: 'SEASON', value: seasonTotal !== null ? fmt(seasonTotal) : '—', rank: seasonRank },
-      { label: 'LADDER', value: snapshot ? `${snapshot.wins}W-${snapshot.losses}L${snapshot.ties ? `-${snapshot.ties}T` : ''}` : '—', rank: ladderPos },
+      { label: 'LADDER', value: `${record.wins}W ${record.losses}L${record.ties ? ` ${record.ties}T` : ''}`, rank: ladderPos },
       { label: 'LUCK', value: luckScore !== null ? (luckScore > 0 ? `+${luckScore.toFixed(2)}` : luckScore.toFixed(2)) : '—', rank: luckRank },
     ];
 
@@ -510,23 +463,23 @@ export async function GET(
             {/* Divider */}
             <div style={{ display: 'flex', height: 2, background: `linear-gradient(90deg, ${theme.border}, transparent)`, marginBottom: 28, flexShrink: 0 }} />
 
-            {/* Writeup */}
+            {/* Writeup (auto-fit font size) */}
             <div style={{ display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden' }}>
               {displayBlocks.length > 0 ? (
                 displayBlocks.map((block, i) => (
                   block.type === 'header' ? (
                     <div key={i} style={{
                       display: 'flex', alignItems: 'center',
-                      fontSize: 22, fontWeight: 700, letterSpacing: 3.6, color: '#B0B8C8',
-                      marginTop: i > 0 ? 44 : 0, marginBottom: 12,
+                      fontSize: writeupHeaderSize, fontWeight: 700, letterSpacing: 3.6, color: '#B0B8C8',
+                      marginTop: i > 0 ? 32 : 0, marginBottom: 10,
                       borderLeft: '4px solid rgba(176,184,200,0.25)', paddingLeft: 16,
                     }}>
                       {block.text.toUpperCase()}
                     </div>
                   ) : (
                     <div key={i} style={{
-                      display: 'flex', fontSize: 25, color: 'rgba(255,255,255,0.78)',
-                      lineHeight: '1.7',
+                      display: 'flex', fontSize: writeupBodySize, color: 'rgba(255,255,255,0.78)',
+                      lineHeight: String(writeupLineHeight),
                     }}>
                       {block.text}
                     </div>
