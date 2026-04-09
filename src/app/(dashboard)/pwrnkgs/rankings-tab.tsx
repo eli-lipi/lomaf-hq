@@ -25,6 +25,7 @@ import { supabase } from '@/lib/supabase';
 import type { PwrnkgsRound, TeamSnapshot } from '@/lib/types';
 import { computeSlideData, type SlideTeamData } from '@/lib/compute-slide-data';
 import SlidePreview, { getRankTheme, type SlidePreviewData } from './slide-preview';
+import { getWorkingRound } from '@/lib/get-working-round';
 
 interface RankingItem {
   id: string;
@@ -79,33 +80,12 @@ export default function RankingsTab() {
   // Load data
   useEffect(() => {
     async function loadData() {
-      const { data: snapshots } = await supabase
-        .from('team_snapshots')
-        .select('round_number')
-        .order('round_number', { ascending: false })
-        .limit(1);
+      const { round: workingRound, roundNumber, hasSnapshots } = await getWorkingRound();
+      if (!roundNumber || !workingRound) return;
 
-      const currentRound = snapshots?.[0]?.round_number;
-      if (!currentRound) return;
+      const currentRound = roundNumber;
       setLatestRound(currentRound);
-
-      let { data: roundData } = await supabase
-        .from('pwrnkgs_rounds')
-        .select('*')
-        .eq('round_number', currentRound)
-        .single();
-
-      if (!roundData) {
-        const { data: newRound } = await supabase
-          .from('pwrnkgs_rounds')
-          .insert({ round_number: currentRound })
-          .select()
-          .single();
-        roundData = newRound;
-      }
-
-      if (!roundData) return;
-      setRound(roundData as PwrnkgsRound);
+      setRound(workingRound);
 
       const { data: existingRankings } = await supabase
         .from('pwrnkgs_rankings')

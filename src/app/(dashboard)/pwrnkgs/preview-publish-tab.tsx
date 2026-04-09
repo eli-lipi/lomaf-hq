@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { Download, Loader2, Image as ImageIcon, Send, Save, CheckCircle, AlertCircle } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { cn } from '@/lib/utils';
+import { getWorkingRound } from '@/lib/get-working-round';
 
 export default function PreviewPublishTab() {
   const [roundNumber, setRoundNumber] = useState<number | null>(null);
@@ -27,26 +28,13 @@ export default function PreviewPublishTab() {
 
   useEffect(() => {
     async function loadData() {
-      // Get the latest round (draft or published)
-      const { data: snapshots } = await supabase
-        .from('team_snapshots')
-        .select('round_number')
-        .order('round_number', { ascending: false })
-        .limit(1);
+      const { round: workingRound, roundNumber } = await getWorkingRound();
+      if (!roundNumber || !workingRound) return;
 
-      const currentRound = snapshots?.[0]?.round_number;
-      if (!currentRound) return;
+      const currentRound = roundNumber;
       setRoundNumber(currentRound);
-
-      const { data: roundData } = await supabase
-        .from('pwrnkgs_rounds')
-        .select('*')
-        .eq('round_number', currentRound)
-        .single();
-
-      if (!roundData) return;
-      setRoundId(roundData.id);
-      setIsPublished(roundData.status === 'published');
+      setRoundId(workingRound.id);
+      setIsPublished(workingRound.status === 'published');
 
       // Build checklist
       const { data: rankings } = await supabase
@@ -56,8 +44,8 @@ export default function PreviewPublishTab() {
         .order('ranking', { ascending: true });
 
       setChecklist({
-        previewText: !!roundData.preview_text?.trim(),
-        weekAheadText: !!roundData.week_ahead_text?.trim(),
+        previewText: !!workingRound.preview_text?.trim(),
+        weekAheadText: !!workingRound.week_ahead_text?.trim(),
         teamWriteups: (rankings || []).map((r) => ({
           teamName: r.team_name,
           done: !!r.writeup?.trim(),

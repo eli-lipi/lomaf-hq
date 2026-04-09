@@ -5,6 +5,7 @@ import { Plus, Trash2, GripVertical, Check } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { cn } from '@/lib/utils';
 import type { PwrnkgsRound } from '@/lib/types';
+import { getWorkingRound } from '@/lib/get-working-round';
 
 interface WriteupSection {
   title: string;
@@ -28,35 +29,14 @@ export default function SlideLayoutTab() {
 
   useEffect(() => {
     async function loadData() {
-      const { data: snapshots } = await supabase
-        .from('team_snapshots')
-        .select('round_number')
-        .order('round_number', { ascending: false })
-        .limit(1);
+      const { round: workingRound, roundNumber } = await getWorkingRound();
+      if (!roundNumber || !workingRound) return;
 
-      const currentRound = snapshots?.[0]?.round_number;
-      if (!currentRound) return;
-      setLatestRound(currentRound);
-
-      let { data: roundData } = await supabase
-        .from('pwrnkgs_rounds')
-        .select('*')
-        .eq('round_number', currentRound)
-        .single();
-
-      if (!roundData) {
-        const { data: newRound } = await supabase
-          .from('pwrnkgs_rounds')
-          .insert({ round_number: currentRound })
-          .select()
-          .single();
-        roundData = newRound;
-      }
-
-      if (!roundData) return;
-      setRound(roundData as PwrnkgsRound);
-      setPreviewText(roundData.preview_text || '');
-      setWeekAheadText(roundData.week_ahead_text || '');
+      setLatestRound(roundNumber);
+      setRound(workingRound);
+      setPreviewText(workingRound.preview_text || '');
+      setWeekAheadText(workingRound.week_ahead_text || '');
+      const currentRound = roundNumber;
 
       // Load section templates from localStorage
       const saved = localStorage.getItem(`lomaf-section-templates-${currentRound}`);
