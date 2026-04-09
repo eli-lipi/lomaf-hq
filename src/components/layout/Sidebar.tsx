@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Trophy, BarChart3, Settings, Menu, X, ChevronDown, ChevronRight, Upload } from 'lucide-react';
+import { Trophy, BarChart3, Settings, Menu, X, ChevronDown, ChevronRight } from 'lucide-react';
 import { useState } from 'react';
 import { cn } from '@/lib/utils';
 
@@ -14,7 +14,6 @@ interface NavItem {
 }
 
 const NAV_ITEMS: NavItem[] = [
-  { href: '/upload', label: 'Data Upload', icon: Upload },
   {
     href: '/pwrnkgs',
     label: 'PWRNKGs',
@@ -50,6 +49,7 @@ const NAV_ITEMS: NavItem[] = [
     label: 'Settings',
     icon: Settings,
     children: [
+      { href: '/upload', label: 'Data Upload' },
       { href: '/settings?tab=photos', label: 'Coach Photos' },
       { href: '/settings?tab=adjustments', label: 'Score Adjustments' },
       { href: '/settings?tab=info', label: 'League Info' },
