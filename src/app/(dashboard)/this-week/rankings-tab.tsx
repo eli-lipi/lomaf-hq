@@ -23,6 +23,7 @@ import { cn, ordinal, movementLabel, movementColor } from '@/lib/utils';
 import { TEAMS } from '@/lib/constants';
 import { supabase } from '@/lib/supabase';
 import type { PwrnkgsRound, TeamSnapshot } from '@/lib/types';
+import SlidePreview, { getRankTheme, type SlidePreviewData } from './slide-preview';
 
 interface RankingItem {
   id: string;
@@ -33,8 +34,6 @@ interface RankingItem {
   previous_ranking: number | null;
   writeup: string;
   snapshot?: TeamSnapshot;
-  slideUrl?: string;
-  slideLoading?: boolean;
 }
 
 export default function RankingsTab() {
@@ -50,10 +49,18 @@ export default function RankingsTab() {
   const [enlargedSlide, setEnlargedSlide] = useState<string | null>(null);
   const [selectedTeamId, setSelectedTeamId] = useState<number | null>(null);
   const [selectedSpecialSlide, setSelectedSpecialSlide] = useState<'preview' | 'summary' | null>(null);
-  const [specialSlideUrls, setSpecialSlideUrls] = useState<{ preview?: string; summary?: string }>({});
-  const [specialSlideLoading, setSpecialSlideLoading] = useState<{ preview?: boolean; summary?: boolean }>({});
   const [autoSaveStatus, setAutoSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
   const [roundFieldsOpen, setRoundFieldsOpen] = useState(true);
+
+  // Extra data for live preview
+  const [sparklineMap, setSparklineMap] = useState<Map<number, { round: string; ranking: number }[]>>(new Map());
+  const [luckMap, setLuckMap] = useState<Map<number, { score: number; rank: number }>>(new Map());
+  const [coachPhotoMap, setCoachPhotoMap] = useState<Map<string, string>>(new Map());
+
+  // Special slide image previews (generated via API)
+  const [specialSlideUrls, setSpecialSlideUrls] = useState<{ preview?: string; summary?: string }>({});
+  const [specialSlideLoading, setSpecialSlideLoading] = useState<{ preview?: boolean; summary?: boolean }>({});
+
   const autoSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const dataLoaded = useRef(false);
 
@@ -148,15 +155,10 @@ export default function RankingsTab() {
       } else {
         let sorted: typeof TEAMS;
         if (prevRankMap.size > 0) {
-          sorted = [...TEAMS].sort((a, b) => {
-            const rankA = prevRankMap.get(a.team_id) ?? 99;
-            const rankB = prevRankMap.get(b.team_id) ?? 99;
-            return rankA - rankB;
-          });
+          sorted = [...TEAMS].sort((a, b) => (prevRankMap.get(a.team_id) ?? 99) - (prevRankMap.get(b.team_id) ?? 99));
         } else {
           sorted = [...TEAMS];
         }
-
         items = sorted.map((team, i) => ({
           id: String(team.team_id),
           team_id: team.team_id,
@@ -170,9 +172,75 @@ export default function RankingsTab() {
       }
 
       setRankings(items);
-      // Select first team by default
       if (items.length > 0) setSelectedTeamId(items[0].team_id);
       dataLoaded.current = true;
+
+      // ── Fetch sparkline data ──
+      const { data: allRankings } = await supabase
+        .from('pwrnkgs_rankings')
+        .select('team_id, ranking, round_number')
+        .lte('round_number', currentRound)
+        .order('round_number', { ascending: true });
+
+      const sparkMap = new Map<number, { round: string; ranking: number }[]>();
+      allRankings?.forEach((r) => {
+        if (!sparkMap.has(r.team_id)) sparkMap.set(r.team_id, []);
+        sparkMap.get(r.team_id)!.push({ round: `R${r.round_number}`, ranking: r.ranking });
+      });
+      setSparklineMap(sparkMap);
+
+      // ── Compute luck scores ──
+      const { data: allSnapshots } = await supabase
+        .from('team_snapshots')
+        .select('round_number, team_id, def_total, mid_total, fwd_total, ruc_total, utl_total')
+        .lte('round_number', currentRound);
+
+      if (allSnapshots && allSnapshots.length > 0) {
+        const roundsInData = [...new Set(allSnapshots.map(s => s.round_number))].sort((a, b) => a - b);
+        const validRounds = roundsInData.filter(r => allSnapshots.filter(s => s.round_number === r).length >= 8);
+        const roundScores = new Map<string, number>();
+        allSnapshots.forEach(s => {
+          roundScores.set(`${s.round_number}-${s.team_id}`, Math.round(
+            Number(s.def_total || 0) + Number(s.mid_total || 0) + Number(s.fwd_total || 0) + Number(s.ruc_total || 0) + Number(s.utl_total || 0)
+          ));
+        });
+
+        const luckScores: { teamId: number; luck: number }[] = [];
+        for (const team of TEAMS) {
+          const snap = snapshotMap.get(team.team_id);
+          if (!snap) continue;
+          let totalExpected = 0;
+          for (const round of validRounds) {
+            const myScore = roundScores.get(`${round}-${team.team_id}`) || 0;
+            let teamsOutscored = 0;
+            for (const other of TEAMS) {
+              if (other.team_id === team.team_id) continue;
+              const otherScore = roundScores.get(`${round}-${other.team_id}`) || 0;
+              if (myScore > otherScore) teamsOutscored += 1;
+              else if (myScore === otherScore) teamsOutscored += 0.5;
+            }
+            totalExpected += teamsOutscored / 9;
+          }
+          const actualWins = (snap.wins || 0) + 0.5 * (snap.ties || 0);
+          luckScores.push({ teamId: team.team_id, luck: Math.round((actualWins - totalExpected) * 100) / 100 });
+        }
+        luckScores.sort((a, b) => b.luck - a.luck);
+        const newLuckMap = new Map<number, { score: number; rank: number }>();
+        luckScores.forEach((ls, i) => newLuckMap.set(ls.teamId, { score: ls.luck, rank: i + 1 }));
+        setLuckMap(newLuckMap);
+      }
+
+      // ── Fetch coach photos ──
+      const { data: photoFiles } = await supabase.storage.from('coach-photos').list('', { limit: 100 });
+      if (photoFiles) {
+        const urlMap = new Map<string, string>();
+        for (const f of photoFiles) {
+          const key = f.name.split('.')[0];
+          const { data: urlData } = supabase.storage.from('coach-photos').getPublicUrl(f.name);
+          urlMap.set(key, urlData.publicUrl);
+        }
+        setCoachPhotoMap(urlMap);
+      }
     }
 
     loadData();
@@ -186,20 +254,12 @@ export default function RankingsTab() {
       await supabase.from('pwrnkgs_rounds')
         .update({ theme: theme || null, preview_text: previewText || null, week_ahead_text: weekAheadText || null })
         .eq('id', round.id);
-
       const rankingRows = rankings.map((r) => ({
-        round_id: round.id,
-        round_number: round.round_number,
-        team_id: r.team_id,
-        team_name: r.team_name,
-        ranking: r.ranking,
-        previous_ranking: r.previous_ranking,
-        writeup: r.writeup,
+        round_id: round.id, round_number: round.round_number,
+        team_id: r.team_id, team_name: r.team_name, ranking: r.ranking,
+        previous_ranking: r.previous_ranking, writeup: r.writeup,
       }));
-
-      await supabase.from('pwrnkgs_rankings')
-        .upsert(rankingRows, { onConflict: 'round_number,team_id' });
-
+      await supabase.from('pwrnkgs_rankings').upsert(rankingRows, { onConflict: 'round_number,team_id' });
       setAutoSaveStatus('saved');
       setTimeout(() => setAutoSaveStatus('idle'), 2000);
     } catch {
@@ -210,9 +270,7 @@ export default function RankingsTab() {
   const triggerAutoSave = useCallback(() => {
     if (!dataLoaded.current) return;
     if (autoSaveTimer.current) clearTimeout(autoSaveTimer.current);
-    autoSaveTimer.current = setTimeout(() => {
-      doAutoSave();
-    }, 5000);
+    autoSaveTimer.current = setTimeout(() => doAutoSave(), 5000);
   }, [doAutoSave]);
 
   useEffect(() => {
@@ -220,78 +278,34 @@ export default function RankingsTab() {
     return () => { if (autoSaveTimer.current) clearTimeout(autoSaveTimer.current); };
   }, [rankings, theme, previewText, weekAheadText, triggerAutoSave]);
 
-  // Save data before generating a slide
-  const saveBeforeGenerate = useCallback(async () => {
-    if (!round) return;
-    await supabase.from('pwrnkgs_rounds')
-      .update({ theme: theme || null, preview_text: previewText || null, week_ahead_text: weekAheadText || null })
-      .eq('id', round.id);
-
-    const rankingRows = rankings.map((r) => ({
-      round_id: round.id,
-      round_number: round.round_number,
-      team_id: r.team_id,
-      team_name: r.team_name,
-      ranking: r.ranking,
-      previous_ranking: r.previous_ranking,
-      writeup: r.writeup,
-    }));
-
-    await supabase.from('pwrnkgs_rankings')
-      .upsert(rankingRows, { onConflict: 'round_number,team_id' });
-  }, [round, rankings, theme, previewText, weekAheadText]);
-
-  // Generate slide for a team
-  const generateSlidePreview = useCallback(async (teamRanking: number) => {
-    if (!round) return;
-    const slideIndex = 11 - teamRanking;
-    if (slideIndex < 1 || slideIndex > 10) return;
-
-    await saveBeforeGenerate();
-
-    setRankings((prev) => prev.map((r) => r.ranking === teamRanking ? { ...r, slideLoading: true } : r));
-
-    try {
-      const res = await fetch(`/api/carousel/slide/${slideIndex}?round=${round.round_number}`);
-      if (res.ok) {
-        const blob = await res.blob();
-        const url = URL.createObjectURL(blob);
-        setRankings((prev) => prev.map((r) => {
-          if (r.ranking === teamRanking) {
-            if (r.slideUrl) URL.revokeObjectURL(r.slideUrl);
-            return { ...r, slideUrl: url, slideLoading: false };
-          }
-          return r;
-        }));
-      }
-    } catch {
-      setRankings((prev) => prev.map((r) => r.ranking === teamRanking ? { ...r, slideLoading: false } : r));
-    }
-  }, [round, saveBeforeGenerate]);
-
   const generateSpecialSlide = useCallback(async (type: 'preview' | 'summary') => {
     if (!round) return;
     const slideIndex = type === 'preview' ? 0 : 11;
-    await saveBeforeGenerate();
+    // Save first
+    await supabase.from('pwrnkgs_rounds')
+      .update({ theme: theme || null, preview_text: previewText || null, week_ahead_text: weekAheadText || null })
+      .eq('id', round.id);
+    const rankingRows = rankings.map((r) => ({
+      round_id: round.id, round_number: round.round_number,
+      team_id: r.team_id, team_name: r.team_name, ranking: r.ranking,
+      previous_ranking: r.previous_ranking, writeup: r.writeup,
+    }));
+    await supabase.from('pwrnkgs_rankings').upsert(rankingRows, { onConflict: 'round_number,team_id' });
 
-    setSpecialSlideLoading((prev) => ({ ...prev, [type]: true }));
-
+    setSpecialSlideLoading(prev => ({ ...prev, [type]: true }));
     try {
       const res = await fetch(`/api/carousel/slide/${slideIndex}?round=${round.round_number}`);
       if (res.ok) {
         const blob = await res.blob();
         const url = URL.createObjectURL(blob);
-        setSpecialSlideUrls((prev) => {
+        setSpecialSlideUrls(prev => {
           if (prev[type]) URL.revokeObjectURL(prev[type]!);
           return { ...prev, [type]: url };
         });
       }
-    } catch (err) {
-      console.error('Slide gen failed:', err);
-    } finally {
-      setSpecialSlideLoading((prev) => ({ ...prev, [type]: false }));
-    }
-  }, [round, saveBeforeGenerate]);
+    } catch (err) { console.error('Slide gen failed:', err); }
+    finally { setSpecialSlideLoading(prev => ({ ...prev, [type]: false })); }
+  }, [round, rankings, theme, previewText, weekAheadText]);
 
   const handleDragEnd = (event: DragEndEvent) => {
     const { active, over } = event;
@@ -300,14 +314,12 @@ export default function RankingsTab() {
       const oldIndex = items.findIndex((i) => i.id === active.id);
       const newIndex = items.findIndex((i) => i.id === over.id);
       const reordered = arrayMove(items, oldIndex, newIndex);
-      return reordered.map((item, i) => ({ ...item, ranking: i + 1, slideUrl: undefined }));
+      return reordered.map((item, i) => ({ ...item, ranking: i + 1 }));
     });
   };
 
   const updateWriteup = useCallback((teamId: number, text: string) => {
-    setRankings((prev) =>
-      prev.map((r) => r.team_id === teamId ? { ...r, writeup: text } : r)
-    );
+    setRankings((prev) => prev.map((r) => r.team_id === teamId ? { ...r, writeup: text } : r));
   }, []);
 
   const save = async () => {
@@ -318,19 +330,12 @@ export default function RankingsTab() {
       await supabase.from('pwrnkgs_rounds')
         .update({ theme: theme || null, preview_text: previewText || null, week_ahead_text: weekAheadText || null })
         .eq('id', round.id);
-
       const rankingRows = rankings.map((r) => ({
-        round_id: round.id,
-        round_number: round.round_number,
-        team_id: r.team_id,
-        team_name: r.team_name,
-        ranking: r.ranking,
-        previous_ranking: r.previous_ranking,
-        writeup: r.writeup,
+        round_id: round.id, round_number: round.round_number,
+        team_id: r.team_id, team_name: r.team_name, ranking: r.ranking,
+        previous_ranking: r.previous_ranking, writeup: r.writeup,
       }));
-
-      const { error } = await supabase.from('pwrnkgs_rankings')
-        .upsert(rankingRows, { onConflict: 'round_number,team_id' });
+      const { error } = await supabase.from('pwrnkgs_rankings').upsert(rankingRows, { onConflict: 'round_number,team_id' });
       if (error) throw error;
       setMessage({ type: 'success', text: 'Rankings saved!' });
     } catch (err) {
@@ -364,15 +369,62 @@ export default function RankingsTab() {
 
   const isPublished = round?.status === 'published';
   const selectedItem = selectedTeamId ? rankings.find((r) => r.team_id === selectedTeamId) : null;
-
-  // Determine what to show in the right panel
   const showingSpecialSlide = selectedSpecialSlide !== null;
-  const currentSlideUrl = showingSpecialSlide
-    ? specialSlideUrls[selectedSpecialSlide!]
-    : selectedItem?.slideUrl;
-  const currentSlideLoading = showingSpecialSlide
-    ? specialSlideLoading[selectedSpecialSlide!]
-    : selectedItem?.slideLoading;
+
+  // Build live preview data for the selected team
+  const buildPreviewData = (item: RankingItem): SlidePreviewData => {
+    const snap = item.snapshot;
+    const weekScore = snap ? Math.round(Number(snap.def_total || 0) + Number(snap.mid_total || 0) + Number(snap.fwd_total || 0) + Number(snap.ruc_total || 0) + Number(snap.utl_total || 0)) : null;
+    const seasonTotal = snap ? Math.round(Number(snap.pts_for || 0)) : null;
+
+    // Compute week/season ranks from all snapshots in rankings
+    let weekRank: number | null = null;
+    let seasonRank: number | null = null;
+    if (snap) {
+      const allWeekScores = rankings
+        .filter(r => r.snapshot)
+        .map(r => Math.round(Number(r.snapshot!.def_total || 0) + Number(r.snapshot!.mid_total || 0) + Number(r.snapshot!.fwd_total || 0) + Number(r.snapshot!.ruc_total || 0) + Number(r.snapshot!.utl_total || 0)))
+        .sort((a, b) => b - a);
+      weekRank = allWeekScores.indexOf(weekScore!) + 1;
+
+      const allSeasonTotals = rankings
+        .filter(r => r.snapshot)
+        .map(r => Math.round(Number(r.snapshot!.pts_for || 0)))
+        .sort((a, b) => b - a);
+      seasonRank = allSeasonTotals.indexOf(seasonTotal!) + 1;
+    }
+
+    const luck = luckMap.get(item.team_id);
+    const team = TEAMS.find(t => t.team_id === item.team_id);
+    const photoKeys = team ? (Array.isArray(team.coach_photo_key) ? team.coach_photo_key : [team.coach_photo_key]) : [];
+    const photoUrls = photoKeys.map(k => coachPhotoMap.get(k)).filter(Boolean) as string[];
+
+    return {
+      ranking: item.ranking,
+      previousRanking: item.previous_ranking,
+      teamName: item.team_name,
+      coachName: item.coach,
+      coachPhotoUrls: photoUrls,
+      scoreThisWeek: weekScore,
+      scoreThisWeekRank: weekRank,
+      seasonTotal,
+      seasonTotalRank: seasonRank,
+      record: { wins: snap?.wins || 0, losses: snap?.losses || 0, ties: snap?.ties || 0 },
+      ladderPosition: snap?.league_rank ?? null,
+      luckScore: luck?.score ?? null,
+      luckRank: luck?.rank ?? null,
+      lineRanks: {
+        def: snap?.def_rank ?? null,
+        mid: snap?.mid_rank ?? null,
+        fwd: snap?.fwd_rank ?? null,
+        ruc: snap?.ruc_rank ?? null,
+        utl: snap?.utl_rank ?? null,
+      },
+      pwrnkgsHistory: sparklineMap.get(item.team_id) || [],
+      writeup: item.writeup,
+      roundNumber: latestRound,
+    };
+  };
 
   return (
     <div className="flex gap-6 h-[calc(100vh-200px)] min-h-[600px]">
@@ -416,36 +468,21 @@ export default function RankingsTab() {
             <div className="px-4 pb-4 space-y-3">
               <div>
                 <label className="block text-xs text-muted-foreground mb-1">Theme</label>
-                <input
-                  type="text"
-                  value={theme}
-                  onChange={(e) => setTheme(e.target.value)}
-                  placeholder='e.g., "What Went Right? What Went Wrong?"'
-                  disabled={isPublished}
-                  className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary disabled:opacity-50"
-                />
+                <input type="text" value={theme} onChange={(e) => setTheme(e.target.value)}
+                  placeholder='e.g., "What Went Right? What Went Wrong?"' disabled={isPublished}
+                  className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary disabled:opacity-50" />
               </div>
               <div>
                 <label className="block text-xs text-muted-foreground mb-1">Preview Text (Slide 1)</label>
-                <textarea
-                  value={previewText}
-                  onChange={(e) => setPreviewText(e.target.value)}
-                  placeholder="The intro paragraph..."
-                  rows={3}
-                  disabled={isPublished}
-                  className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary disabled:opacity-50 resize-y"
-                />
+                <textarea value={previewText} onChange={(e) => setPreviewText(e.target.value)}
+                  placeholder="The intro paragraph..." rows={3} disabled={isPublished}
+                  className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary disabled:opacity-50 resize-y" />
               </div>
               <div>
                 <label className="block text-xs text-muted-foreground mb-1">Week Ahead Text (Slide 12)</label>
-                <textarea
-                  value={weekAheadText}
-                  onChange={(e) => setWeekAheadText(e.target.value)}
-                  placeholder="Closing paragraph..."
-                  rows={3}
-                  disabled={isPublished}
-                  className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary disabled:opacity-50 resize-y"
-                />
+                <textarea value={weekAheadText} onChange={(e) => setWeekAheadText(e.target.value)}
+                  placeholder="Closing paragraph..." rows={3} disabled={isPublished}
+                  className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary disabled:opacity-50 resize-y" />
               </div>
             </div>
           )}
@@ -521,28 +558,12 @@ export default function RankingsTab() {
       <div className="w-[60%] flex flex-col min-w-0 overflow-hidden">
         {selectedItem && !showingSpecialSlide ? (
           <>
-            {/* Team header */}
-            <div className="flex items-center gap-3 mb-4 shrink-0">
-              <span className="text-3xl font-bold text-primary">{selectedItem.ranking}</span>
-              <div className="min-w-0">
-                <div className="font-semibold truncate">{selectedItem.team_name}</div>
-                <div className="text-xs text-muted-foreground">{selectedItem.coach}</div>
-              </div>
-              <span className={cn('text-sm font-medium ml-2', movementColor(selectedItem.ranking, selectedItem.previous_ranking))}>
-                {movementLabel(selectedItem.ranking, selectedItem.previous_ranking)}
-              </span>
-              {selectedItem.snapshot && (
-                <div className="ml-auto flex gap-4 text-xs text-muted-foreground">
-                  <span>{Math.round(selectedItem.snapshot.pts_for)} pts</span>
-                  <span>{selectedItem.snapshot.wins}W-{selectedItem.snapshot.losses}L</span>
-                  <span>{ordinal(selectedItem.snapshot.league_rank || 0)}</span>
-                </div>
-              )}
-            </div>
-
             {/* Writeup textarea */}
             <div className="mb-4 shrink-0">
-              <label className="block text-xs text-muted-foreground mb-1 font-semibold uppercase tracking-wide">Writeup</label>
+              <div className="flex items-center justify-between mb-1">
+                <label className="text-xs text-muted-foreground font-semibold uppercase tracking-wide">Writeup</label>
+                <span className="text-xs text-muted-foreground">{selectedItem.writeup.length} chars</span>
+              </div>
               <textarea
                 value={selectedItem.writeup}
                 onChange={(e) => updateWriteup(selectedItem.team_id, e.target.value)}
@@ -554,56 +575,23 @@ export default function RankingsTab() {
               <p className="text-xs text-muted-foreground mt-1">Tip: Start a line with <code className="bg-muted px-1 rounded">##</code> to create a section header on the slide</p>
             </div>
 
-            {/* Slide preview */}
+            {/* Live slide preview */}
             <div className="flex-1 flex flex-col min-h-0">
-              <div className="flex items-center justify-between mb-2 shrink-0">
-                <label className="text-xs text-muted-foreground font-semibold uppercase tracking-wide">Slide Preview</label>
-                <button
-                  onClick={() => generateSlidePreview(selectedItem.ranking)}
-                  disabled={selectedItem.slideLoading}
-                  className="text-xs text-primary hover:underline font-medium disabled:opacity-50"
-                >
-                  {selectedItem.slideLoading ? 'Generating...' : 'Generate Slide'}
-                </button>
-              </div>
-              <div
-                className="flex-1 bg-gray-100 rounded-lg overflow-hidden relative cursor-pointer group border border-border"
-                onClick={() => currentSlideUrl && setEnlargedSlide(currentSlideUrl)}
-              >
-                {currentSlideLoading && (
-                  <div className="absolute inset-0 flex items-center justify-center bg-white/80 z-10">
-                    <div className="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin" />
-                  </div>
-                )}
-                {currentSlideUrl ? (
-                  <>
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src={currentSlideUrl} alt={`Slide for ${selectedItem.team_name}`} className="w-full h-full object-contain" />
-                    <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                      <Maximize2 size={24} className="text-white" />
-                    </div>
-                  </>
-                ) : (
-                  <div className="w-full h-full flex items-center justify-center text-muted-foreground text-sm">
-                    Click &quot;Generate Slide&quot; to preview
-                  </div>
-                )}
+              <label className="text-xs text-muted-foreground font-semibold uppercase tracking-wide mb-2 shrink-0">Slide Preview</label>
+              <div className="flex-1 flex items-center justify-center bg-[#080C18] rounded-lg border border-border overflow-hidden cursor-pointer"
+                onClick={() => setEnlargedSlide('live-preview')}>
+                <div style={{ transform: 'scale(0.75)', transformOrigin: 'center center' }}>
+                  <SlidePreview data={buildPreviewData(selectedItem)} />
+                </div>
               </div>
             </div>
           </>
         ) : showingSpecialSlide ? (
           <>
-            {/* Special slide header */}
-            <div className="flex items-center gap-3 mb-4 shrink-0">
-              <span className="text-lg font-bold">
-                {selectedSpecialSlide === 'preview' ? 'Slide 1: Preview' : 'Slide 12: Summary'}
-              </span>
-            </div>
-
-            {/* Relevant text field */}
+            {/* Special slide: text field + API-generated image */}
             <div className="mb-4 shrink-0">
-              <label className="block text-xs text-muted-foreground mb-1 font-semibold uppercase tracking-wide">
-                {selectedSpecialSlide === 'preview' ? 'Preview Text' : 'Week Ahead Text'}
+              <label className="text-xs text-muted-foreground font-semibold uppercase tracking-wide mb-1 block">
+                {selectedSpecialSlide === 'preview' ? 'Preview Text (Slide 1)' : 'Week Ahead Text (Slide 12)'}
               </label>
               <textarea
                 value={selectedSpecialSlide === 'preview' ? previewText : weekAheadText}
@@ -614,33 +602,27 @@ export default function RankingsTab() {
                 className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary disabled:opacity-50 resize-y"
               />
             </div>
-
-            {/* Slide preview */}
             <div className="flex-1 flex flex-col min-h-0">
               <div className="flex items-center justify-between mb-2 shrink-0">
                 <label className="text-xs text-muted-foreground font-semibold uppercase tracking-wide">Slide Preview</label>
-                <button
-                  onClick={() => generateSpecialSlide(selectedSpecialSlide!)}
-                  disabled={currentSlideLoading}
-                  className="text-xs text-primary hover:underline font-medium disabled:opacity-50"
-                >
-                  {currentSlideLoading ? 'Generating...' : 'Generate Slide'}
+                <button onClick={() => generateSpecialSlide(selectedSpecialSlide!)}
+                  disabled={specialSlideLoading[selectedSpecialSlide!]}
+                  className="text-xs text-primary hover:underline font-medium disabled:opacity-50">
+                  {specialSlideLoading[selectedSpecialSlide!] ? 'Generating...' : 'Generate Slide'}
                 </button>
               </div>
-              <div
-                className="flex-1 bg-gray-100 rounded-lg overflow-hidden relative cursor-pointer group border border-border"
-                onClick={() => currentSlideUrl && setEnlargedSlide(currentSlideUrl)}
-              >
-                {currentSlideLoading && (
+              <div className="flex-1 bg-gray-100 rounded-lg overflow-hidden relative border border-border"
+                onClick={() => specialSlideUrls[selectedSpecialSlide!] && setEnlargedSlide(specialSlideUrls[selectedSpecialSlide!]!)}>
+                {specialSlideLoading[selectedSpecialSlide!] && (
                   <div className="absolute inset-0 flex items-center justify-center bg-white/80 z-10">
                     <div className="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin" />
                   </div>
                 )}
-                {currentSlideUrl ? (
+                {specialSlideUrls[selectedSpecialSlide!] ? (
                   <>
                     {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src={currentSlideUrl} alt="Special slide" className="w-full h-full object-contain" />
-                    <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                    <img src={specialSlideUrls[selectedSpecialSlide!]!} alt="Special slide" className="w-full h-full object-contain" />
+                    <div className="absolute inset-0 bg-black/40 opacity-0 hover:opacity-100 transition-opacity flex items-center justify-center cursor-pointer">
                       <Maximize2 size={24} className="text-white" />
                     </div>
                   </>
@@ -662,71 +644,45 @@ export default function RankingsTab() {
   );
 }
 
-function SortableRankRow({
-  item,
-  isSelected,
-  onSelect,
-  disabled,
-}: {
-  item: RankingItem;
-  isSelected: boolean;
-  onSelect: () => void;
-  disabled: boolean;
-}) {
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
-    id: item.id, disabled,
-  });
+// ── Sortable row ──
 
+function SortableRankRow({
+  item, isSelected, onSelect, disabled,
+}: {
+  item: RankingItem; isSelected: boolean; onSelect: () => void; disabled: boolean;
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: item.id, disabled });
   const style = { transform: CSS.Transform.toString(transform), transition };
   const movement = movementLabel(item.ranking, item.previous_ranking);
   const moveColor = movementColor(item.ranking, item.previous_ranking);
-
   const hasWriteup = item.writeup.trim().length > 0;
+  const theme = getRankTheme(item.ranking);
 
   return (
-    <div
-      ref={setNodeRef}
-      style={style}
-      onClick={onSelect}
+    <div ref={setNodeRef} style={style} onClick={onSelect}
       className={cn(
         'flex items-center gap-3 px-3 py-2.5 rounded-lg border cursor-pointer transition-colors',
-        isSelected
-          ? 'border-primary bg-primary/5'
-          : 'border-border bg-card hover:bg-muted/50',
+        isSelected ? 'border-primary bg-primary/5' : 'border-border bg-card hover:bg-muted/50',
         isDragging && 'opacity-50 z-50 shadow-lg'
-      )}
-    >
-      {/* Drag handle */}
-      <div
-        {...attributes}
-        {...listeners}
+      )}>
+      <div {...attributes} {...listeners}
         className={cn('cursor-grab active:cursor-grabbing shrink-0', disabled && 'cursor-default')}
-        onClick={(e) => e.stopPropagation()}
-      >
+        onClick={(e) => e.stopPropagation()}>
         <GripVertical size={16} className="text-gray-400" />
       </div>
-
-      {/* Rank */}
-      <span className="text-lg font-bold text-primary w-7 text-center shrink-0">{item.ranking}</span>
-
-      {/* Movement */}
+      <span className="text-lg font-bold w-7 text-center shrink-0" style={{ color: theme.primary }}>{item.ranking}</span>
       <span className={cn('text-xs font-medium w-8 text-center shrink-0', moveColor)}>{movement}</span>
-
-      {/* Team name + coach */}
       <div className="flex-1 min-w-0">
         <div className="font-medium text-sm truncate">{item.team_name}</div>
         <div className="text-xs text-muted-foreground truncate">{item.coach}</div>
       </div>
-
-      {/* Quick stats */}
       {item.snapshot && (
         <div className="text-xs text-muted-foreground shrink-0 text-right">
           <div>{item.snapshot.wins}W-{item.snapshot.losses}L</div>
         </div>
       )}
-
-      {/* Writeup indicator */}
-      <div className={cn('w-2 h-2 rounded-full shrink-0', hasWriteup ? 'bg-green-500' : 'bg-gray-300')} title={hasWriteup ? 'Writeup done' : 'No writeup'} />
+      <div className={cn('w-2 h-2 rounded-full shrink-0', hasWriteup ? 'bg-green-500' : 'bg-gray-300')}
+        title={hasWriteup ? 'Writeup done' : 'No writeup'} />
     </div>
   );
 }
