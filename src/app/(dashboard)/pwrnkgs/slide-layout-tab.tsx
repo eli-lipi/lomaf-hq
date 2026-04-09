@@ -13,7 +13,6 @@ interface WriteupSection {
 export default function SlideLayoutTab() {
   const [round, setRound] = useState<PwrnkgsRound | null>(null);
   const [latestRound, setLatestRound] = useState<number | null>(null);
-  const [theme, setTheme] = useState('');
   const [previewText, setPreviewText] = useState('');
   const [weekAheadText, setWeekAheadText] = useState('');
   const [sections, setSections] = useState<WriteupSection[]>([]);
@@ -56,7 +55,6 @@ export default function SlideLayoutTab() {
 
       if (!roundData) return;
       setRound(roundData as PwrnkgsRound);
-      setTheme(roundData.theme || '');
       setPreviewText(roundData.preview_text || '');
       setWeekAheadText(roundData.week_ahead_text || '');
 
@@ -84,26 +82,26 @@ export default function SlideLayoutTab() {
     setAutoSaveStatus('saving');
     try {
       await supabase.from('pwrnkgs_rounds')
-        .update({ theme: theme || null, preview_text: previewText || null, week_ahead_text: weekAheadText || null })
+        .update({ preview_text: previewText || null, week_ahead_text: weekAheadText || null })
         .eq('id', round.id);
       setAutoSaveStatus('saved');
       setTimeout(() => setAutoSaveStatus('idle'), 2000);
     } catch { setAutoSaveStatus('idle'); }
-  }, [round, theme, previewText, weekAheadText]);
+  }, [round, previewText, weekAheadText]);
 
   useEffect(() => {
     if (!dataLoaded.current) return;
     if (autoSaveTimer.current) clearTimeout(autoSaveTimer.current);
     autoSaveTimer.current = setTimeout(() => doAutoSave(), 3000);
     return () => { if (autoSaveTimer.current) clearTimeout(autoSaveTimer.current); };
-  }, [theme, previewText, weekAheadText, doAutoSave]);
+  }, [previewText, weekAheadText, doAutoSave]);
 
   // Generate slide previews
   const generateSlide = async (type: 'preview' | 'summary') => {
     if (!round) return;
     // Save first
     await supabase.from('pwrnkgs_rounds')
-      .update({ theme: theme || null, preview_text: previewText || null, week_ahead_text: weekAheadText || null })
+      .update({ preview_text: previewText || null, week_ahead_text: weekAheadText || null })
       .eq('id', round.id);
 
     const slideIndex = type === 'preview' ? 0 : 11;
@@ -171,15 +169,6 @@ export default function SlideLayoutTab() {
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Left column: Fields */}
         <div className="space-y-6">
-          {/* Theme */}
-          <div className="bg-card rounded-lg border border-border shadow-sm p-5">
-            <label className="block text-xs text-muted-foreground mb-2 font-semibold uppercase tracking-wide">Week&apos;s Theme</label>
-            <input type="text" value={theme} onChange={(e) => setTheme(e.target.value)}
-              placeholder='e.g., "What Went Right? What Went Wrong?"' disabled={isPublished}
-              className="w-full bg-background border border-border rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary disabled:opacity-50" />
-            <p className="text-xs text-muted-foreground mt-2">Optional. Sets the narrative frame for this week&apos;s rankings.</p>
-          </div>
-
           {/* Preview Text (Slide 1) */}
           <div className="bg-card rounded-lg border border-border shadow-sm p-5">
             <div className="flex items-center justify-between mb-2">
