@@ -114,7 +114,7 @@ export default function DraftTab() {
 
       const enriched: DraftPickEnriched[] = draftPicks.map(pick => {
         const stats = playerStats[pick.player_id];
-        const avg = stats && stats.count >= 2 ? Math.round(stats.totalPts / stats.count) : null;
+        const avg = stats && stats.count >= 1 ? Math.round(stats.totalPts / stats.count) : null;
         const total = stats ? Math.round(stats.totalPts) : null;
         const rounds = stats?.count || 0;
         const posGroup = getPosGroup(pick.position);
@@ -122,14 +122,18 @@ export default function DraftTab() {
         const posAvgDiff = avg !== null ? avg - benchmark.avg : null;
 
         let rating: Rating = 'unknown';
-        if (avg !== null && rounds >= 2) {
+        if (avg !== null && rounds >= 1) {
           const isTopPick = pick.overall_pick <= 20;
           const isTop10 = pick.overall_pick <= 10;
 
-          if (avg >= benchmark.elite) {
-            rating = isTopPick ? 'fair' : 'steal';
-          } else if (avg >= benchmark.good) {
-            rating = isTopPick ? 'fair' : 'value';
+          // Tiered benchmarks: top-10 picks need higher scores, top-20 slightly higher
+          const eliteThresh = isTop10 ? benchmark.elite + 15 : isTopPick ? benchmark.elite + 10 : benchmark.elite;
+          const goodThresh = isTop10 ? benchmark.good + 15 : isTopPick ? benchmark.good + 10 : benchmark.good;
+
+          if (avg >= eliteThresh) {
+            rating = 'steal';
+          } else if (avg >= goodThresh) {
+            rating = 'value';
           } else if (avg >= benchmark.avg) {
             rating = 'fair';
           } else {
@@ -218,7 +222,7 @@ export default function DraftTab() {
             <strong className={posColors[pos]}>{pos}</strong> Elite {b.elite}+ / Good {b.good}+ / Avg {b.avg}+
           </span>
         ))}
-        <span className="block mt-1">Top-20 picks can&apos;t be steals — elite output is expected at that range.</span>
+        <span className="block mt-1">Top-10 picks need +15 above benchmarks, top-20 need +10 to rate as steal/value.</span>
       </div>
 
       {/* === DRAFT BOARD === */}
