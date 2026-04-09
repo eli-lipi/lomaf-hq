@@ -57,9 +57,8 @@ interface PwrnkgsRanking {
   id: string
   round_number: number
   ranking: number
+  previous_ranking: number | null
   team_name: string
-  movement: number | null
-  score: number | null
   [key: string]: unknown
 }
 
@@ -362,8 +361,7 @@ export default function PreviousWeeksTab() {
                     <tr className="border-b border-border text-muted-foreground">
                       <th className="text-left py-2 pr-4 font-medium">Rank</th>
                       <th className="text-left py-2 pr-4 font-medium">Team</th>
-                      <th className="text-left py-2 pr-4 font-medium">Movement</th>
-                      <th className="text-left py-2 font-medium">Score</th>
+                      <th className="text-left py-2 font-medium">Movement</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -385,10 +383,7 @@ export default function PreviousWeeksTab() {
                           />
                           {r.team_name}
                         </td>
-                        <td className="py-2 pr-4">{movementDisplay(r.movement)}</td>
-                        <td className="py-2 text-muted-foreground">
-                          {r.score !== null ? r.score : '—'}
-                        </td>
+                        <td className="py-2 pr-4">{movementDisplay(r.previous_ranking !== null ? r.previous_ranking - r.ranking : null)}</td>
                       </tr>
                     ))}
                   </tbody>
