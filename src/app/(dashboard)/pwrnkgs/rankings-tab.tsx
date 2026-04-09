@@ -18,7 +18,7 @@ import {
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { GripVertical, Save, Check } from 'lucide-react';
+import { GripVertical, Save, Check, Sparkles } from 'lucide-react';
 import { cn, ordinal, movementLabel, movementColor } from '@/lib/utils';
 import { TEAMS } from '@/lib/constants';
 import { supabase } from '@/lib/supabase';
@@ -46,6 +46,7 @@ export default function RankingsTab() {
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [selectedTeamId, setSelectedTeamId] = useState<number | null>(null);
   const [autoSaveStatus, setAutoSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
+  const [aiDrafting, setAiDrafting] = useState(false);
 
   // Extra data for live preview
   const [sparklineMap, setSparklineMap] = useState<Map<number, { round: string; ranking: number }[]>>(new Map());
@@ -273,6 +274,58 @@ export default function RankingsTab() {
     } finally { setSaving(false); }
   };
 
+  const draftWriteup = async () => {
+    if (!selectedTeamId || !round || !latestRound) return;
+    const item = rankings.find(r => r.team_id === selectedTeamId);
+    if (!item) return;
+
+    if (item.writeup.trim() && !confirm('This will replace the current writeup. Continue?')) return;
+
+    setAiDrafting(true);
+    try {
+      const cd = computedData.get(item.team_id);
+      const savedSections = localStorage.getItem(`lomaf-section-templates-${latestRound}`);
+      let sections: { title: string }[] = [];
+      if (savedSections) try { sections = JSON.parse(savedSections); } catch { /* ignore */ }
+
+      const alreadyWritten = rankings
+        .filter(r => r.team_id !== selectedTeamId && r.writeup.trim().length > 20)
+        .map(r => ({ teamName: r.team_name, writeup: r.writeup }));
+
+      const res = await fetch('/api/ai/writeup-draft', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          roundNumber: latestRound,
+          teamId: item.team_id,
+          ranking: item.ranking,
+          previousRanking: item.previous_ranking,
+          sections,
+          alreadyWritten,
+          scoreThisWeek: cd?.scoreThisWeek,
+          scoreThisWeekRank: cd?.scoreThisWeekRank,
+          seasonTotal: cd?.seasonTotal,
+          seasonTotalRank: cd?.seasonTotalRank,
+          record: cd?.record,
+          ladderPosition: cd?.ladderPosition,
+          luckScore: cd?.luckScore,
+          luckRank: cd?.luckRank,
+          lineRanks: cd?.lineRanks,
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || 'Draft failed');
+      }
+      const data = await res.json();
+      updateWriteup(item.team_id, data.writeup);
+    } catch (err) {
+      setMessage({ type: 'error', text: err instanceof Error ? err.message : 'AI draft failed' });
+    } finally {
+      setAiDrafting(false);
+    }
+  };
+
   if (!latestRound) {
     return (
       <div className="text-center py-12">
@@ -391,7 +444,19 @@ export default function RankingsTab() {
                 disabled={isPublished}
                 className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary disabled:opacity-50 resize-y"
               />
-              <p className="text-xs text-muted-foreground mt-1">Tip: Start a line with <code className="bg-muted px-1 rounded">##</code> to create a section header on the slide</p>
+              <div className="flex items-center justify-between mt-1">
+                <p className="text-xs text-muted-foreground">Tip: Start a line with <code className="bg-muted px-1 rounded">##</code> to create a section header on the slide</p>
+                {!isPublished && (
+                  <button
+                    onClick={draftWriteup}
+                    disabled={aiDrafting}
+                    className="flex items-center gap-1.5 text-xs text-amber-600 hover:text-amber-500 font-medium transition-colors disabled:opacity-50"
+                  >
+                    <Sparkles size={13} />
+                    {aiDrafting ? 'Drafting...' : 'Draft Writeup'}
+                  </button>
+                )}
+              </div>
             </div>
 
             {/* Next/prev navigation */}

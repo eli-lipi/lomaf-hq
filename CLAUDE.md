@@ -23,4 +23,4 @@
 - Use `@supabase/supabase-js` for all DB operations — no Prisma, no raw SQL from the app
 - All carousel images are 1080x1080 rendered via `ImageResponse` from `next/og`
 - CSV parsing happens client-side with PapaParse, then JSON is POSTed to API routes
-- Environment variables: `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+- Environment variables: `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `ANTHROPIC_API_KEY` (server-side only, for AI features)

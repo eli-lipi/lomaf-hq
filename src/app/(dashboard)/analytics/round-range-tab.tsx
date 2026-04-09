@@ -7,6 +7,7 @@ import { fetchResolvedScores } from '@/lib/scores';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell,
 } from 'recharts';
+import InsightsPanel from '@/components/ai/insights-panel';
 
 const LINE_IDS = ['DEF', 'MID', 'FWD', 'RUC', 'UTL'] as const;
 
@@ -421,6 +422,12 @@ export default function RoundRangeTab() {
               </div>
             ))}
           </div>
+          <InsightsPanel
+            roundNumber={toRound}
+            sectionKey={`round_range_${fromRound}_${toRound}`}
+            sectionName={`Round Range (R${fromRound}-R${toRound})`}
+            sectionData={{ insights }}
+          />
         </div>
       )}
     </div>

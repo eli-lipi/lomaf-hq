@@ -8,6 +8,7 @@ import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
   BarChart, Bar, Cell, ReferenceLine,
 } from 'recharts';
+import InsightsPanel from '@/components/ai/insights-panel';
 
 const POSITIONS = [
   { id: 'DEF', label: 'Defence', slots: 5 },
@@ -517,6 +518,16 @@ export default function LineRankingsTab() {
             </div>
           </div>
         </>
+      )}
+
+      {/* AI Insights */}
+      {validRounds.length > 0 && crossPosSummary.length > 0 && (
+        <InsightsPanel
+          roundNumber={validRounds[validRounds.length - 1]}
+          sectionKey="line_rankings"
+          sectionName="Line Position Rankings"
+          sectionData={crossPosSummary.map(t => ({ team: t.team_name, ...t.posAvgs, overallRank: t.overallRank }))}
+        />
       )}
     </div>
   );

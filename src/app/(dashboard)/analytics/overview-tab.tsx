@@ -10,6 +10,7 @@ import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
   BarChart, Bar, Cell, ReferenceLine,
 } from 'recharts';
+import InsightsPanel from '@/components/ai/insights-panel';
 
 // Consistent team colors used across all charts in the portal
 const TEAM_COLOR_MAP: Record<number, string> = {
@@ -78,6 +79,7 @@ export default function OverviewTab() {
   const [pwrnkgRound, setPwrnkgRound] = useState<number | null>(null);
   const [highlightTeam, setHighlightTeam] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [latestRound, setLatestRound] = useState<number>(0);
 
   useEffect(() => { loadData(); }, []);
 
@@ -85,6 +87,7 @@ export default function OverviewTab() {
     try {
       // Use resolved scores (manual override > matchup CSV > lineup sum)
       const { teamRoundScores, validRounds } = await fetchResolvedScores();
+      if (validRounds.length > 0) setLatestRound(validRounds[validRounds.length - 1]);
 
       const { data: snapshots } = await supabase
         .from('team_snapshots')
@@ -459,6 +462,14 @@ export default function OverviewTab() {
               </div>
             ))}
           </div>
+          {latestRound > 0 && (
+            <InsightsPanel
+              roundNumber={latestRound}
+              sectionKey="overview_standings"
+              sectionName="League Standings & Scoring Trends"
+              sectionData={{ standings, scoringTrends: scoringTrends.slice(-3) }}
+            />
+          )}
         </div>
       )}
     </div>

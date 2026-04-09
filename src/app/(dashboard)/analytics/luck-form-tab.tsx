@@ -7,6 +7,7 @@ import { formatScore, ordinal } from '@/lib/utils';
 import type { TeamSnapshot } from '@/lib/types';
 import { fetchResolvedScores } from '@/lib/scores';
 import { cn } from '@/lib/utils';
+import InsightsPanel from '@/components/ai/insights-panel';
 
 const TEAM_COLOR_MAP: Record<number, string> = {
   3194002: '#1A56DB', 3194005: '#DC2626', 3194009: '#16A34A', 3194003: '#F59E0B',
@@ -443,6 +444,14 @@ export default function LuckFormTab() {
               </div>
             ))}
           </div>
+          {luckRounds.length > 0 && (
+            <InsightsPanel
+              roundNumber={luckRounds[luckRounds.length - 1]}
+              sectionKey="luck_form"
+              sectionName="Luck & Form Analysis"
+              sectionData={{ insights }}
+            />
+          )}
         </div>
       )}
     </div>

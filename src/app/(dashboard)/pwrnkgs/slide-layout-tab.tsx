@@ -6,6 +6,7 @@ import { supabase } from '@/lib/supabase';
 import { cn } from '@/lib/utils';
 import type { PwrnkgsRound } from '@/lib/types';
 import { getWorkingRound } from '@/lib/get-working-round';
+import IntelligenceBrief from '@/components/ai/intelligence-brief';
 
 interface WriteupSection {
   title: string;
@@ -226,8 +227,11 @@ export default function SlideLayoutTab() {
           </div>
         </div>
 
-        {/* Right column: Slide previews */}
+        {/* Right column: AI Brief + Slide previews */}
         <div className="space-y-6">
+          {/* Intelligence Brief */}
+          {!isPublished && <IntelligenceBrief roundNumber={latestRound} />}
+
           {/* Preview slide */}
           <div className="bg-card rounded-lg border border-border shadow-sm p-5">
             <label className="block text-xs text-muted-foreground mb-3 font-semibold uppercase tracking-wide">Slide 1 Preview</label>
