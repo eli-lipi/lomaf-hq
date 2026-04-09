@@ -76,12 +76,30 @@ export default function PreviewPublishTab() {
 
     try {
       for (let i = 0; i < 12; i++) {
-        const res = await fetch(`/api/carousel/slide/${i}?round=${roundNumber}`);
-        if (!res.ok) throw new Error(`Failed to generate slide ${i + 1}`);
-        const blob = await res.blob();
-        newSlides[i] = URL.createObjectURL(blob);
-        setSlides([...newSlides]);
-        setProgress(i + 1);
+        try {
+          const res = await fetch(`/api/carousel/slide/${i}?round=${roundNumber}`);
+          if (!res.ok) {
+            let errMsg = `Slide ${i + 1}: HTTP ${res.status}`;
+            try { const body = await res.json(); errMsg += ` — ${body.error || JSON.stringify(body)}`; } catch { /* not JSON */ }
+            throw new Error(errMsg);
+          }
+          const contentType = res.headers.get('content-type') || '';
+          if (!contentType.includes('image')) {
+            throw new Error(`Slide ${i + 1}: Expected image, got ${contentType}`);
+          }
+          const blob = await res.blob();
+          newSlides[i] = URL.createObjectURL(blob);
+          setSlides([...newSlides]);
+          setProgress(i + 1);
+        } catch (slideErr) {
+          console.error(`Failed to generate slide ${i}:`, slideErr);
+          // Continue generating remaining slides even if one fails
+          setError((prev) => {
+            const msg = slideErr instanceof Error ? slideErr.message : `Slide ${i + 1} failed`;
+            return prev ? `${prev}\n${msg}` : msg;
+          });
+          setProgress(i + 1);
+        }
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Generation failed');
@@ -206,7 +224,12 @@ export default function PreviewPublishTab() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Left: Slide gallery (2/3) */}
         <div className="lg:col-span-2">
-          <h3 className="text-sm font-semibold mb-3">Carousel Gallery</h3>
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-sm font-semibold">Carousel Gallery</h3>
+            {slides.every((s) => s === null) && !generating && (
+              <span className="text-xs text-muted-foreground">Click &quot;Generate All&quot; to render slides</span>
+            )}
+          </div>
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
             {Array.from({ length: 12 }).map((_, i) => (
               <div key={i}
@@ -273,7 +296,7 @@ export default function PreviewPublishTab() {
       </div>
 
       {error && (
-        <div className="mt-4 p-3 rounded-lg bg-red-50 text-red-700 border border-red-200 text-sm">{error}</div>
+        <div className="mt-4 p-3 rounded-lg bg-red-50 text-red-700 border border-red-200 text-sm whitespace-pre-wrap">{error}</div>
       )}
     </div>
   );
