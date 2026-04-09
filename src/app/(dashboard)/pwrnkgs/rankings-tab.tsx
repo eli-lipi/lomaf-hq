@@ -18,7 +18,7 @@ import {
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { GripVertical, Save, Send, X, Maximize2, Check, ChevronDown, ChevronUp } from 'lucide-react';
+import { GripVertical, Save, Check } from 'lucide-react';
 import { cn, ordinal, movementLabel, movementColor } from '@/lib/utils';
 import { TEAMS } from '@/lib/constants';
 import { supabase } from '@/lib/supabase';
@@ -39,27 +39,20 @@ interface RankingItem {
 export default function RankingsTab() {
   const [round, setRound] = useState<PwrnkgsRound | null>(null);
   const [rankings, setRankings] = useState<RankingItem[]>([]);
-  const [theme, setTheme] = useState('');
-  const [previewText, setPreviewText] = useState('');
-  const [weekAheadText, setWeekAheadText] = useState('');
   const [saving, setSaving] = useState(false);
-  const [publishing, setPublishing] = useState(false);
   const [latestRound, setLatestRound] = useState<number | null>(null);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
-  const [enlargedSlide, setEnlargedSlide] = useState<string | null>(null);
   const [selectedTeamId, setSelectedTeamId] = useState<number | null>(null);
-  const [selectedSpecialSlide, setSelectedSpecialSlide] = useState<'preview' | 'summary' | null>(null);
   const [autoSaveStatus, setAutoSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
-  const [roundFieldsOpen, setRoundFieldsOpen] = useState(true);
 
   // Extra data for live preview
   const [sparklineMap, setSparklineMap] = useState<Map<number, { round: string; ranking: number }[]>>(new Map());
   const [luckMap, setLuckMap] = useState<Map<number, { score: number; rank: number }>>(new Map());
   const [coachPhotoMap, setCoachPhotoMap] = useState<Map<string, string>>(new Map());
 
-  // Special slide image previews (generated via API)
-  const [specialSlideUrls, setSpecialSlideUrls] = useState<{ preview?: string; summary?: string }>({});
-  const [specialSlideLoading, setSpecialSlideLoading] = useState<{ preview?: boolean; summary?: boolean }>({});
+  // Preview scaling
+  const previewContainerRef = useRef<HTMLDivElement>(null);
+  const [previewScale, setPreviewScale] = useState(1);
 
   const autoSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const dataLoaded = useRef(false);
@@ -68,6 +61,19 @@ export default function RankingsTab() {
     useSensor(PointerSensor),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
   );
+
+  useEffect(() => {
+    const el = previewContainerRef.current;
+    if (!el) return;
+    const observer = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const w = entry.contentRect.width;
+        setPreviewScale(Math.min(w / 540, 1));
+      }
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
 
   // Load data
   useEffect(() => {
@@ -99,9 +105,6 @@ export default function RankingsTab() {
 
       if (!roundData) return;
       setRound(roundData as PwrnkgsRound);
-      setTheme(roundData.theme || '');
-      setPreviewText(roundData.preview_text || '');
-      setWeekAheadText(roundData.week_ahead_text || '');
 
       const { data: existingRankings } = await supabase
         .from('pwrnkgs_rankings')
@@ -169,6 +172,24 @@ export default function RankingsTab() {
           writeup: '',
           snapshot: snapshotMap.get(team.team_id),
         }));
+      }
+
+      // Pre-populate writeups with section templates
+      const savedSections = localStorage.getItem(`lomaf-section-templates-${currentRound}`);
+      if (savedSections) {
+        try {
+          const sectionTemplates = JSON.parse(savedSections) as { title: string }[];
+          const templateText = sectionTemplates
+            .filter(s => s.title.trim())
+            .map(s => `## ${s.title}\n\n`)
+            .join('');
+          if (templateText) {
+            items = items.map(item => ({
+              ...item,
+              writeup: item.writeup || templateText,
+            }));
+          }
+        } catch { /* ignore */ }
       }
 
       setRankings(items);
@@ -251,9 +272,6 @@ export default function RankingsTab() {
     if (!round || round.status === 'published') return;
     setAutoSaveStatus('saving');
     try {
-      await supabase.from('pwrnkgs_rounds')
-        .update({ theme: theme || null, preview_text: previewText || null, week_ahead_text: weekAheadText || null })
-        .eq('id', round.id);
       const rankingRows = rankings.map((r) => ({
         round_id: round.id, round_number: round.round_number,
         team_id: r.team_id, team_name: r.team_name, ranking: r.ranking,
@@ -265,7 +283,7 @@ export default function RankingsTab() {
     } catch {
       setAutoSaveStatus('idle');
     }
-  }, [round, rankings, theme, previewText, weekAheadText]);
+  }, [round, rankings]);
 
   const triggerAutoSave = useCallback(() => {
     if (!dataLoaded.current) return;
@@ -276,36 +294,7 @@ export default function RankingsTab() {
   useEffect(() => {
     triggerAutoSave();
     return () => { if (autoSaveTimer.current) clearTimeout(autoSaveTimer.current); };
-  }, [rankings, theme, previewText, weekAheadText, triggerAutoSave]);
-
-  const generateSpecialSlide = useCallback(async (type: 'preview' | 'summary') => {
-    if (!round) return;
-    const slideIndex = type === 'preview' ? 0 : 11;
-    // Save first
-    await supabase.from('pwrnkgs_rounds')
-      .update({ theme: theme || null, preview_text: previewText || null, week_ahead_text: weekAheadText || null })
-      .eq('id', round.id);
-    const rankingRows = rankings.map((r) => ({
-      round_id: round.id, round_number: round.round_number,
-      team_id: r.team_id, team_name: r.team_name, ranking: r.ranking,
-      previous_ranking: r.previous_ranking, writeup: r.writeup,
-    }));
-    await supabase.from('pwrnkgs_rankings').upsert(rankingRows, { onConflict: 'round_number,team_id' });
-
-    setSpecialSlideLoading(prev => ({ ...prev, [type]: true }));
-    try {
-      const res = await fetch(`/api/carousel/slide/${slideIndex}?round=${round.round_number}`);
-      if (res.ok) {
-        const blob = await res.blob();
-        const url = URL.createObjectURL(blob);
-        setSpecialSlideUrls(prev => {
-          if (prev[type]) URL.revokeObjectURL(prev[type]!);
-          return { ...prev, [type]: url };
-        });
-      }
-    } catch (err) { console.error('Slide gen failed:', err); }
-    finally { setSpecialSlideLoading(prev => ({ ...prev, [type]: false })); }
-  }, [round, rankings, theme, previewText, weekAheadText]);
+  }, [rankings, triggerAutoSave]);
 
   const handleDragEnd = (event: DragEndEvent) => {
     const { active, over } = event;
@@ -327,9 +316,6 @@ export default function RankingsTab() {
     setSaving(true);
     setMessage(null);
     try {
-      await supabase.from('pwrnkgs_rounds')
-        .update({ theme: theme || null, preview_text: previewText || null, week_ahead_text: weekAheadText || null })
-        .eq('id', round.id);
       const rankingRows = rankings.map((r) => ({
         round_id: round.id, round_number: round.round_number,
         team_id: r.team_id, team_name: r.team_name, ranking: r.ranking,
@@ -343,22 +329,6 @@ export default function RankingsTab() {
     } finally { setSaving(false); }
   };
 
-  const publish = async () => {
-    if (!round) return;
-    setPublishing(true);
-    setMessage(null);
-    try {
-      await save();
-      await supabase.from('pwrnkgs_rounds')
-        .update({ status: 'published', published_at: new Date().toISOString() })
-        .eq('id', round.id);
-      setRound((prev) => (prev ? { ...prev, status: 'published' } : prev));
-      setMessage({ type: 'success', text: 'Published!' });
-    } catch (err) {
-      setMessage({ type: 'error', text: err instanceof Error ? err.message : 'Publish failed' });
-    } finally { setPublishing(false); }
-  };
-
   if (!latestRound) {
     return (
       <div className="text-center py-12">
@@ -369,7 +339,14 @@ export default function RankingsTab() {
 
   const isPublished = round?.status === 'published';
   const selectedItem = selectedTeamId ? rankings.find((r) => r.team_id === selectedTeamId) : null;
-  const showingSpecialSlide = selectedSpecialSlide !== null;
+
+  const currentIndex = rankings.findIndex(r => r.team_id === selectedTeamId);
+  const navigateTeam = (delta: number) => {
+    const newIndex = currentIndex + delta;
+    if (newIndex >= 0 && newIndex < rankings.length) {
+      setSelectedTeamId(rankings[newIndex].team_id);
+    }
+  };
 
   // Build live preview data for the selected team
   const buildPreviewData = (item: RankingItem): SlidePreviewData => {
@@ -428,19 +405,6 @@ export default function RankingsTab() {
 
   return (
     <div className="flex gap-6 h-[calc(100vh-200px)] min-h-[600px]">
-      {/* Enlarged slide modal */}
-      {enlargedSlide && (
-        <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-8" onClick={() => setEnlargedSlide(null)}>
-          <div className="relative max-w-[80vh] max-h-[80vh]">
-            <button className="absolute -top-10 right-0 text-white hover:text-gray-300" onClick={() => setEnlargedSlide(null)}>
-              <X size={24} />
-            </button>
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={enlargedSlide} alt="Slide" className="w-full h-full object-contain rounded-lg" />
-          </div>
-        </div>
-      )}
-
       {/* ==================== LEFT PANEL (40%) ==================== */}
       <div className="w-[40%] flex flex-col min-w-0 overflow-hidden">
         {/* Header */}
@@ -455,65 +419,6 @@ export default function RankingsTab() {
           </div>
         </div>
 
-        {/* Collapsible round fields */}
-        <div className="bg-card rounded-lg border border-border shadow-sm mb-4 shrink-0">
-          <button
-            onClick={() => setRoundFieldsOpen(!roundFieldsOpen)}
-            className="w-full flex items-center justify-between px-4 py-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground hover:text-foreground"
-          >
-            Round Details
-            {roundFieldsOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-          </button>
-          {roundFieldsOpen && (
-            <div className="px-4 pb-4 space-y-3">
-              <div>
-                <label className="block text-xs text-muted-foreground mb-1">Theme</label>
-                <input type="text" value={theme} onChange={(e) => setTheme(e.target.value)}
-                  placeholder='e.g., "What Went Right? What Went Wrong?"' disabled={isPublished}
-                  className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary disabled:opacity-50" />
-              </div>
-              <div>
-                <label className="block text-xs text-muted-foreground mb-1">Preview Text (Slide 1)</label>
-                <textarea value={previewText} onChange={(e) => setPreviewText(e.target.value)}
-                  placeholder="The intro paragraph..." rows={3} disabled={isPublished}
-                  className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary disabled:opacity-50 resize-y" />
-              </div>
-              <div>
-                <label className="block text-xs text-muted-foreground mb-1">Week Ahead Text (Slide 12)</label>
-                <textarea value={weekAheadText} onChange={(e) => setWeekAheadText(e.target.value)}
-                  placeholder="Closing paragraph..." rows={3} disabled={isPublished}
-                  className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary disabled:opacity-50 resize-y" />
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* Special slides row */}
-        <div className="flex gap-2 mb-3 shrink-0">
-          <button
-            onClick={() => { setSelectedSpecialSlide('preview'); setSelectedTeamId(null); }}
-            className={cn(
-              'flex-1 text-xs font-medium px-3 py-2 rounded-lg border transition-colors',
-              selectedSpecialSlide === 'preview'
-                ? 'border-primary bg-primary/10 text-primary'
-                : 'border-border bg-card text-muted-foreground hover:text-foreground'
-            )}
-          >
-            Slide 1: Preview
-          </button>
-          <button
-            onClick={() => { setSelectedSpecialSlide('summary'); setSelectedTeamId(null); }}
-            className={cn(
-              'flex-1 text-xs font-medium px-3 py-2 rounded-lg border transition-colors',
-              selectedSpecialSlide === 'summary'
-                ? 'border-primary bg-primary/10 text-primary'
-                : 'border-border bg-card text-muted-foreground hover:text-foreground'
-            )}
-          >
-            Slide 12: Summary
-          </button>
-        </div>
-
         {/* Draggable rankings list */}
         <div className="flex-1 overflow-y-auto pr-1">
           <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
@@ -523,8 +428,8 @@ export default function RankingsTab() {
                   <SortableRankRow
                     key={item.id}
                     item={item}
-                    isSelected={selectedTeamId === item.team_id && !showingSpecialSlide}
-                    onSelect={() => { setSelectedTeamId(item.team_id); setSelectedSpecialSlide(null); }}
+                    isSelected={selectedTeamId === item.team_id}
+                    onSelect={() => { setSelectedTeamId(item.team_id); }}
                     disabled={isPublished}
                   />
                 ))}
@@ -540,10 +445,6 @@ export default function RankingsTab() {
               className="flex items-center gap-2 px-5 py-2 rounded-lg bg-card border border-border text-sm font-medium hover:bg-muted transition-colors disabled:opacity-50 shadow-sm">
               <Save size={16} /> {saving ? 'Saving...' : 'Save Draft'}
             </button>
-            <button onClick={publish} disabled={publishing}
-              className="flex items-center gap-2 px-5 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors disabled:opacity-50 shadow-sm">
-              <Send size={16} /> {publishing ? 'Publishing...' : 'Publish'}
-            </button>
           </div>
         )}
 
@@ -556,7 +457,7 @@ export default function RankingsTab() {
 
       {/* ==================== RIGHT PANEL (60%) ==================== */}
       <div className="w-[60%] flex flex-col min-w-0 overflow-hidden">
-        {selectedItem && !showingSpecialSlide ? (
+        {selectedItem ? (
           <>
             {/* Writeup textarea */}
             <div className="mb-4 shrink-0">
@@ -575,68 +476,28 @@ export default function RankingsTab() {
               <p className="text-xs text-muted-foreground mt-1">Tip: Start a line with <code className="bg-muted px-1 rounded">##</code> to create a section header on the slide</p>
             </div>
 
+            {/* Next/prev navigation */}
+            <div className="flex items-center justify-between mb-2 shrink-0">
+              <button disabled={currentIndex <= 0} onClick={() => navigateTeam(-1)} className="text-xs text-primary hover:underline disabled:opacity-30">&larr; Previous Team</button>
+              <span className="text-xs text-muted-foreground">{selectedItem.ranking} of {rankings.length}</span>
+              <button disabled={currentIndex >= rankings.length - 1} onClick={() => navigateTeam(1)} className="text-xs text-primary hover:underline disabled:opacity-30">Next Team &rarr;</button>
+            </div>
+
             {/* Live slide preview */}
             <div className="flex-1 flex flex-col min-h-0">
               <label className="text-xs text-muted-foreground font-semibold uppercase tracking-wide mb-2 shrink-0">Slide Preview</label>
-              <div className="flex-1 flex items-center justify-center bg-[#080C18] rounded-lg border border-border overflow-hidden cursor-pointer"
-                onClick={() => setEnlargedSlide('live-preview')}>
-                <div style={{ transform: 'scale(0.75)', transformOrigin: 'center center' }}>
-                  <SlidePreview data={buildPreviewData(selectedItem)} />
+              <div ref={previewContainerRef} className="flex-1 bg-[#080C18] rounded-lg border border-border overflow-hidden flex items-start justify-center p-2">
+                <div style={{ width: 540 * previewScale, height: 540 * previewScale, overflow: 'hidden' }}>
+                  <div style={{ width: 540, height: 540, transform: `scale(${previewScale})`, transformOrigin: 'top left' }}>
+                    <SlidePreview data={buildPreviewData(selectedItem)} />
+                  </div>
                 </div>
-              </div>
-            </div>
-          </>
-        ) : showingSpecialSlide ? (
-          <>
-            {/* Special slide: text field + API-generated image */}
-            <div className="mb-4 shrink-0">
-              <label className="text-xs text-muted-foreground font-semibold uppercase tracking-wide mb-1 block">
-                {selectedSpecialSlide === 'preview' ? 'Preview Text (Slide 1)' : 'Week Ahead Text (Slide 12)'}
-              </label>
-              <textarea
-                value={selectedSpecialSlide === 'preview' ? previewText : weekAheadText}
-                onChange={(e) => selectedSpecialSlide === 'preview' ? setPreviewText(e.target.value) : setWeekAheadText(e.target.value)}
-                placeholder={selectedSpecialSlide === 'preview' ? 'The intro paragraph...' : 'Closing paragraph...'}
-                rows={5}
-                disabled={isPublished}
-                className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary disabled:opacity-50 resize-y"
-              />
-            </div>
-            <div className="flex-1 flex flex-col min-h-0">
-              <div className="flex items-center justify-between mb-2 shrink-0">
-                <label className="text-xs text-muted-foreground font-semibold uppercase tracking-wide">Slide Preview</label>
-                <button onClick={() => generateSpecialSlide(selectedSpecialSlide!)}
-                  disabled={specialSlideLoading[selectedSpecialSlide!]}
-                  className="text-xs text-primary hover:underline font-medium disabled:opacity-50">
-                  {specialSlideLoading[selectedSpecialSlide!] ? 'Generating...' : 'Generate Slide'}
-                </button>
-              </div>
-              <div className="flex-1 bg-gray-100 rounded-lg overflow-hidden relative border border-border"
-                onClick={() => specialSlideUrls[selectedSpecialSlide!] && setEnlargedSlide(specialSlideUrls[selectedSpecialSlide!]!)}>
-                {specialSlideLoading[selectedSpecialSlide!] && (
-                  <div className="absolute inset-0 flex items-center justify-center bg-white/80 z-10">
-                    <div className="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin" />
-                  </div>
-                )}
-                {specialSlideUrls[selectedSpecialSlide!] ? (
-                  <>
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src={specialSlideUrls[selectedSpecialSlide!]!} alt="Special slide" className="w-full h-full object-contain" />
-                    <div className="absolute inset-0 bg-black/40 opacity-0 hover:opacity-100 transition-opacity flex items-center justify-center cursor-pointer">
-                      <Maximize2 size={24} className="text-white" />
-                    </div>
-                  </>
-                ) : (
-                  <div className="w-full h-full flex items-center justify-center text-muted-foreground text-sm">
-                    Click &quot;Generate Slide&quot; to preview
-                  </div>
-                )}
               </div>
             </div>
           </>
         ) : (
           <div className="flex-1 flex items-center justify-center text-muted-foreground text-sm">
-            Select a team or slide from the left panel
+            Select a team from the left panel
           </div>
         )}
       </div>

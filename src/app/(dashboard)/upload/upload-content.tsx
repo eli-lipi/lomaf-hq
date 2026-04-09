@@ -33,7 +33,7 @@ function detectCsvType(filename: string): CsvType | null {
 
 const TOTAL_ROUNDS = 23;
 
-export default function UploadTab() {
+export default function UploadContent() {
   const [uploads, setUploads] = useState<Record<CsvType, UploadState>>({
     lineups: { status: 'idle' },
     teams: { status: 'idle' },
