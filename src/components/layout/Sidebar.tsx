@@ -92,7 +92,7 @@ export default function Sidebar() {
 }
 
 function SidebarContent({ pathname, onNavigate }: { pathname: string; onNavigate?: () => void }) {
-  const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set(['/pwrnkgs', '/analytics', '/settings']));
+  const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set());
 
   const toggleSection = (href: string) => {
     setExpandedSections((prev) => {
