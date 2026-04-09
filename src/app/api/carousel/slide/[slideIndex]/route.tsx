@@ -1,6 +1,8 @@
 import { ImageResponse } from 'next/og';
 import { createClient } from '@supabase/supabase-js';
 import { TEAMS } from '@/lib/constants';
+import { readFileSync } from 'fs';
+import { join } from 'path';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -9,37 +11,21 @@ const supabase = createClient(
 
 export const runtime = 'nodejs';
 
-// ── Fonts ──
-// Cache at module level so we only fetch once per cold start
-let fontDmSansRegular: ArrayBuffer | null = null;
-let fontDmSansBold: ArrayBuffer | null = null;
-let fontDmSansBlack: ArrayBuffer | null = null;
-let fontJetBrainsRegular: ArrayBuffer | null = null;
-let fontJetBrainsBold: ArrayBuffer | null = null;
+// ── Fonts (loaded from local files) ──
+const fontsDir = join(process.cwd(), 'src/app/api/carousel/fonts');
 
-async function loadFont(family: string, weight: number): Promise<ArrayBuffer> {
-  const css = await fetch(
-    `https://fonts.googleapis.com/css2?family=${encodeURIComponent(family)}:wght@${weight}&display=swap`,
-    { headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' } }
-  ).then(r => r.text());
-  const url = css.match(/src:\s*url\(([^)]+)\)/)?.[1];
-  if (!url) throw new Error(`Font URL not found for ${family} ${weight}`);
-  return fetch(url).then(r => r.arrayBuffer());
-}
+let fontsCache: { name: string; data: ArrayBuffer; weight: 100 | 200 | 300 | 400 | 500 | 600 | 700 | 800 | 900; style: 'normal' | 'italic' }[] | null = null;
 
-async function getFonts() {
-  if (!fontDmSansRegular) fontDmSansRegular = await loadFont('DM Sans', 400);
-  if (!fontDmSansBold) fontDmSansBold = await loadFont('DM Sans', 700);
-  if (!fontDmSansBlack) fontDmSansBlack = await loadFont('DM Sans', 900);
-  if (!fontJetBrainsRegular) fontJetBrainsRegular = await loadFont('JetBrains Mono', 400);
-  if (!fontJetBrainsBold) fontJetBrainsBold = await loadFont('JetBrains Mono', 700);
-  return [
-    { name: 'DM Sans', data: fontDmSansRegular, weight: 400 as const, style: 'normal' as const },
-    { name: 'DM Sans', data: fontDmSansBold, weight: 700 as const, style: 'normal' as const },
-    { name: 'DM Sans', data: fontDmSansBlack, weight: 900 as const, style: 'normal' as const },
-    { name: 'JetBrains Mono', data: fontJetBrainsRegular, weight: 400 as const, style: 'normal' as const },
-    { name: 'JetBrains Mono', data: fontJetBrainsBold, weight: 700 as const, style: 'normal' as const },
+function getFonts() {
+  if (fontsCache) return fontsCache;
+  fontsCache = [
+    { name: 'DM Sans', data: readFileSync(join(fontsDir, 'dm-sans-400.woff2')).buffer as ArrayBuffer, weight: 400 as const, style: 'normal' as const },
+    { name: 'DM Sans', data: readFileSync(join(fontsDir, 'dm-sans-700.woff2')).buffer as ArrayBuffer, weight: 700 as const, style: 'normal' as const },
+    { name: 'DM Sans', data: readFileSync(join(fontsDir, 'dm-sans-900.woff2')).buffer as ArrayBuffer, weight: 900 as const, style: 'normal' as const },
+    { name: 'JetBrains Mono', data: readFileSync(join(fontsDir, 'jetbrains-mono-400.woff2')).buffer as ArrayBuffer, weight: 400 as const, style: 'normal' as const },
+    { name: 'JetBrains Mono', data: readFileSync(join(fontsDir, 'jetbrains-mono-700.woff2')).buffer as ArrayBuffer, weight: 700 as const, style: 'normal' as const },
   ];
+  return fontsCache;
 }
 
 // ── Color helpers (rank-based theming) ──
@@ -132,17 +118,45 @@ function SatoriLineCircle({ label, rank }: { label: string; rank: number | null 
   );
 }
 
+// Build sparkline as raw SVG string (Satori doesn't support <g>, <text>, strokeDasharray, textAnchor in JSX)
+function buildSparklineSvg(
+  points: { x: number; y: number; round: string }[],
+  path: string,
+  areaPath: string,
+  w: number,
+  h: number,
+  pad: { top: number; bottom: number; left: number; right: number },
+  sh: number,
+  theme: { primary: string; subtle: string },
+) {
+  const ticks = [1, 5, 10].map(tick => {
+    const y = pad.top + ((tick - 1) / 9) * sh;
+    return `<line x1="${pad.left - 10}" y1="${y}" x2="${pad.left + (w - pad.left - pad.right)}" y2="${y}" stroke="rgba(255,255,255,0.035)" stroke-width="1" stroke-dasharray="6,6"/>
+<text x="${pad.left - 14}" y="${y + 5}" text-anchor="end" fill="#5A6577" font-size="14" font-family="monospace">${tick}</text>`;
+  }).join('');
+
+  const area = areaPath ? `<path d="${areaPath}" fill="${theme.primary}" fill-opacity="0.08"/>` : '';
+  const line = points.length > 1 ? `<path d="${path}" fill="none" stroke="${theme.primary}" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>` : '';
+  const dots = points.map(p =>
+    `<circle cx="${p.x}" cy="${p.y}" r="8" fill="#0B1120" stroke="${theme.primary}" stroke-width="3"/>
+<text x="${p.x}" y="${h - 8}" text-anchor="middle" fill="#5A6577" font-size="14" font-family="monospace">${p.round}</text>`
+  ).join('');
+
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">${ticks}${area}${line}${dots}</svg>`;
+}
+
 export async function GET(
   request: Request,
   { params }: { params: Promise<{ slideIndex: string }> }
 ) {
+  try {
   const { slideIndex: slideIndexStr } = await params;
   const slideIndex = parseInt(slideIndexStr, 10);
   const { searchParams } = new URL(request.url);
   const roundNumber = parseInt(searchParams.get('round') || '0', 10);
 
-  // Load fonts
-  const fonts = await getFonts();
+  // Load fonts (from local files, cached)
+  const fonts = getFonts();
 
   // Fetch round data
   const { data: roundData } = await supabase
@@ -445,7 +459,7 @@ export async function GET(
               {lineRanks.map((l) => <SatoriLineCircle key={l.label} label={l.label} rank={l.rank} />)}
             </div>
 
-            {/* Sparkline */}
+            {/* Sparkline as data URI img (Satori doesn't support <g>, <text>, or many SVG attrs) */}
             <div style={{
               display: 'flex', flexDirection: 'column',
               background: 'rgba(255,255,255,0.025)', borderRadius: 20, padding: '16px 16px 8px',
@@ -453,33 +467,13 @@ export async function GET(
             }}>
               <div style={{ display: 'flex', fontSize: 16, fontWeight: 700, letterSpacing: 4, color: '#8892A2', marginBottom: 4 }}>PWRNKGS TREND</div>
               <div style={{ display: 'flex', flex: 1, alignItems: 'center' }}>
-                <svg width={sparkW} height={sparkH} viewBox={`0 0 ${sparkW} ${sparkH}`}>
-                  {/* Y-axis ticks */}
-                  {[1, 5, 10].map(tick => {
-                    const y = sparkPad.top + ((tick - 1) / 9) * sh;
-                    return (
-                      <g key={tick}>
-                        <line x1={sparkPad.left - 10} y1={y} x2={sparkPad.left + sw} y2={y} stroke="rgba(255,255,255,0.035)" strokeWidth={1} strokeDasharray="6,6" />
-                        <text x={sparkPad.left - 14} y={y + 5} textAnchor="end" fill="#5A6577" fontSize={14} fontFamily="'JetBrains Mono', monospace">{tick}</text>
-                      </g>
-                    );
-                  })}
-                  {/* Area fill */}
-                  {sparkAreaPath && (
-                    <path d={sparkAreaPath} fill={theme.primary} fillOpacity={0.08} />
-                  )}
-                  {/* Line */}
-                  {sparkPoints.length > 1 && (
-                    <path d={sparkPath} fill="none" stroke={theme.primary} strokeWidth={4} strokeLinecap="round" strokeLinejoin="round" />
-                  )}
-                  {/* Dots and round labels */}
-                  {sparkPoints.map((p, i) => (
-                    <g key={i}>
-                      <circle cx={p.x} cy={p.y} r={8} fill="#0B1120" stroke={theme.primary} strokeWidth={3} />
-                      <text x={p.x} y={sparkH - 8} textAnchor="middle" fill="#5A6577" fontSize={14} fontFamily="'JetBrains Mono', monospace">{p.round}</text>
-                    </g>
-                  ))}
-                </svg>
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={`data:image/svg+xml,${encodeURIComponent(buildSparklineSvg(sparkPoints, sparkPath, sparkAreaPath, sparkW, sparkH, sparkPad, sh, theme))}`}
+                  alt=""
+                  width={sparkW}
+                  height={sparkH}
+                />
               </div>
             </div>
           </div>
@@ -556,4 +550,11 @@ export async function GET(
     height: 1080,
     fonts,
   });
+  } catch (err) {
+    console.error('Carousel slide generation error:', err);
+    return new Response(
+      JSON.stringify({ error: err instanceof Error ? err.message : 'Unknown error' }),
+      { status: 500, headers: { 'Content-Type': 'application/json' } }
+    );
+  }
 }

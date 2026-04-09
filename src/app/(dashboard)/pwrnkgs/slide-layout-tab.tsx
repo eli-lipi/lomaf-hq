@@ -116,6 +116,9 @@ export default function SlideLayoutTab() {
       if (res.ok) {
         const blob = await res.blob();
         setUrl((prev) => { if (prev) URL.revokeObjectURL(prev); return URL.createObjectURL(blob); });
+      } else {
+        const errText = await res.text();
+        console.error(`Slide gen returned ${res.status}:`, errText);
       }
     } catch (err) { console.error('Slide gen failed:', err); }
     finally { setLoading(false); }
