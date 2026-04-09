@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Trophy, BarChart3, Settings, Menu, X, ChevronDown, ChevronRight } from 'lucide-react';
+import { Trophy, BarChart3, Settings, Menu, X, ChevronDown, ChevronRight, Upload } from 'lucide-react';
 import { useState } from 'react';
 import { cn } from '@/lib/utils';
 
@@ -10,28 +10,49 @@ interface NavItem {
   href: string;
   label: string;
   icon: React.ComponentType<{ size?: number }>;
-  children?: { href: string; label: string }[];
+  children?: { href: string; label: string; children?: { href: string; label: string }[] }[];
 }
 
 const NAV_ITEMS: NavItem[] = [
+  { href: '/upload', label: 'Data Upload', icon: Upload },
   {
     href: '/pwrnkgs',
     label: 'PWRNKGs',
     icon: Trophy,
     children: [
-      { href: '/pwrnkgs?tab=this-week', label: 'This Week' },
+      {
+        href: '/pwrnkgs?tab=this-week',
+        label: 'This Week',
+        children: [
+          { href: '/pwrnkgs?tab=this-week&sub=layout', label: 'Slide Layout' },
+          { href: '/pwrnkgs?tab=this-week&sub=rankings', label: 'Rankings Editor' },
+          { href: '/pwrnkgs?tab=this-week&sub=preview', label: 'Preview & Publish' },
+        ],
+      },
       { href: '/pwrnkgs?tab=previous', label: 'Previous Weeks' },
     ],
   },
-  { href: '/analytics', label: 'Analytics', icon: BarChart3 },
+  {
+    href: '/analytics',
+    label: 'Analytics',
+    icon: BarChart3,
+    children: [
+      { href: '/analytics?tab=overview', label: 'Overview' },
+      { href: '/analytics?tab=range', label: 'Round Range' },
+      { href: '/analytics?tab=lines', label: 'Line Rankings' },
+      { href: '/analytics?tab=luck', label: 'Luck & Form' },
+      { href: '/analytics?tab=draft', label: 'Draft vs Reality' },
+      { href: '/analytics?tab=players', label: 'Player Rankings' },
+    ],
+  },
   {
     href: '/settings',
     label: 'Settings',
     icon: Settings,
     children: [
-      { href: '/settings?tab=upload', label: 'Data Upload' },
-      { href: '/settings?tab=general', label: 'General' },
+      { href: '/settings?tab=photos', label: 'Coach Photos' },
       { href: '/settings?tab=adjustments', label: 'Score Adjustments' },
+      { href: '/settings?tab=info', label: 'League Info' },
     ],
   },
 ];
@@ -101,9 +122,9 @@ function SidebarContent({ pathname, onNavigate }: { pathname: string; onNavigate
       <div className="mx-4 border-t border-white/10" />
 
       {/* Nav links */}
-      <div className="flex-1 px-3 py-4 space-y-0.5">
+      <div className="flex-1 px-3 py-4 space-y-0.5 overflow-y-auto">
         {NAV_ITEMS.map(({ href, label, icon: Icon, children }) => {
-          const isActive = pathname.startsWith(href);
+          const isActive = pathname.startsWith(href.split('?')[0]);
           const isExpanded = expandedSections.has(href);
           const hasChildren = children && children.length > 0;
 
@@ -134,25 +155,35 @@ function SidebarContent({ pathname, onNavigate }: { pathname: string; onNavigate
               </div>
               {hasChildren && isExpanded && (
                 <div className="ml-8 mt-0.5 space-y-0.5">
-                  {children.map((child) => {
-                    const childActive = pathname + (typeof window !== 'undefined' ? window.location.search : '') === child.href ||
-                      (pathname === '/pwrnkgs' && child.href.includes('tab=this-week') && !pathname.includes('previous'));
-                    return (
+                  {children.map((child) => (
+                    <div key={child.href}>
                       <Link
-                        key={child.href}
                         href={child.href}
                         onClick={onNavigate}
                         className={cn(
                           'block px-3 py-1.5 rounded text-xs font-medium transition-colors',
-                          childActive
-                            ? 'text-white bg-white/5'
-                            : 'text-sidebar-foreground hover:text-white'
+                          'text-sidebar-foreground hover:text-white'
                         )}
                       >
                         {child.label}
                       </Link>
-                    );
-                  })}
+                      {/* Third-level children (e.g., This Week sub-tabs) */}
+                      {child.children && (
+                        <div className="ml-4 mt-0.5 space-y-0.5">
+                          {child.children.map((sub) => (
+                            <Link
+                              key={sub.href}
+                              href={sub.href}
+                              onClick={onNavigate}
+                              className="block px-3 py-1 rounded text-[11px] text-sidebar-foreground/70 hover:text-white transition-colors"
+                            >
+                              {sub.label}
+                            </Link>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  ))}
                 </div>
               )}
             </div>

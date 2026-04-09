@@ -325,6 +325,7 @@ export default function RankingsTab() {
       teamName: item.team_name,
       coachName: item.coach,
       coachPhotoUrls: photoUrls,
+      isCoCoached: team?.is_co_coached,
       scoreThisWeek: cd?.scoreThisWeek ?? null,
       scoreThisWeekRank: cd?.scoreThisWeekRank ?? null,
       seasonTotal: cd?.seasonTotal ?? null,

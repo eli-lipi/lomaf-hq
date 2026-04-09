@@ -1,6 +1,7 @@
 'use client';
 
-import { useState } from 'react';
+import { Suspense, useState, useEffect } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { cn } from '@/lib/utils';
 import OverviewTab from './overview-tab';
 import RoundRangeTab from './round-range-tab';
@@ -21,7 +22,25 @@ const TABS = [
 type TabId = (typeof TABS)[number]['id'];
 
 export default function AnalyticsPage() {
-  const [activeTab, setActiveTab] = useState<TabId>('overview');
+  return (
+    <Suspense fallback={<div className="py-12 text-center text-muted-foreground">Loading...</div>}>
+      <AnalyticsPageInner />
+    </Suspense>
+  );
+}
+
+function AnalyticsPageInner() {
+  const searchParams = useSearchParams();
+  const tabParam = searchParams.get('tab');
+  const [activeTab, setActiveTab] = useState<TabId>(
+    (TABS.find((t) => t.id === tabParam)?.id) ?? 'overview'
+  );
+
+  useEffect(() => {
+    if (tabParam && TABS.some((t) => t.id === tabParam)) {
+      setActiveTab(tabParam as TabId);
+    }
+  }, [tabParam]);
 
   return (
     <div>
@@ -33,7 +52,10 @@ export default function AnalyticsPage() {
         {TABS.map((tab) => (
           <button
             key={tab.id}
-            onClick={() => setActiveTab(tab.id)}
+            onClick={() => {
+              setActiveTab(tab.id);
+              window.history.replaceState(null, '', `/analytics?tab=${tab.id}`);
+            }}
             className={cn(
               'px-4 py-2.5 text-sm font-medium transition-colors border-b-2 -mb-px whitespace-nowrap',
               activeTab === tab.id
