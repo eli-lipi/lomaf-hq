@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Upload, Trophy, BarChart3, Settings, Menu, X, ChevronDown, ChevronRight } from 'lucide-react';
+import { Trophy, BarChart3, Settings, Menu, X, ChevronDown, ChevronRight } from 'lucide-react';
 import { useState } from 'react';
 import { cn } from '@/lib/utils';
 
@@ -14,7 +14,6 @@ interface NavItem {
 }
 
 const NAV_ITEMS: NavItem[] = [
-  { href: '/upload', label: 'Data Upload', icon: Upload },
   {
     href: '/pwrnkgs',
     label: 'PWRNKGs',
@@ -25,7 +24,16 @@ const NAV_ITEMS: NavItem[] = [
     ],
   },
   { href: '/analytics', label: 'Analytics', icon: BarChart3 },
-  { href: '/settings', label: 'Settings', icon: Settings },
+  {
+    href: '/settings',
+    label: 'Settings',
+    icon: Settings,
+    children: [
+      { href: '/settings?tab=upload', label: 'Data Upload' },
+      { href: '/settings?tab=general', label: 'General' },
+      { href: '/settings?tab=adjustments', label: 'Score Adjustments' },
+    ],
+  },
 ];
 
 export default function Sidebar() {
@@ -63,7 +71,7 @@ export default function Sidebar() {
 }
 
 function SidebarContent({ pathname, onNavigate }: { pathname: string; onNavigate?: () => void }) {
-  const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set(['/pwrnkgs', '/analytics']));
+  const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set(['/pwrnkgs', '/analytics', '/settings']));
 
   const toggleSection = (href: string) => {
     setExpandedSections((prev) => {
