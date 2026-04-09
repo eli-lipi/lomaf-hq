@@ -209,11 +209,16 @@ export async function GET(
               {roundData.theme}
             </div>
           )}
-          {roundData.preview_text && (
-            <div style={{ display: 'flex', fontSize: 28, color: 'rgba(255,255,255,0.7)', textAlign: 'center', maxWidth: 800, lineHeight: 1.7 }}>
-              {roundData.preview_text.length > 400 ? roundData.preview_text.slice(0, 400) + '...' : roundData.preview_text}
-            </div>
-          )}
+          {roundData.preview_text && (() => {
+            const ptLen = roundData.preview_text.length;
+            const ptSize = ptLen > 1200 ? 17 : ptLen > 900 ? 19 : 21;
+            const ptLH = ptLen > 1200 ? 1.65 : ptLen > 900 ? 1.70 : 1.75;
+            return (
+              <div style={{ display: 'flex', fontSize: ptSize, color: 'rgba(255,255,255,0.7)', textAlign: 'center', maxWidth: 800, lineHeight: ptLH }}>
+                {roundData.preview_text}
+              </div>
+            );
+          })()}
         </div>
         <div style={{ display: 'flex', height: 6, backgroundColor: '#00FF87' }} />
       </div>
@@ -334,16 +339,13 @@ export async function GET(
     const photoUrls = photoKeys.map(k => photoUrlMap.get(k)).filter(Boolean) as string[];
     const coachInitials = (team?.coach || ranking.team_name).split(/[\s&]+/).filter(Boolean).map((n: string) => n[0]).join('').slice(0, 2).toUpperCase();
 
-    // Parse writeup with auto-fit sizing
+    // Parse writeup with auto-fit sizing (1080px export values)
     const writeupBlocks = parseWriteupBlocks(ranking.writeup || '');
-    const totalWriteupChars = writeupBlocks.reduce((sum, b) => sum + b.text.length, 0);
-    // Auto-fit: reduce font size for longer writeups
-    let writeupBodySize = 25;
-    let writeupHeaderSize = 22;
-    let writeupLineHeight = 1.7;
-    if (totalWriteupChars > 600) { writeupBodySize = 19; writeupHeaderSize = 18; writeupLineHeight = 1.5; }
-    else if (totalWriteupChars > 400) { writeupBodySize = 22; writeupHeaderSize = 20; writeupLineHeight = 1.6; }
-    else if (totalWriteupChars > 250) { writeupBodySize = 24; writeupHeaderSize = 21; writeupLineHeight = 1.65; }
+    const totalWriteupChars = (ranking.writeup || '').length;
+    let writeupBodySize: number, writeupHeaderSize: number, writeupLineHeight: number, writeupSectionGap: number;
+    if (totalWriteupChars > 1200)     { writeupBodySize = 19; writeupHeaderSize = 17; writeupLineHeight = 1.55; writeupSectionGap = 22; }
+    else if (totalWriteupChars > 900) { writeupBodySize = 21; writeupHeaderSize = 18; writeupLineHeight = 1.60; writeupSectionGap = 26; }
+    else                              { writeupBodySize = 24; writeupHeaderSize = 21; writeupLineHeight = 1.65; writeupSectionGap = 32; }
     const displayBlocks = writeupBlocks; // Show all blocks, auto-fit handles overflow
 
     // Previous round label for movement badge
@@ -471,7 +473,7 @@ export async function GET(
                     <div key={i} style={{
                       display: 'flex', alignItems: 'center',
                       fontSize: writeupHeaderSize, fontWeight: 700, letterSpacing: 3.6, color: '#B0B8C8',
-                      marginTop: i > 0 ? 32 : 0, marginBottom: 10,
+                      marginTop: i > 0 ? writeupSectionGap : 0, marginBottom: 10,
                       borderLeft: '4px solid rgba(176,184,200,0.25)', paddingLeft: 16,
                     }}>
                       {block.text.toUpperCase()}

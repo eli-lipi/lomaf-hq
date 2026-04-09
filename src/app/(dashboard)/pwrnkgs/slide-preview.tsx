@@ -163,15 +163,12 @@ function Sparkline({ history, width = 190, height = 58, theme }: {
 function renderWriteup(text: string) {
   if (!text) return null;
 
-  // Auto-fit: reduce font size for longer writeups
+  // Auto-fit: reduce font size for longer writeups (540px preview = half of 1080px export)
   const totalChars = text.length;
-  let bodySize = 12.5;
-  let headerSize = 11;
-  let lineH = 1.7;
-  let headerMargin = 22;
-  if (totalChars > 600) { bodySize = 9.5; headerSize = 9; lineH = 1.4; headerMargin = 12; }
-  else if (totalChars > 400) { bodySize = 11; headerSize = 10; lineH = 1.55; headerMargin = 16; }
-  else if (totalChars > 250) { bodySize = 12; headerSize = 10.5; lineH = 1.65; headerMargin = 18; }
+  let bodySize: number, headerSize: number, lineH: number, headerMargin: number;
+  if (totalChars > 1200)     { bodySize = 12;   headerSize = 10.5; lineH = 1.55; headerMargin = 14; }
+  else if (totalChars > 900) { bodySize = 13;   headerSize = 11;   lineH = 1.60; headerMargin = 16; }
+  else                       { bodySize = 15.5; headerSize = 13;   lineH = 1.65; headerMargin = 20; }
 
   const lines = text.split('\n');
   const elements: React.ReactElement[] = [];
