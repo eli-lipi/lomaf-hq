@@ -293,14 +293,15 @@ export default function UploadContent() {
       <div className="bg-card border border-border rounded-lg p-5 mb-6 shadow-sm">
         <div className="flex items-center justify-between gap-4 flex-wrap">
           <div>
-            <h3 className="font-semibold text-sm mb-1">Target Round</h3>
+            <h3 className="font-semibold text-sm mb-1">Data Through Round</h3>
             <p className="text-xs text-muted-foreground">
-              Pick which round these CSVs are for. Overrides any round info embedded in the files.
+              The round that has just <strong>finished playing</strong>. These CSVs contain results up to and including that round.
+              Overrides any round info in the files (AFL Fantasy tags the upcoming round, not the completed one).
             </p>
           </div>
           <div className="flex items-center gap-2">
             <label htmlFor="target-round" className="text-sm font-medium">
-              Round
+              Through R
             </label>
             <select
               id="target-round"

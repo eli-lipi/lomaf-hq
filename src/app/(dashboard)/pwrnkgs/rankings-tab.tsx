@@ -380,7 +380,12 @@ export default function RankingsTab() {
       <div className="w-[40%] flex flex-col min-w-0 overflow-hidden">
         {/* Header */}
         <div className="flex items-center gap-3 mb-4 shrink-0">
-          <span className="bg-primary/10 text-primary font-bold px-3 py-1 rounded-full text-sm">R{latestRound}</span>
+          <span
+            className="bg-primary/10 text-primary font-bold px-3 py-1 rounded-full text-sm"
+            title={`PWRNKGs for the state of the league after Round ${latestRound} has been played`}
+          >
+            After R{latestRound}
+          </span>
           {isPublished && (
             <span className="bg-green-100 text-green-700 text-xs font-medium px-2.5 py-1 rounded-full">Published</span>
           )}

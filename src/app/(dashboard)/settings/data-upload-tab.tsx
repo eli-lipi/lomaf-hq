@@ -15,7 +15,10 @@ export default function DataUploadTab() {
   return (
     <section>
       <h2 className="text-lg font-semibold mb-3">Data Upload</h2>
-      <p className="text-sm text-muted-foreground mb-4">Upload CSVs to import round data</p>
+      <p className="text-sm text-muted-foreground mb-1">Upload CSVs to import round data</p>
+      <p className="text-xs text-muted-foreground mb-4">
+        <strong>Convention:</strong> &quot;Round N&quot; everywhere in the portal means the state of the league <strong>after Round N has been played</strong>.
+      </p>
       <div className="space-y-8">
         <UploadContent />
         <UploadHistory />
@@ -97,7 +100,7 @@ function UploadHistory() {
             <div key={round} className="border border-border rounded-lg p-3">
               <div className="flex items-center gap-3 mb-2">
                 <span className="bg-primary/10 text-primary font-bold px-2.5 py-0.5 rounded-full text-xs">
-                  {round === 0 ? 'Draft' : `R${round}`}
+                  {round === 0 ? 'Draft' : `Through R${round}`}
                 </span>
                 <span className="text-xs text-muted-foreground">
                   {latestByType.size} CSV{latestByType.size !== 1 ? 's' : ''} uploaded
