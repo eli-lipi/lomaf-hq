@@ -342,7 +342,7 @@ export default function PreviousWeeksTab() {
             </div>
 
             {/* Instagram-style carousel: one slide at a time with arrows + dots */}
-            <div className="relative max-w-md mx-auto">
+            <div className="relative w-full mx-auto">
               {/* Slide image */}
               <div
                 className="relative bg-muted/30 border border-border rounded-lg overflow-hidden aspect-square cursor-pointer group"
@@ -373,7 +373,7 @@ export default function PreviousWeeksTab() {
                   setCurrentSlide((c) => (c - 1 + TOTAL_SLIDES) % TOTAL_SLIDES)
                 }
                 aria-label="Previous slide"
-                className="absolute left-2 top-1/2 -translate-y-1/2 h-9 w-9 rounded-full bg-white/90 hover:bg-white shadow-md flex items-center justify-center text-foreground transition-colors"
+                className="absolute left-3 top-1/2 -translate-y-1/2 h-11 w-11 rounded-full bg-white/90 hover:bg-white shadow-md flex items-center justify-center text-foreground transition-colors"
               >
                 <ChevronLeft className="h-5 w-5" />
               </button>
@@ -382,7 +382,7 @@ export default function PreviousWeeksTab() {
               <button
                 onClick={() => setCurrentSlide((c) => (c + 1) % TOTAL_SLIDES)}
                 aria-label="Next slide"
-                className="absolute right-2 top-1/2 -translate-y-1/2 h-9 w-9 rounded-full bg-white/90 hover:bg-white shadow-md flex items-center justify-center text-foreground transition-colors"
+                className="absolute right-3 top-1/2 -translate-y-1/2 h-11 w-11 rounded-full bg-white/90 hover:bg-white shadow-md flex items-center justify-center text-foreground transition-colors"
               >
                 <ChevronRight className="h-5 w-5" />
               </button>
