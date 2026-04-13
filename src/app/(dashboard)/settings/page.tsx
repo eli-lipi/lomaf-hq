@@ -9,11 +9,13 @@ import { cn } from '@/lib/utils';
 import ScoreAdjustmentsTab from './score-adjustments-tab';
 import UsersTab from './users-tab';
 import DataUploadTab from './data-upload-tab';
+import AIPromptsTab from './ai-prompts-tab';
 
 const TABS = [
   { id: 'upload', label: 'Data Upload' },
   { id: 'photos', label: 'Coach Photos' },
   { id: 'adjustments', label: 'Score Adjustments' },
+  { id: 'prompts', label: 'AI Prompts' },
   { id: 'users', label: 'Users' },
   { id: 'info', label: 'League Info' },
 ] as const;
@@ -81,6 +83,8 @@ function SettingsPageInner() {
       )}
 
       {activeTab === 'adjustments' && <ScoreAdjustmentsTab />}
+
+      {activeTab === 'prompts' && <AIPromptsTab />}
 
       {activeTab === 'users' && <UsersTab />}
 

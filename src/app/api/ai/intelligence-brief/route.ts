@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { getAnthropicClient, AI_MODEL, parseAIJson, logAIUsage, INTELLIGENCE_BRIEF_SYSTEM_PROMPT } from '@/lib/ai';
+import { getAnthropicClient, AI_MODEL, parseAIJson, logAIUsage, getSystemPrompt } from '@/lib/ai';
 import { TEAMS } from '@/lib/constants';
 
 const supabase = createClient(
@@ -244,10 +244,11 @@ ${previousRankings.map(t => `${t.ranking}. ${t.teamName}`).join('\n') || 'None a
 Based on this data, produce the intelligence brief. Be specific — reference actual scores, actual matchups. Don't be generic.`;
 
     // ── Call Claude ──
+    const systemPrompt = await getSystemPrompt(supabase, 'intelligence_brief');
     const response = await client.messages.create({
       model: AI_MODEL,
       max_tokens: 3000,
-      system: INTELLIGENCE_BRIEF_SYSTEM_PROMPT,
+      system: systemPrompt,
       messages: [{ role: 'user', content: userPrompt }],
     });
 

@@ -84,3 +84,46 @@ Output format: Return valid JSON with this structure:
     ...
   }
 }`;
+
+export const CHART_INSIGHTS_SYSTEM_PROMPT = `You are a punchy sports analytics commentator for a fantasy AFL league called LOMAF (Land of Milk and Fantasy). All 10 coaches are ex-Australians living in Israel. Give 2-3 non-obvious insights based on the data. Be specific — name teams and players where relevant. Each insight should be one sentence that makes someone want to argue or share it. Return as a JSON array of strings.`;
+
+export type EditablePromptKey = 'intelligence_brief' | 'chart_insights';
+
+export const PROMPT_DEFAULTS: Record<EditablePromptKey, string> = {
+  intelligence_brief: INTELLIGENCE_BRIEF_SYSTEM_PROMPT,
+  chart_insights: CHART_INSIGHTS_SYSTEM_PROMPT,
+};
+
+export const PROMPT_LABELS: Record<EditablePromptKey, { title: string; description: string }> = {
+  intelligence_brief: {
+    title: 'Intelligence Brief',
+    description: 'Analyzes league data and produces the weekly JSON brief used to draft PWRNKGs.',
+  },
+  chart_insights: {
+    title: 'Chart Insights',
+    description: 'Generates 2–3 punchy insights that appear alongside charts on analytics pages.',
+  },
+};
+
+/**
+ * Fetch an editable system prompt from Supabase, falling back to the hardcoded default
+ * if the row is missing, empty, or the query errors.
+ */
+export async function getSystemPrompt(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  supabase: any,
+  key: EditablePromptKey
+): Promise<string> {
+  const fallback = PROMPT_DEFAULTS[key];
+  try {
+    const { data, error } = await supabase
+      .from('ai_system_prompts')
+      .select('prompt_text')
+      .eq('prompt_key', key)
+      .maybeSingle();
+    if (error || !data?.prompt_text || !data.prompt_text.trim()) return fallback;
+    return data.prompt_text;
+  } catch {
+    return fallback;
+  }
+}

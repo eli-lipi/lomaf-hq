@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { getAnthropicClient, AI_MODEL, parseAIJson, logAIUsage } from '@/lib/ai';
+import { getAnthropicClient, AI_MODEL, parseAIJson, logAIUsage, getSystemPrompt } from '@/lib/ai';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -42,10 +42,11 @@ export async function POST(request: Request) {
   }
 
   try {
+    const systemPrompt = await getSystemPrompt(supabase, 'chart_insights');
     const response = await client.messages.create({
       model: AI_MODEL,
       max_tokens: 500,
-      system: `You are a punchy sports analytics commentator for a fantasy AFL league called LOMAF (Land of Milk and Fantasy). All 10 coaches are ex-Australians living in Israel. Give 2-3 non-obvious insights based on the data. Be specific — name teams and players where relevant. Each insight should be one sentence that makes someone want to argue or share it. Return as a JSON array of strings.`,
+      system: systemPrompt,
       messages: [{
         role: 'user',
         content: `Here is the ${sectionName || sectionKey} data for LOMAF after Round ${roundNumber}:\n\n${typeof sectionData === 'string' ? sectionData : JSON.stringify(sectionData, null, 2)}\n\nGive me 2-3 insights.`,

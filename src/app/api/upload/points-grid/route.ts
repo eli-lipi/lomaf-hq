@@ -95,6 +95,19 @@ export async function POST(request: Request) {
       raw_data: { players: data.length, round_columns: roundColumns.map((r) => r.col) },
     });
 
+    // Recalculate all trade probabilities for the newly-finalized rounds.
+    // Fire-and-forget (caught) so a recalc failure never fails the upload.
+    try {
+      const { recalculateAllTradesForRound } = await import('@/lib/trades/recalculate');
+      for (const { roundNum } of roundColumns) {
+        await recalculateAllTradesForRound(supabase, roundNum).catch((e) =>
+          console.error('[points-grid] Trade recalc failed for R' + roundNum, e)
+        );
+      }
+    } catch (e) {
+      console.error('[points-grid] Could not load trade recalc module', e);
+    }
+
     return NextResponse.json({
       success: true,
       count: updatedCount,

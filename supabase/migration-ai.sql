@@ -33,11 +33,21 @@ CREATE TABLE IF NOT EXISTS ai_usage_log (
   created_at TIMESTAMPTZ DEFAULT now()
 );
 
+-- Editable system prompts (one row per prompt key). Falls back to hardcoded defaults in src/lib/ai.ts when absent.
+CREATE TABLE IF NOT EXISTS ai_system_prompts (
+  prompt_key TEXT PRIMARY KEY,
+  prompt_text TEXT NOT NULL,
+  updated_at TIMESTAMPTZ DEFAULT now(),
+  updated_by TEXT
+);
+
 -- Enable RLS but allow all for now (single-admin app)
 ALTER TABLE ai_intelligence_briefs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE ai_chart_insights ENABLE ROW LEVEL SECURITY;
 ALTER TABLE ai_usage_log ENABLE ROW LEVEL SECURITY;
+ALTER TABLE ai_system_prompts ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY "Allow all on ai_intelligence_briefs" ON ai_intelligence_briefs FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Allow all on ai_chart_insights" ON ai_chart_insights FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Allow all on ai_usage_log" ON ai_usage_log FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY "Allow all on ai_system_prompts" ON ai_system_prompts FOR ALL USING (true) WITH CHECK (true);

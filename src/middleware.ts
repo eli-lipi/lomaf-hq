@@ -3,7 +3,7 @@ import { createServerClient } from '@supabase/ssr';
 
 // Paths that only admins should see/use. Middleware enforces redirects/403s here.
 // Actual role check happens via a quick Supabase query below.
-const ADMIN_PAGE_PREFIXES = ['/upload', '/settings'];
+const ADMIN_PAGE_PREFIXES = ['/upload', '/settings', '/trades'];
 const ADMIN_API_PREFIXES = [
   '/api/upload',
   '/api/rankings',
@@ -11,6 +11,7 @@ const ADMIN_API_PREFIXES = [
   '/api/ai/intelligence-brief',
   '/api/ai/writeup-draft',
   '/api/users',
+  '/api/trades',
 ];
 
 // Public paths (no auth required).
