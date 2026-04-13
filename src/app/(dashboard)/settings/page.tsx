@@ -8,8 +8,10 @@ import { supabase } from '@/lib/supabase';
 import { cn } from '@/lib/utils';
 import ScoreAdjustmentsTab from './score-adjustments-tab';
 import UsersTab from './users-tab';
+import DataUploadTab from './data-upload-tab';
 
 const TABS = [
+  { id: 'upload', label: 'Data Upload' },
   { id: 'photos', label: 'Coach Photos' },
   { id: 'adjustments', label: 'Score Adjustments' },
   { id: 'users', label: 'Users' },
@@ -30,7 +32,7 @@ function SettingsPageInner() {
   const searchParams = useSearchParams();
   const tabParam = searchParams.get('tab');
   const [activeTab, setActiveTab] = useState<TabId>(
-    (TABS.find((t) => t.id === tabParam)?.id) ?? 'photos'
+    (TABS.find((t) => t.id === tabParam)?.id) ?? 'upload'
   );
 
   useEffect(() => {
@@ -63,6 +65,8 @@ function SettingsPageInner() {
           </button>
         ))}
       </div>
+
+      {activeTab === 'upload' && <DataUploadTab />}
 
       {activeTab === 'photos' && (
         <section>

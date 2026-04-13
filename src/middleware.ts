@@ -66,16 +66,30 @@ export async function middleware(request: NextRequest) {
     ADMIN_API_PREFIXES.some((p) => path === p || path.startsWith(p + '/'));
 
   if (user && needsAdmin) {
-    const { data: appUser } = await supabase
-      .from('users')
-      .select('role')
-      .eq('email', user.email?.toLowerCase() ?? '')
-      .single();
+    // Role is cached in a cookie at login (see /auth/callback) to avoid
+    // a DB roundtrip on every request. If missing (legacy session),
+    // fall back to a DB lookup just this once.
+    let role = request.cookies.get('lomaf_role')?.value;
+    if (!role) {
+      const { data: appUser } = await supabase
+        .from('users')
+        .select('role')
+        .eq('email', user.email?.toLowerCase() ?? '')
+        .single();
+      role = appUser?.role;
+      if (role) {
+        response.cookies.set('lomaf_role', role, {
+          path: '/',
+          httpOnly: false,
+          sameSite: 'lax',
+          maxAge: 60 * 60 * 24 * 30,
+        });
+      }
+    }
 
     // Honor "View as Member" cookie: admin viewing as coach gets blocked too.
     const viewAs = request.cookies.get('lomaf_view_as')?.value;
-    const effectiveRole =
-      appUser?.role === 'admin' && viewAs === 'coach' ? 'coach' : appUser?.role;
+    const effectiveRole = role === 'admin' && viewAs === 'coach' ? 'coach' : role;
 
     // But: let admins toggle the cookie itself even while "in" member view.
     const isViewAsEndpoint = path === '/api/auth/view-as';

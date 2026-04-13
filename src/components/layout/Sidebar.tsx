@@ -71,7 +71,7 @@ const NAV_ITEMS: NavItem[] = [
     icon: Settings,
     adminOnly: true,
     children: [
-      { href: '/upload', label: 'Data Upload', adminOnly: true },
+      { href: '/settings?tab=upload', label: 'Data Upload', adminOnly: true },
       { href: '/settings?tab=photos', label: 'Coach Photos', adminOnly: true },
       { href: '/settings?tab=adjustments', label: 'Score Adjustments', adminOnly: true },
       { href: '/settings?tab=users', label: 'Users', adminOnly: true },

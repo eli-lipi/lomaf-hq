@@ -28,7 +28,7 @@ export async function GET(request: NextRequest) {
   const email = authUser.email.toLowerCase();
   const { data: appUser } = await supabase
     .from('users')
-    .select('id')
+    .select('id, role')
     .eq('email', email)
     .single();
 
@@ -52,5 +52,15 @@ export async function GET(request: NextRequest) {
     })
     .eq('email', email);
 
-  return NextResponse.redirect(`${origin}/`);
+  // Cache role in a cookie so middleware can skip a DB query per request.
+  // This is a perf optimization — the source of truth is the users table,
+  // but the cookie is refreshed every login.
+  const response = NextResponse.redirect(`${origin}/`);
+  response.cookies.set('lomaf_role', appUser.role as string, {
+    path: '/',
+    httpOnly: false,
+    sameSite: 'lax',
+    maxAge: 60 * 60 * 24 * 30, // 30 days
+  });
+  return response;
 }
