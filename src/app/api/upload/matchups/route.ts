@@ -23,8 +23,25 @@ export async function POST(request: Request) {
     const explicitRound =
       typeof target_round === 'number' && target_round > 0 ? target_round : null;
 
+    // When target_round is set, only keep rows for the LATEST round_id in the
+    // CSV (handles AFL Fantasy's off-by-one round labeling and prevents
+    // ON CONFLICT duplicates from multi-round CSVs).
+    let sourceData = data;
+    if (explicitRound) {
+      let maxParsed = 0;
+      for (const row of data) {
+        const r = parseRoundFromId(String(row['round_id'] || ''));
+        if (r > maxParsed) maxParsed = r;
+      }
+      if (maxParsed > 0) {
+        sourceData = data.filter(
+          (row) => parseRoundFromId(String(row['round_id'] || '')) === maxParsed
+        );
+      }
+    }
+
     // Parse matchups CSV rows
-    const rows = data.map((row: Record<string, unknown>) => {
+    const rows = sourceData.map((row: Record<string, unknown>) => {
       const roundId = String(row['round_id'] || '');
       const roundNumber = explicitRound ?? parseRoundFromId(roundId);
       const teamId = Number(row['team_id'] || 0);
