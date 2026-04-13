@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Trophy, BarChart3, Settings, Menu, X, ChevronDown, ChevronRight } from 'lucide-react';
+import { Trophy, BarChart3, ArrowLeftRight, Settings, Menu, X, ChevronDown, ChevronRight } from 'lucide-react';
 import { useState } from 'react';
 import { cn } from '@/lib/utils';
 
@@ -42,6 +42,15 @@ const NAV_ITEMS: NavItem[] = [
       { href: '/analytics?tab=luck', label: 'Luck & Form' },
       { href: '/analytics?tab=draft', label: 'Draft vs Reality' },
       { href: '/analytics?tab=players', label: 'Player Rankings' },
+    ],
+  },
+  {
+    href: '/trades',
+    label: 'Trades',
+    icon: ArrowLeftRight,
+    children: [
+      { href: '/trades?tab=tracking', label: 'Trade Tracking' },
+      { href: '/trades?tab=recommendations', label: 'Trade Recommendations' },
     ],
   },
   {
