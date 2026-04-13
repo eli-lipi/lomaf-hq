@@ -348,7 +348,7 @@ export default function PreviousWeeksTab() {
                 className="relative bg-muted/30 border border-border rounded-lg overflow-hidden aspect-square cursor-pointer group"
                 onClick={() => setEnlargedSlide(currentSlide)}
               >
-                {/* Preload neighbors invisibly so forward/back feels instant */}
+                {/* Preload all 12 slides at once so flipping is instant */}
                 {Array.from({ length: TOTAL_SLIDES }, (_, i) => (
                   // eslint-disable-next-line @next/next/no-img-element
                   <img
@@ -359,7 +359,8 @@ export default function PreviousWeeksTab() {
                       'absolute inset-0 w-full h-full object-cover transition-opacity duration-200',
                       i === currentSlide ? 'opacity-100' : 'opacity-0 pointer-events-none'
                     )}
-                    loading={Math.abs(i - currentSlide) <= 1 ? 'eager' : 'lazy'}
+                    loading="eager"
+                    fetchPriority={i === currentSlide ? 'high' : 'auto'}
                   />
                 ))}
                 <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors flex items-center justify-center pointer-events-none">

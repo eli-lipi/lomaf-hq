@@ -572,6 +572,12 @@ export async function GET(
     width: 1080,
     height: 1080,
     fonts,
+    headers: {
+      // Cache aggressively on Vercel's CDN. Published round slides never
+      // change, so repeat requests are served from cache (instant).
+      // Preview edits bypass via the ?v=... cache-buster the editor adds.
+      'Cache-Control': 'public, max-age=60, s-maxage=31536000, stale-while-revalidate=86400',
+    },
   });
   } catch (err) {
     console.error('Carousel slide generation error:', err);
