@@ -23,21 +23,15 @@ export async function POST(request: Request) {
     const explicitRound =
       typeof target_round === 'number' && target_round > 0 ? target_round : null;
 
-    // When target_round is set, only keep rows for the LATEST round_id in the
-    // CSV (handles AFL Fantasy's off-by-one round labeling and prevents
-    // ON CONFLICT duplicates from multi-round CSVs).
+    // When target_round is set, keep ONLY rows whose round_id parses to the
+    // target round. AFL Fantasy's matchups CSV has one row per team per
+    // round with correct round_id labels — we just pick out the target round.
     let sourceData = data;
     if (explicitRound) {
-      let maxParsed = 0;
-      for (const row of data) {
-        const r = parseRoundFromId(String(row['round_id'] || ''));
-        if (r > maxParsed) maxParsed = r;
-      }
-      if (maxParsed > 0) {
-        sourceData = data.filter(
-          (row) => parseRoundFromId(String(row['round_id'] || '')) === maxParsed
-        );
-      }
+      const filtered = data.filter(
+        (row) => parseRoundFromId(String(row['round_id'] || '')) === explicitRound
+      );
+      if (filtered.length > 0) sourceData = filtered;
     }
 
     // Parse matchups CSV rows

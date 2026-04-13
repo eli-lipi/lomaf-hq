@@ -34,23 +34,22 @@ export async function POST(request: Request) {
       typeof target_round === 'number' && target_round > 0 ? target_round : null;
 
     if (explicitRound) {
-      // When target_round is set, only keep rows for the LATEST round_id in
-      // the CSV (handles AFL Fantasy's off-by-one round labeling). If rows
-      // have no round_id at all, fall back to using every row.
-      let maxParsed = 0;
-      const parsedRows: { row: Record<string, unknown>; r: number }[] = [];
-      for (const row of data) {
+      // When target_round is set, keep ONLY rows whose round_id parses to the
+      // target round. AFL Fantasy's lineups CSV includes rows for every
+      // round R1..RN (correctly labeled) plus optional "upcoming round"
+      // preview rows with is_scoring=false — we must reject those, otherwise
+      // latestScoredRound would regress to the previous round.
+      const filtered = data.filter((row) => {
         const roundId = (row['round_id'] || row['Round ID'] || row['roundId']) as
           | string
           | number
           | undefined;
-        const r = roundId ? parseRoundFromId(roundId) : 0;
-        if (r > maxParsed) maxParsed = r;
-        parsedRows.push({ row, r });
-      }
-      const filtered =
-        maxParsed > 0 ? parsedRows.filter((p) => p.r === maxParsed).map((p) => p.row) : data;
-      rowsByRound.set(explicitRound, filtered);
+        if (!roundId) return false;
+        return parseRoundFromId(roundId) === explicitRound;
+      });
+      // If CSV has no rows tagged with the target round, fall back to all data
+      // (rare edge case where the CSV uses a different round-id format).
+      rowsByRound.set(explicitRound, filtered.length > 0 ? filtered : data);
     } else {
       for (const row of data) {
         const roundId = (row['round_id'] || row['Round ID'] || row['roundId']) as
