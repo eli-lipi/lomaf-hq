@@ -72,7 +72,15 @@ export async function middleware(request: NextRequest) {
       .eq('email', user.email?.toLowerCase() ?? '')
       .single();
 
-    if (appUser?.role !== 'admin') {
+    // Honor "View as Member" cookie: admin viewing as coach gets blocked too.
+    const viewAs = request.cookies.get('lomaf_view_as')?.value;
+    const effectiveRole =
+      appUser?.role === 'admin' && viewAs === 'coach' ? 'coach' : appUser?.role;
+
+    // But: let admins toggle the cookie itself even while "in" member view.
+    const isViewAsEndpoint = path === '/api/auth/view-as';
+
+    if (effectiveRole !== 'admin' && !isViewAsEndpoint) {
       if (path.startsWith('/api/')) {
         return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
       }
