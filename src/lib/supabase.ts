@@ -1,6 +1,6 @@
-import { createClient } from '@supabase/supabase-js';
+// Backwards-compat export: existing client components import `supabase` from here.
+// New code should prefer `createSupabaseBrowserClient()` from './supabase-browser'
+// (which is auth-aware and keeps the session cookie in sync with the browser).
+import { createSupabaseBrowserClient } from './supabase-browser';
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-
-export const supabase = createClient(supabaseUrl, supabaseAnonKey);
+export const supabase = createSupabaseBrowserClient();

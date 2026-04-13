@@ -7,10 +7,12 @@ import { TEAMS, LEAGUE_FULL_NAME, SEASON } from '@/lib/constants';
 import { supabase } from '@/lib/supabase';
 import { cn } from '@/lib/utils';
 import ScoreAdjustmentsTab from './score-adjustments-tab';
+import UsersTab from './users-tab';
 
 const TABS = [
   { id: 'photos', label: 'Coach Photos' },
   { id: 'adjustments', label: 'Score Adjustments' },
+  { id: 'users', label: 'Users' },
   { id: 'info', label: 'League Info' },
 ] as const;
 
@@ -75,6 +77,8 @@ function SettingsPageInner() {
       )}
 
       {activeTab === 'adjustments' && <ScoreAdjustmentsTab />}
+
+      {activeTab === 'users' && <UsersTab />}
 
       {activeTab === 'info' && (
         <section>

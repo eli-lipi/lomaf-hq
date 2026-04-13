@@ -5,12 +5,22 @@ import { usePathname } from 'next/navigation';
 import { Trophy, BarChart3, ArrowLeftRight, Settings, Menu, X, ChevronDown, ChevronRight } from 'lucide-react';
 import { useState } from 'react';
 import { cn } from '@/lib/utils';
+import type { AppUser } from '@/lib/auth';
+import UserMenu from './UserMenu';
+
+interface NavChild {
+  href: string;
+  label: string;
+  adminOnly?: boolean;
+  children?: { href: string; label: string; adminOnly?: boolean }[];
+}
 
 interface NavItem {
   href: string;
   label: string;
   icon: React.ComponentType<{ size?: number }>;
-  children?: { href: string; label: string; children?: { href: string; label: string }[] }[];
+  adminOnly?: boolean;
+  children?: NavChild[];
 }
 
 const NAV_ITEMS: NavItem[] = [
@@ -22,10 +32,11 @@ const NAV_ITEMS: NavItem[] = [
       {
         href: '/pwrnkgs?tab=this-week',
         label: 'This Week',
+        adminOnly: true,
         children: [
-          { href: '/pwrnkgs?tab=this-week&sub=layout', label: 'Slide Layout' },
-          { href: '/pwrnkgs?tab=this-week&sub=rankings', label: 'Rankings Editor' },
-          { href: '/pwrnkgs?tab=this-week&sub=preview', label: 'Preview & Publish' },
+          { href: '/pwrnkgs?tab=this-week&sub=layout', label: 'Slide Layout', adminOnly: true },
+          { href: '/pwrnkgs?tab=this-week&sub=rankings', label: 'Rankings Editor', adminOnly: true },
+          { href: '/pwrnkgs?tab=this-week&sub=preview', label: 'Preview & Publish', adminOnly: true },
         ],
       },
       { href: '/pwrnkgs?tab=previous', label: 'Previous Weeks' },
@@ -48,27 +59,46 @@ const NAV_ITEMS: NavItem[] = [
     href: '/trades',
     label: 'Trades',
     icon: ArrowLeftRight,
+    adminOnly: true,
     children: [
-      { href: '/trades?tab=tracking', label: 'Trade Tracking' },
-      { href: '/trades?tab=recommendations', label: 'Trade Recommendations' },
+      { href: '/trades?tab=tracking', label: 'Trade Tracking', adminOnly: true },
+      { href: '/trades?tab=recommendations', label: 'Trade Recommendations', adminOnly: true },
     ],
   },
   {
     href: '/settings',
     label: 'Settings',
     icon: Settings,
+    adminOnly: true,
     children: [
-      { href: '/upload', label: 'Data Upload' },
-      { href: '/settings?tab=photos', label: 'Coach Photos' },
-      { href: '/settings?tab=adjustments', label: 'Score Adjustments' },
-      { href: '/settings?tab=info', label: 'League Info' },
+      { href: '/upload', label: 'Data Upload', adminOnly: true },
+      { href: '/settings?tab=photos', label: 'Coach Photos', adminOnly: true },
+      { href: '/settings?tab=adjustments', label: 'Score Adjustments', adminOnly: true },
+      { href: '/settings?tab=users', label: 'Users', adminOnly: true },
+      { href: '/settings?tab=info', label: 'League Info', adminOnly: true },
     ],
   },
 ];
 
-export default function Sidebar() {
+function filterNav(items: NavItem[], isAdmin: boolean): NavItem[] {
+  return items
+    .filter((item) => (item.adminOnly ? isAdmin : true))
+    .map((item) => ({
+      ...item,
+      children: item.children
+        ?.filter((child) => (child.adminOnly ? isAdmin : true))
+        .map((child) => ({
+          ...child,
+          children: child.children?.filter((sub) => (sub.adminOnly ? isAdmin : true)),
+        })),
+    }));
+}
+
+export default function Sidebar({ user }: { user: AppUser }) {
   const pathname = usePathname();
   const [mobileOpen, setMobileOpen] = useState(false);
+
+  const items = filterNav(NAV_ITEMS, user.role === 'admin');
 
   return (
     <>
@@ -87,20 +117,30 @@ export default function Sidebar() {
             className="w-60 h-full bg-sidebar flex flex-col"
             onClick={(e) => e.stopPropagation()}
           >
-            <SidebarContent pathname={pathname} onNavigate={() => setMobileOpen(false)} />
+            <SidebarContent items={items} user={user} pathname={pathname} onNavigate={() => setMobileOpen(false)} />
           </nav>
         </div>
       )}
 
       {/* Desktop sidebar */}
       <nav className="hidden lg:flex w-60 shrink-0 h-screen sticky top-0 bg-sidebar flex-col">
-        <SidebarContent pathname={pathname} />
+        <SidebarContent items={items} user={user} pathname={pathname} />
       </nav>
     </>
   );
 }
 
-function SidebarContent({ pathname, onNavigate }: { pathname: string; onNavigate?: () => void }) {
+function SidebarContent({
+  items,
+  user,
+  pathname,
+  onNavigate,
+}: {
+  items: NavItem[];
+  user: AppUser;
+  pathname: string;
+  onNavigate?: () => void;
+}) {
   const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set());
 
   const toggleSection = (href: string) => {
@@ -132,7 +172,7 @@ function SidebarContent({ pathname, onNavigate }: { pathname: string; onNavigate
 
       {/* Nav links */}
       <div className="flex-1 px-3 py-4 space-y-0.5 overflow-y-auto">
-        {NAV_ITEMS.map(({ href, label, icon: Icon, children }) => {
+        {items.map(({ href, label, icon: Icon, children }) => {
           const isActive = pathname.startsWith(href.split('?')[0]);
           const isExpanded = expandedSections.has(href);
           const hasChildren = children && children.length > 0;
@@ -200,9 +240,10 @@ function SidebarContent({ pathname, onNavigate }: { pathname: string; onNavigate
         })}
       </div>
 
-      {/* Footer */}
-      <div className="px-5 py-4 border-t border-white/10">
-        <p className="text-sidebar-foreground text-xs">2026 Season</p>
+      {/* Footer: user menu */}
+      <div className="px-3 py-3 border-t border-white/10">
+        <UserMenu user={user} />
+        <p className="text-sidebar-foreground text-[10px] mt-2 px-2">2026 Season</p>
       </div>
     </>
   );
