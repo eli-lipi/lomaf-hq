@@ -8,8 +8,9 @@ import {
   YAxis,
   Tooltip,
   ResponsiveContainer,
+  LabelList,
 } from 'recharts'
-import { Download, ZoomIn, X, Loader2 } from 'lucide-react'
+import { Download, ZoomIn, X, Loader2, ChevronLeft, ChevronRight } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { cn } from '@/lib/utils'
 import JSZip from 'jszip'
@@ -73,6 +74,28 @@ export default function PreviousWeeksTab() {
   const [rankingsLoading, setRankingsLoading] = useState(false)
   const [enlargedSlide, setEnlargedSlide] = useState<number | null>(null)
   const [downloadingAll, setDownloadingAll] = useState(false)
+  const [currentSlide, setCurrentSlide] = useState(0)
+
+  const TOTAL_SLIDES = 12
+
+  // Reset carousel to preview slide when the selected round changes.
+  useEffect(() => {
+    setCurrentSlide(0)
+  }, [selectedRound])
+
+  // Keyboard arrow nav for the carousel (when no modal is open).
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (enlargedSlide !== null) return
+      if (e.key === 'ArrowRight') {
+        setCurrentSlide((c) => (c + 1) % TOTAL_SLIDES)
+      } else if (e.key === 'ArrowLeft') {
+        setCurrentSlide((c) => (c - 1 + TOTAL_SLIDES) % TOTAL_SLIDES)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [enlargedSlide])
 
   // Fetch published rounds + all rankings for chart
   useEffect(() => {
@@ -207,9 +230,9 @@ export default function PreviousWeeksTab() {
         <h3 className="text-sm font-medium text-foreground mb-4">
           PWRNKGs Movement Chart
         </h3>
-        <div className="h-[350px] w-full">
+        <div className="h-[400px] w-full">
           <ResponsiveContainer width="100%" height="100%">
-            <LineChart data={chartData}>
+            <LineChart data={chartData} margin={{ top: 8, right: 180, left: 0, bottom: 8 }}>
               <XAxis
                 dataKey="round"
                 stroke="#94a3b8"
@@ -248,23 +271,32 @@ export default function PreviousWeeksTab() {
                   dot={{ r: 3, fill: TEAM_COLORS[team] }}
                   activeDot={{ r: 5 }}
                   connectNulls
-                />
+                  isAnimationActive={false}
+                >
+                  {/* Label only on the rightmost (final) data point */}
+                  <LabelList
+                    dataKey={team}
+                    position="right"
+                    content={({ x, y, index, value }) => {
+                      if (index !== chartData.length - 1) return null
+                      if (value === null || value === undefined) return null
+                      return (
+                        <text
+                          x={(x as number) + 8}
+                          y={(y as number) + 4}
+                          fill={TEAM_COLORS[team]}
+                          fontSize={11}
+                          fontWeight={600}
+                        >
+                          {team}
+                        </text>
+                      )
+                    }}
+                  />
+                </Line>
               ))}
             </LineChart>
           </ResponsiveContainer>
-        </div>
-
-        {/* Legend */}
-        <div className="flex flex-wrap gap-x-4 gap-y-1.5 mt-4">
-          {TEAMS.map((team) => (
-            <div key={team} className="flex items-center gap-1.5 text-xs text-muted-foreground">
-              <span
-                className="inline-block h-2.5 w-2.5 rounded-full"
-                style={{ backgroundColor: TEAM_COLORS[team] }}
-              />
-              {team}
-            </div>
-          ))}
         </div>
       </div>
 
@@ -309,34 +341,82 @@ export default function PreviousWeeksTab() {
               </button>
             </div>
 
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
-              {Array.from({ length: 12 }, (_, i) => (
-                <div
-                  key={i}
-                  className="group relative bg-muted/30 border border-border rounded-lg overflow-hidden aspect-square cursor-pointer hover:border-foreground/30 transition-colors"
-                  onClick={() => setEnlargedSlide(i)}
-                >
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
+            {/* Instagram-style carousel: one slide at a time with arrows + dots */}
+            <div className="relative max-w-md mx-auto">
+              {/* Slide image */}
+              <div
+                className="relative bg-muted/30 border border-border rounded-lg overflow-hidden aspect-square cursor-pointer group"
+                onClick={() => setEnlargedSlide(currentSlide)}
+              >
+                {/* Preload neighbors invisibly so forward/back feels instant */}
+                {Array.from({ length: TOTAL_SLIDES }, (_, i) => (
+                  // eslint-disable-next-line @next/next/no-img-element
                   <img
+                    key={i}
                     src={`/api/carousel/slide/${i}?round=${selectedRound}`}
                     alt={`Slide ${i}`}
-                    className="w-full h-full object-cover"
-                    loading="lazy"
+                    className={cn(
+                      'absolute inset-0 w-full h-full object-cover transition-opacity duration-200',
+                      i === currentSlide ? 'opacity-100' : 'opacity-0 pointer-events-none'
+                    )}
+                    loading={Math.abs(i - currentSlide) <= 1 ? 'eager' : 'lazy'}
                   />
-                  <div className="absolute inset-0 bg-black/0 group-hover:bg-black/30 transition-colors flex items-center justify-center">
-                    <ZoomIn className="h-5 w-5 text-white opacity-0 group-hover:opacity-100 transition-opacity" />
-                  </div>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      downloadSlide(i)
-                    }}
-                    className="absolute bottom-1.5 right-1.5 p-1 bg-black/60 rounded text-white opacity-0 group-hover:opacity-100 transition-opacity hover:bg-black/80"
-                  >
-                    <Download className="h-3.5 w-3.5" />
-                  </button>
+                ))}
+                <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors flex items-center justify-center pointer-events-none">
+                  <ZoomIn className="h-6 w-6 text-white opacity-0 group-hover:opacity-100 transition-opacity" />
                 </div>
-              ))}
+              </div>
+
+              {/* Left arrow */}
+              <button
+                onClick={() =>
+                  setCurrentSlide((c) => (c - 1 + TOTAL_SLIDES) % TOTAL_SLIDES)
+                }
+                aria-label="Previous slide"
+                className="absolute left-2 top-1/2 -translate-y-1/2 h-9 w-9 rounded-full bg-white/90 hover:bg-white shadow-md flex items-center justify-center text-foreground transition-colors"
+              >
+                <ChevronLeft className="h-5 w-5" />
+              </button>
+
+              {/* Right arrow */}
+              <button
+                onClick={() => setCurrentSlide((c) => (c + 1) % TOTAL_SLIDES)}
+                aria-label="Next slide"
+                className="absolute right-2 top-1/2 -translate-y-1/2 h-9 w-9 rounded-full bg-white/90 hover:bg-white shadow-md flex items-center justify-center text-foreground transition-colors"
+              >
+                <ChevronRight className="h-5 w-5" />
+              </button>
+
+              {/* Slide counter + download current */}
+              <div className="flex items-center justify-between mt-3">
+                <span className="text-xs text-muted-foreground font-medium">
+                  {currentSlide + 1} / {TOTAL_SLIDES}
+                </span>
+                <button
+                  onClick={() => downloadSlide(currentSlide)}
+                  className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+                >
+                  <Download className="h-3 w-3" />
+                  Download slide
+                </button>
+              </div>
+
+              {/* Dot indicators */}
+              <div className="flex items-center justify-center gap-1.5 mt-3">
+                {Array.from({ length: TOTAL_SLIDES }, (_, i) => (
+                  <button
+                    key={i}
+                    onClick={() => setCurrentSlide(i)}
+                    aria-label={`Go to slide ${i + 1}`}
+                    className={cn(
+                      'h-1.5 rounded-full transition-all',
+                      i === currentSlide
+                        ? 'w-5 bg-primary'
+                        : 'w-1.5 bg-muted-foreground/30 hover:bg-muted-foreground/60'
+                    )}
+                  />
+                ))}
+              </div>
             </div>
           </div>
 
