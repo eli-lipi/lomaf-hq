@@ -9,23 +9,34 @@ const supabase = createClient(
 
 export async function POST(request: Request) {
   try {
-    const { data } = await request.json();
+    const body = await request.json();
+    const { data, target_round } = body as {
+      data: Record<string, unknown>[];
+      target_round?: number;
+    };
 
     if (!data || !Array.isArray(data)) {
       return NextResponse.json({ error: 'Missing data' }, { status: 400 });
     }
 
-    // Find latest round with player_rounds data
-    const { data: latestRound } = await supabase
-      .from('player_rounds')
-      .select('round_number')
-      .order('round_number', { ascending: false })
-      .limit(1);
+    // Target round comes from the UI picker. Fall back to latest player_rounds
+    // for backward compatibility, but prefer the explicit picker value so the
+    // teams CSV lands on the round the user actually intends.
+    let targetRound: number | undefined;
+    if (typeof target_round === 'number' && target_round > 0) {
+      targetRound = target_round;
+    } else {
+      const { data: latestRound } = await supabase
+        .from('player_rounds')
+        .select('round_number')
+        .order('round_number', { ascending: false })
+        .limit(1);
+      targetRound = latestRound?.[0]?.round_number;
+    }
 
-    const targetRound = latestRound?.[0]?.round_number;
     if (!targetRound) {
       return NextResponse.json(
-        { error: 'Upload lineups first so we know which round to assign standings to' },
+        { error: 'Pick a target round (or upload lineups first) so we know which round to assign standings to' },
         { status: 400 }
       );
     }

@@ -47,10 +47,20 @@ export default function UploadContent() {
   const [roundStatuses, setRoundStatuses] = useState<Record<number, RoundStatus>>({});
   const [hasDraft, setHasDraft] = useState(false);
   const [loadingDb, setLoadingDb] = useState(true);
+  const [targetRound, setTargetRound] = useState<number | null>(null);
 
   useEffect(() => {
     loadDbSummary();
   }, []);
+
+  // Default the target-round picker to the highest round with any data + 1,
+  // or 1 if the season hasn't started.
+  useEffect(() => {
+    if (loadingDb || targetRound !== null) return;
+    const roundsWithData = Object.keys(roundStatuses).map(Number);
+    const maxRound = roundsWithData.length > 0 ? Math.max(...roundsWithData) : 0;
+    setTargetRound(maxRound > 0 ? maxRound : 1);
+  }, [loadingDb, roundStatuses, targetRound]);
 
   const loadDbSummary = async () => {
     setLoadingDb(true);
@@ -158,7 +168,7 @@ export default function UploadContent() {
         const res = await fetch(`/api/upload/${type.replace('_', '-')}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ data: upload.data }),
+          body: JSON.stringify({ data: upload.data, target_round: targetRound }),
         });
 
         if (!res.ok) {
@@ -277,6 +287,35 @@ export default function UploadContent() {
             })}
           </div>
         )}
+      </div>
+
+      {/* Target round picker — source of truth for which round this batch applies to */}
+      <div className="bg-card border border-border rounded-lg p-5 mb-6 shadow-sm">
+        <div className="flex items-center justify-between gap-4 flex-wrap">
+          <div>
+            <h3 className="font-semibold text-sm mb-1">Target Round</h3>
+            <p className="text-xs text-muted-foreground">
+              Pick which round these CSVs are for. Overrides any round info embedded in the files.
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <label htmlFor="target-round" className="text-sm font-medium">
+              Round
+            </label>
+            <select
+              id="target-round"
+              value={targetRound ?? ''}
+              onChange={(e) => setTargetRound(Number(e.target.value) || null)}
+              className="px-3 py-2 text-sm border border-border rounded-md bg-background font-medium"
+            >
+              {Array.from({ length: TOTAL_ROUNDS }, (_, i) => i + 1).map((r) => (
+                <option key={r} value={r}>
+                  R{r}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
       </div>
 
       {/* Multi-file drop zone */}

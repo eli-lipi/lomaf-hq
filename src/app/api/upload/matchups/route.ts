@@ -10,16 +10,23 @@ const supabase = createClient(
 
 export async function POST(request: Request) {
   try {
-    const { data } = await request.json();
+    const body = await request.json();
+    const { data, target_round } = body as {
+      data: Record<string, unknown>[];
+      target_round?: number;
+    };
 
     if (!data || !Array.isArray(data)) {
       return NextResponse.json({ error: 'Missing data' }, { status: 400 });
     }
 
+    const explicitRound =
+      typeof target_round === 'number' && target_round > 0 ? target_round : null;
+
     // Parse matchups CSV rows
     const rows = data.map((row: Record<string, unknown>) => {
       const roundId = String(row['round_id'] || '');
-      const roundNumber = parseRoundFromId(roundId);
+      const roundNumber = explicitRound ?? parseRoundFromId(roundId);
       const teamId = Number(row['team_id'] || 0);
       const teamName = String(row['team_name'] || '');
       const team = TEAMS.find(

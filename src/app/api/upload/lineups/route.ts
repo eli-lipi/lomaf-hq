@@ -17,24 +17,38 @@ function parseRoundFromId(roundId: string | number): number {
 
 export async function POST(request: Request) {
   try {
-    const { data } = await request.json();
+    const body = await request.json();
+    const { data, target_round } = body as {
+      data: Record<string, unknown>[];
+      target_round?: number;
+    };
 
     if (!data || !Array.isArray(data)) {
       return NextResponse.json({ error: 'Missing data' }, { status: 400 });
     }
 
-    // Group rows by round (each row has its own round_id)
+    // Group rows by round (each row has its own round_id, UNLESS the UI sent
+    // an explicit target_round override — in which case all rows go to that).
     const rowsByRound = new Map<number, Record<string, unknown>[]>();
+    const explicitRound =
+      typeof target_round === 'number' && target_round > 0 ? target_round : null;
 
-    for (const row of data) {
-      const roundId = row['round_id'] || row['Round ID'] || row['roundId'];
-      if (!roundId) continue;
+    if (explicitRound) {
+      rowsByRound.set(explicitRound, data);
+    } else {
+      for (const row of data) {
+        const roundId = (row['round_id'] || row['Round ID'] || row['roundId']) as
+          | string
+          | number
+          | undefined;
+        if (!roundId) continue;
 
-      const roundNum = parseRoundFromId(roundId);
-      if (!rowsByRound.has(roundNum)) {
-        rowsByRound.set(roundNum, []);
+        const roundNum = parseRoundFromId(roundId);
+        if (!rowsByRound.has(roundNum)) {
+          rowsByRound.set(roundNum, []);
+        }
+        rowsByRound.get(roundNum)!.push(row);
       }
-      rowsByRound.get(roundNum)!.push(row);
     }
 
     if (rowsByRound.size === 0) {
