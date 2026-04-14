@@ -97,11 +97,11 @@ function LineCircle({ label, rank }: { label: string; rank: number | null }) {
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
       <span style={{ fontSize: 7, fontWeight: 700, letterSpacing: 1, color: '#8892A2', textTransform: 'uppercase' as const }}>{label}</span>
       <div style={{
-        width: 34, height: 34, borderRadius: '50%',
+        width: 34, height: 34, borderRadius: 17,
         background: c.bg, border: `1.5px solid ${c.border}`,
         display: 'flex', alignItems: 'center', justifyContent: 'center',
       }}>
-        <span style={{ color: c.text, fontWeight: 800, fontSize: 10.5, fontFamily: "'JetBrains Mono', monospace" }}>
+        <span style={{ color: c.text, fontWeight: 800, fontSize: 10.5, fontFamily: "'JetBrains Mono', 'Courier New', monospace" }}>
           {rank !== null ? ordinal(rank) : '—'}
         </span>
       </div>
@@ -109,13 +109,15 @@ function LineCircle({ label, rank }: { label: string; rank: number | null }) {
   );
 }
 
-function TrendChart({ history, width = 176, height = 65, theme }: {
+// ── Trend Chart (at 540px scale = half of 1080px) ──
+// At 1080px: width ~350, height ~130. At 540px: width 176, height 80.
+function TrendChart({ history, width = 176, height = 80, theme }: {
   history: { round: string; ranking: number }[];
   width?: number; height?: number;
   theme: ReturnType<typeof getRankTheme>;
 }) {
   if (!history || history.length < 1) return null;
-  const padding = { top: 8, bottom: 16, left: 18, right: 8 };
+  const padding = { top: 6, bottom: 14, left: 14, right: 6 };
   const w = width - padding.left - padding.right;
   const h = height - padding.top - padding.bottom;
 
@@ -127,23 +129,43 @@ function TrendChart({ history, width = 176, height = 65, theme }: {
   }));
   const pathD = points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x} ${p.y}`).join(' ');
 
-  // Midline at position 5.5
+  // Key Y positions
+  const y1 = padding.top;
+  const y10 = padding.top + h;
   const midY = padding.top + ((5.5 - 1) / 9) * h;
 
   return (
     <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`}>
-      {/* Simple midline divider */}
-      <line x1={padding.left} y1={midY} x2={padding.left + w} y2={midY} stroke="rgba(255,255,255,0.08)" strokeWidth={0.5} strokeDasharray="2,2" />
+      {/* Zone shading — very subtle */}
+      <rect x={padding.left} y={y1} width={w} height={midY - y1} fill="rgba(0,255,135,0.02)" />
+      <rect x={padding.left} y={midY} width={w} height={y10 - midY} fill="rgba(255,71,87,0.02)" />
+
+      {/* Y-axis line */}
+      <line x1={padding.left} y1={y1} x2={padding.left} y2={y10} stroke="rgba(255,255,255,0.12)" strokeWidth={0.5} />
+
+      {/* Faint lines at 1 and 10 */}
+      <line x1={padding.left} y1={y1} x2={padding.left + w} y2={y1} stroke="rgba(255,255,255,0.06)" strokeWidth={0.5} />
+      <line x1={padding.left} y1={y10} x2={padding.left + w} y2={y10} stroke="rgba(255,255,255,0.06)" strokeWidth={0.5} />
+
+      {/* Y-axis labels: 1 at top, 10 at bottom */}
+      <text x={padding.left - 3} y={y1 + 3} textAnchor="end" fill="#6B7588" fontSize={5} fontFamily="'JetBrains Mono', 'Courier New', monospace">1</text>
+      <text x={padding.left - 3} y={y10 + 2} textAnchor="end" fill="#6B7588" fontSize={5} fontFamily="'JetBrains Mono', 'Courier New', monospace">10</text>
+
+      {/* Prominent midline between 5th and 6th */}
+      <line x1={padding.left} y1={midY} x2={padding.left + w} y2={midY} stroke="rgba(255,255,255,0.2)" strokeWidth={0.75} strokeDasharray="3,2" />
+
+      {/* X-axis line */}
+      <line x1={padding.left} y1={height - padding.bottom} x2={padding.left + w} y2={height - padding.bottom} stroke="rgba(255,255,255,0.08)" strokeWidth={0.5} />
 
       {/* Data line */}
-      {points.length > 1 && <path d={pathD} fill="none" stroke={theme.primary} strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" />}
+      {points.length > 1 && <path d={pathD} fill="none" stroke={theme.primary} strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" opacity={0.8} />}
 
       {/* Data dots + round labels */}
       {points.map((p, i) => (
-        <g key={i}>
-          <circle cx={p.x} cy={p.y} r={4.5} fill="#0B1120" stroke={theme.primary} strokeWidth={1.5} />
-          <text x={p.x} y={p.y + 2} textAnchor="middle" fill={theme.primary} fontSize={5.5} fontWeight="bold" fontFamily="'JetBrains Mono', monospace">{p.ranking}</text>
-          <text x={p.x} y={height - 3} textAnchor="middle" fill="#5A6577" fontSize={5} fontFamily="'JetBrains Mono', monospace">{p.round}</text>
+        <g key={i} opacity={0.9}>
+          <circle cx={p.x} cy={p.y} r={4} fill="#0B1120" stroke={theme.primary} strokeWidth={1.25} />
+          <text x={p.x} y={p.y + 1.8} textAnchor="middle" fill={theme.primary} fontSize={4.5} fontWeight="bold" fontFamily="'JetBrains Mono', 'Courier New', monospace">{p.ranking}</text>
+          <text x={p.x} y={height - padding.bottom + 7} textAnchor="middle" fill="#6B7588" fontSize={5.5} fontFamily="'JetBrains Mono', 'Courier New', monospace">{p.round}</text>
         </g>
       ))}
     </svg>
@@ -220,10 +242,10 @@ export default function SlidePreview({ data }: { data: SlidePreviewData }) {
       </div>
 
       <div style={{ display: 'flex', flex: 1, padding: '6px 18px 0', position: 'relative', zIndex: 1, minHeight: 0 }}>
-        {/* LEFT PANEL (35%) */}
-        <div style={{ width: '35%', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', paddingRight: 14 }}>
+        {/* LEFT PANEL (35%) — fixed gaps, trend chart pinned to bottom */}
+        <div style={{ width: '35%', display: 'flex', flexDirection: 'column', paddingRight: 14 }}>
           {/* Rank + movement */}
-          <div style={{ display: 'flex', alignItems: 'flex-end', gap: 6 }}>
+          <div style={{ display: 'flex', alignItems: 'flex-end', gap: 6, marginBottom: 10 }}>
             <span style={{
               fontSize: 78, fontWeight: 900, lineHeight: 0.85, color: theme.primary,
               fontFamily: "'JetBrains Mono', monospace",
@@ -241,6 +263,7 @@ export default function SlidePreview({ data }: { data: SlidePreviewData }) {
             background: 'rgba(255,255,255,0.025)', borderRadius: 10, padding: '8px 10px',
             border: '1px solid rgba(255,255,255,0.05)',
             display: 'flex', flexDirection: 'column', gap: 7,
+            marginBottom: 10,
           }}>
             {[
               { label: 'THIS WEEK', value: d.scoreThisWeek !== null ? d.scoreThisWeek.toLocaleString() : '—', rank: d.scoreThisWeekRank },
@@ -256,8 +279,8 @@ export default function SlidePreview({ data }: { data: SlidePreviewData }) {
             ))}
           </div>
 
-          {/* Line circles */}
-          <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0 2px' }}>
+          {/* Line circles — space-around for even distribution */}
+          <div style={{ display: 'flex', justifyContent: 'space-around', marginBottom: 10 }}>
             {([
               { label: 'DEF', rank: d.lineRanks.def },
               { label: 'MID', rank: d.lineRanks.mid },
@@ -267,14 +290,17 @@ export default function SlidePreview({ data }: { data: SlidePreviewData }) {
             ] as const).map((l) => <LineCircle key={l.label} label={l.label} rank={l.rank} />)}
           </div>
 
-          {/* PWRNKGs Trend Chart */}
+          {/* Spacer pushes trend chart to bottom */}
+          <div style={{ flex: 1 }} />
+
+          {/* PWRNKGs Trend Chart — pinned to bottom */}
           <div style={{
-            background: 'rgba(255,255,255,0.025)', borderRadius: 8, padding: '6px 6px 4px',
+            background: 'rgba(255,255,255,0.025)', borderRadius: 8, padding: '6px 6px 2px',
             border: '1px solid rgba(255,255,255,0.05)',
             display: 'flex', flexDirection: 'column',
           }}>
-            <span style={{ fontSize: 6, fontWeight: 700, letterSpacing: 1.5, color: '#6B7588', textTransform: 'uppercase' as const, marginBottom: 2 }}>PWRNKGS TREND</span>
-            <TrendChart history={d.pwrnkgsHistory} width={176} height={65} theme={theme} />
+            <span style={{ fontSize: 6, fontWeight: 700, letterSpacing: 1, color: '#6B7588', textTransform: 'uppercase' as const, marginBottom: 2 }}>PWRNKGS TREND</span>
+            <TrendChart history={d.pwrnkgsHistory} width={176} height={80} theme={theme} />
           </div>
         </div>
 
@@ -285,7 +311,7 @@ export default function SlidePreview({ data }: { data: SlidePreviewData }) {
         }}>
           {/* Team name + coach + photo */}
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10 }}>
-            <div style={{ flex: 1, paddingTop: 2 }}>
+            <div style={{ flex: 1, paddingTop: 2, minWidth: 0 }}>
               <h2 style={{ color: '#FFFFFF', fontSize: 18, fontWeight: 800, lineHeight: 1.2, margin: 0, letterSpacing: -0.3 }}>{d.teamName}</h2>
               <p style={{ color: '#5A6577', fontSize: 11, margin: '3px 0 0', fontWeight: 500 }}>{d.coachName}</p>
             </div>
@@ -299,7 +325,7 @@ export default function SlidePreview({ data }: { data: SlidePreviewData }) {
                     left: i * 18, zIndex: 2 - i,
                   }}>
                     {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src={url} alt="" style={{ width: 40, height: 40, objectFit: 'cover', display: 'block' }} />
+                    <img src={url} alt="" style={{ width: 40, height: 40, objectFit: 'cover', objectPosition: 'center top', display: 'block' }} />
                   </div>
                 ))}
               </div>
@@ -309,7 +335,7 @@ export default function SlidePreview({ data }: { data: SlidePreviewData }) {
                 overflow: 'hidden', border: `1.5px solid ${theme.border}`,
               }}>
                 {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={d.coachPhotoUrls[0]} alt="" style={{ width: 50, height: 50, objectFit: 'cover', display: 'block' }} />
+                <img src={d.coachPhotoUrls[0]} alt="" style={{ width: 50, height: 50, objectFit: 'cover', objectPosition: 'center top', display: 'block' }} />
               </div>
             ) : (
               <div style={{

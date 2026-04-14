@@ -93,7 +93,7 @@ function SatoriRankPill({ rank }: { rank: number | null }) {
       display: 'flex',
       background: c.bg, border: `2px solid ${c.border}`, color: c.text,
       borderRadius: 20, fontWeight: 700, fontSize: 20, padding: '4px 14px',
-      fontFamily: "'JetBrains Mono', monospace",
+      fontFamily: "'JetBrains Mono', 'Courier New', monospace",
     }}>
       {ord(rank)}
     </div>
@@ -106,11 +106,11 @@ function SatoriLineCircle({ label, rank }: { label: string; rank: number | null 
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px' }}>
       <div style={{ display: 'flex', fontSize: 14, fontWeight: 700, letterSpacing: 2, color: '#8892A2' }}>{label}</div>
       <div style={{
-        display: 'flex', width: 68, height: 68, borderRadius: '50%',
+        display: 'flex', width: 68, height: 68, borderRadius: 34,
         background: c.bg, border: `3px solid ${c.border}`,
         alignItems: 'center', justifyContent: 'center',
       }}>
-        <div style={{ display: 'flex', color: c.text, fontWeight: 800, fontSize: 21, fontFamily: "'JetBrains Mono', monospace" }}>
+        <div style={{ display: 'flex', color: c.text, fontWeight: 800, fontSize: 21, fontFamily: "'JetBrains Mono', 'Courier New', monospace" }}>
           {rank !== null ? ord(rank) : '—'}
         </div>
       </div>
@@ -127,13 +127,35 @@ function buildTrendChartSvg(
 ) {
   if (!history || history.length < 1) return `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}"/>`;
 
-  const pad = { top: 16, bottom: 32, left: 36, right: 16 };
+  // All values at 2× (1080px export) matching the 540px preview
+  const pad = { top: 12, bottom: 28, left: 28, right: 12 };
   const cw = w - pad.left - pad.right;
   const ch = h - pad.top - pad.bottom;
+  const y1 = pad.top;
+  const y10 = pad.top + ch;
   const midY = pad.top + ((5.5 - 1) / 9) * ch;
+  const font = "'JetBrains Mono', 'Courier New', monospace";
 
-  // Simple midline
-  const midline = `<line x1="${pad.left}" y1="${midY}" x2="${pad.left + cw}" y2="${midY}" stroke="rgba(255,255,255,0.08)" stroke-width="1" stroke-dasharray="4,4"/>`;
+  // Zone shading — very subtle
+  const zones = `<rect x="${pad.left}" y="${y1}" width="${cw}" height="${midY - y1}" fill="rgba(0,255,135,0.02)"/>` +
+    `<rect x="${pad.left}" y="${midY}" width="${cw}" height="${y10 - midY}" fill="rgba(255,71,87,0.02)"/>`;
+
+  // Y-axis line
+  const yAxis = `<line x1="${pad.left}" y1="${y1}" x2="${pad.left}" y2="${y10}" stroke="rgba(255,255,255,0.12)" stroke-width="1"/>`;
+
+  // Faint lines at 1 and 10
+  const boundaryLines = `<line x1="${pad.left}" y1="${y1}" x2="${pad.left + cw}" y2="${y1}" stroke="rgba(255,255,255,0.06)" stroke-width="1"/>` +
+    `<line x1="${pad.left}" y1="${y10}" x2="${pad.left + cw}" y2="${y10}" stroke="rgba(255,255,255,0.06)" stroke-width="1"/>`;
+
+  // Y-axis labels: 1 at top, 10 at bottom
+  const yLabels = `<text x="${pad.left - 6}" y="${y1 + 6}" text-anchor="end" fill="#6B7588" font-size="10" font-family="${font}">1</text>` +
+    `<text x="${pad.left - 6}" y="${y10 + 4}" text-anchor="end" fill="#6B7588" font-size="10" font-family="${font}">10</text>`;
+
+  // Prominent midline between 5th and 6th
+  const midline = `<line x1="${pad.left}" y1="${midY}" x2="${pad.left + cw}" y2="${midY}" stroke="rgba(255,255,255,0.2)" stroke-width="1.5" stroke-dasharray="6,4"/>`;
+
+  // X-axis line
+  const xAxis = `<line x1="${pad.left}" y1="${h - pad.bottom}" x2="${pad.left + cw}" y2="${h - pad.bottom}" stroke="rgba(255,255,255,0.08)" stroke-width="1"/>`;
 
   // Data points
   const points = history.map((pt, i) => ({
@@ -144,16 +166,18 @@ function buildTrendChartSvg(
   }));
 
   const pathD = points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x} ${p.y}`).join(' ');
-  const line = points.length > 1 ? `<path d="${pathD}" fill="none" stroke="${themeColor}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>` : '';
+  const line = points.length > 1 ? `<path d="${pathD}" fill="none" stroke="${themeColor}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" opacity="0.8"/>` : '';
 
-  // Dots with ranking numbers + round labels
+  // Dots with ranking numbers + round labels (opacity 0.9 on group)
   const dots = points.map(p =>
-    `<circle cx="${p.x}" cy="${p.y}" r="10" fill="#0B1120" stroke="${themeColor}" stroke-width="2.5"/>` +
-    `<text x="${p.x}" y="${p.y + 4}" text-anchor="middle" fill="${themeColor}" font-size="11" font-weight="bold" font-family="monospace">${p.ranking}</text>` +
-    `<text x="${p.x}" y="${h - 6}" text-anchor="middle" fill="#5A6577" font-size="12" font-family="monospace">${p.round}</text>`
+    `<g opacity="0.9">` +
+    `<circle cx="${p.x}" cy="${p.y}" r="8" fill="#0B1120" stroke="${themeColor}" stroke-width="2.5"/>` +
+    `<text x="${p.x}" y="${p.y + 3.6}" text-anchor="middle" fill="${themeColor}" font-size="9" font-weight="bold" font-family="${font}">${p.ranking}</text>` +
+    `<text x="${p.x}" y="${h - pad.bottom + 14}" text-anchor="middle" fill="#6B7588" font-size="11" font-family="${font}">${p.round}</text>` +
+    `</g>`
   ).join('');
 
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">${midline}${line}${dots}</svg>`;
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">${zones}${yAxis}${boundaryLines}${yLabels}${midline}${xAxis}${line}${dots}</svg>`;
 }
 
 // ── Fetch coach photos helper ──
@@ -413,9 +437,9 @@ export async function GET(
 
         <div style={{ display: 'flex', flex: 1, padding: '12px 36px 0' }}>
           {/* ======== LEFT PANEL (35%) ======== */}
-          <div style={{ width: '35%', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', paddingRight: 28 }}>
+          <div style={{ width: '35%', display: 'flex', flexDirection: 'column', paddingRight: 28 }}>
             {/* Rank number + movement */}
-            <div style={{ display: 'flex', alignItems: 'flex-end', gap: 12 }}>
+            <div style={{ display: 'flex', alignItems: 'flex-end', gap: 12, marginBottom: 20 }}>
               <div style={{
                 display: 'flex', fontSize: 156, fontWeight: 900, lineHeight: '0.85',
                 color: theme.primary, fontFamily: "'JetBrains Mono', monospace",
@@ -443,6 +467,7 @@ export async function GET(
               display: 'flex', flexDirection: 'column',
               background: 'rgba(255,255,255,0.025)', borderRadius: 20, padding: '16px 20px',
               border: '1px solid rgba(255,255,255,0.05)', gap: 14,
+              marginBottom: 20,
             }}>
               {stats.map((stat) => (
                 <div key={stat.label} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -453,12 +478,15 @@ export async function GET(
               ))}
             </div>
 
-            {/* Line circles */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0 4px' }}>
+            {/* Line circles — space-around for even distribution */}
+            <div style={{ display: 'flex', justifyContent: 'space-around', marginBottom: 20 }}>
               {lineRanks.map((l) => <SatoriLineCircle key={l.label} label={l.label} rank={l.rank} />)}
             </div>
 
-            {/* Trend chart */}
+            {/* Spacer pushes trend chart to bottom */}
+            <div style={{ display: 'flex', flex: 1 }} />
+
+            {/* Trend chart — pinned to bottom */}
             <div style={{
               display: 'flex', flexDirection: 'column',
               background: 'rgba(255,255,255,0.025)', borderRadius: 16, padding: '12px 12px 8px',
@@ -498,7 +526,7 @@ export async function GET(
                       position: 'absolute', left: i * 36, top: 0,
                     }}>
                       {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img src={url} alt="" width={80} height={80} style={{ objectFit: 'cover', display: 'block' }} />
+                      <img src={url} alt="" width={80} height={80} style={{ objectFit: 'cover', objectPosition: 'center top', display: 'block' }} />
                     </div>
                   ))}
                 </div>
@@ -508,7 +536,7 @@ export async function GET(
                   overflow: 'hidden', border: `3px solid ${theme.border}`,
                 }}>
                   {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={photoUrls[0]} alt="" width={100} height={100} style={{ objectFit: 'cover', display: 'block' }} />
+                  <img src={photoUrls[0]} alt="" width={100} height={100} style={{ objectFit: 'cover', objectPosition: 'center top', display: 'block' }} />
                 </div>
               ) : (
                 <div style={{
