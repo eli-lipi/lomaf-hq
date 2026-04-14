@@ -85,6 +85,10 @@ export async function POST(request: Request) {
         const isScoring = row['is_scoring'] === 1 || row['is_scoring'] === '1' || row['is_scoring'] === true || row['is_scoring'] === 'true';
         const points = row['points'] !== undefined && row['points'] !== null && row['points'] !== '' ? Number(row['points']) : null;
 
+        // Capture AFL club if present in CSV (column: club, squad, afl_team, player_team)
+        const clubRaw = row['club'] || row['squad'] || row['afl_team'] || row['player_team'] || row['Club'] || row['Squad'] || '';
+        const club = String(clubRaw).trim() || null;
+
         return {
           round_number: roundNum,
           team_id: team?.team_id || Number(row['team_id'] || 0),
@@ -95,6 +99,7 @@ export async function POST(request: Request) {
           is_emg: isEmg,
           is_scoring: isScoring,
           points,
+          ...(club ? { club } : {}),
         };
       });
 

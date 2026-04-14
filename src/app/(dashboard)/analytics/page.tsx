@@ -9,6 +9,8 @@ import LineRankingsTab from './line-rankings-tab';
 import LuckFormTab from './luck-form-tab';
 import DraftTab from './draft-tab';
 import PlayersTab from './players-tab';
+import ConcentrationTab from './concentration-tab';
+import StabilityTab from './stability-tab';
 
 const TABS = [
   { id: 'overview', label: 'Overview' },
@@ -17,6 +19,8 @@ const TABS = [
   { id: 'luck', label: 'Luck & Form' },
   { id: 'draft', label: 'Draft vs Reality' },
   { id: 'players', label: 'Player Rankings' },
+  { id: 'concentration', label: 'AFL Concentration' },
+  { id: 'stability', label: 'Team Stability' },
 ] as const;
 
 type TabId = (typeof TABS)[number]['id'];
@@ -75,6 +79,8 @@ function AnalyticsPageInner() {
       {activeTab === 'luck' && <LuckFormTab />}
       {activeTab === 'draft' && <DraftTab />}
       {activeTab === 'players' && <PlayersTab />}
+      {activeTab === 'concentration' && <ConcentrationTab />}
+      {activeTab === 'stability' && <StabilityTab />}
     </div>
   );
 }
