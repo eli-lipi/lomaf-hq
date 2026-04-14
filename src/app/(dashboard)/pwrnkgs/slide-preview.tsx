@@ -132,31 +132,16 @@ function TrendChart({ history, width = 176, height = 65, theme }: {
 
   return (
     <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`}>
-      {/* Zone shading */}
-      <rect x={padding.left} y={padding.top} width={w} height={midY - padding.top} fill="rgba(0,255,135,0.03)" />
-      <rect x={padding.left} y={midY} width={w} height={padding.top + h - midY} fill="rgba(255,71,87,0.03)" />
-
-      {/* Y-axis labels and gridlines for all 10 positions */}
-      {Array.from({ length: 10 }, (_, i) => i + 1).map((pos) => {
-        const y = padding.top + ((pos - 1) / 9) * h;
-        return (
-          <g key={pos}>
-            <line x1={padding.left} y1={y} x2={padding.left + w} y2={y} stroke="rgba(255,255,255,0.04)" strokeWidth={0.5} />
-            <text x={padding.left - 3} y={y + 2.5} textAnchor="end" fill="#5A6577" fontSize={5} fontFamily="'JetBrains Mono', monospace">{pos}</text>
-          </g>
-        );
-      })}
-
-      {/* Midline (more visible) */}
-      <line x1={padding.left} y1={midY} x2={padding.left + w} y2={midY} stroke="rgba(255,255,255,0.18)" strokeWidth={0.75} strokeDasharray="3,3" />
+      {/* Simple midline divider */}
+      <line x1={padding.left} y1={midY} x2={padding.left + w} y2={midY} stroke="rgba(255,255,255,0.08)" strokeWidth={0.5} strokeDasharray="2,2" />
 
       {/* Data line */}
       {points.length > 1 && <path d={pathD} fill="none" stroke={theme.primary} strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" />}
 
-      {/* Data dots with ranking numbers */}
+      {/* Data dots + round labels */}
       {points.map((p, i) => (
         <g key={i}>
-          <circle cx={p.x} cy={p.y} r={5} fill="#0B1120" stroke={theme.primary} strokeWidth={1.5} />
+          <circle cx={p.x} cy={p.y} r={4.5} fill="#0B1120" stroke={theme.primary} strokeWidth={1.5} />
           <text x={p.x} y={p.y + 2} textAnchor="middle" fill={theme.primary} fontSize={5.5} fontWeight="bold" fontFamily="'JetBrains Mono', monospace">{p.ranking}</text>
           <text x={p.x} y={height - 3} textAnchor="middle" fill="#5A6577" fontSize={5} fontFamily="'JetBrains Mono', monospace">{p.round}</text>
         </g>
@@ -309,31 +294,32 @@ export default function SlidePreview({ data }: { data: SlidePreviewData }) {
               <div style={{ display: 'flex', position: 'relative', width: 68, height: 40, flexShrink: 0, marginLeft: 10 }}>
                 {d.coachPhotoUrls.slice(0, 2).map((url, i) => (
                   <div key={i} style={{
-                    width: 40, height: 40, borderRadius: '50%', overflow: 'hidden',
+                    width: 40, height: 40, borderRadius: 20, overflow: 'hidden',
                     border: `1.5px solid ${theme.border}`, position: 'absolute',
                     left: i * 18, zIndex: 2 - i,
-                    background: `linear-gradient(135deg, ${theme.subtle}, rgba(0,100,200,0.04))`,
                   }}>
                     {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src={url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                    <img src={url} alt="" style={{ width: 40, height: 40, objectFit: 'cover', display: 'block' }} />
                   </div>
                 ))}
               </div>
+            ) : d.coachPhotoUrls.length > 0 ? (
+              <div style={{
+                width: 50, height: 50, borderRadius: 25, flexShrink: 0, marginLeft: 10,
+                overflow: 'hidden', border: `1.5px solid ${theme.border}`,
+              }}>
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={d.coachPhotoUrls[0]} alt="" style={{ width: 50, height: 50, objectFit: 'cover', display: 'block' }} />
+              </div>
             ) : (
               <div style={{
-                width: 50, height: 50, borderRadius: '50%', flexShrink: 0, marginLeft: 10,
-                overflow: 'hidden',
-                background: d.coachPhotoUrls.length > 0 ? 'transparent' : `linear-gradient(135deg, ${theme.subtle}, rgba(0,100,200,0.04))`,
+                width: 50, height: 50, borderRadius: 25, flexShrink: 0, marginLeft: 10,
+                background: `linear-gradient(135deg, ${theme.subtle}, rgba(0,100,200,0.04))`,
                 border: `1.5px solid ${theme.border}`,
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
-                fontSize: 14, fontWeight: 700, color: theme.primary, opacity: d.coachPhotoUrls.length > 0 ? 1 : 0.7,
+                fontSize: 14, fontWeight: 700, color: theme.primary, opacity: 0.7,
               }}>
-                {d.coachPhotoUrls.length > 0 ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img src={d.coachPhotoUrls[0]} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                ) : (
-                  coachInitials
-                )}
+                {coachInitials}
               </div>
             )}
           </div>

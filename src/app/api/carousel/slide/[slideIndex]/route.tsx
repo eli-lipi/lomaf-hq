@@ -132,19 +132,8 @@ function buildTrendChartSvg(
   const ch = h - pad.top - pad.bottom;
   const midY = pad.top + ((5.5 - 1) / 9) * ch;
 
-  // Zone shading
-  const zones = `<rect x="${pad.left}" y="${pad.top}" width="${cw}" height="${midY - pad.top}" fill="rgba(0,255,135,0.03)"/>` +
-    `<rect x="${pad.left}" y="${midY}" width="${cw}" height="${pad.top + ch - midY}" fill="rgba(255,71,87,0.03)"/>`;
-
-  // Gridlines + Y-axis labels for all 10 positions
-  const gridlines = Array.from({ length: 10 }, (_, i) => i + 1).map(pos => {
-    const y = pad.top + ((pos - 1) / 9) * ch;
-    return `<line x1="${pad.left}" y1="${y}" x2="${pad.left + cw}" y2="${y}" stroke="rgba(255,255,255,0.04)" stroke-width="1"/>` +
-      `<text x="${pad.left - 6}" y="${y + 5}" text-anchor="end" fill="#5A6577" font-size="12" font-family="monospace">${pos}</text>`;
-  }).join('');
-
-  // Midline (more visible)
-  const midline = `<line x1="${pad.left}" y1="${midY}" x2="${pad.left + cw}" y2="${midY}" stroke="rgba(255,255,255,0.18)" stroke-width="1.5" stroke-dasharray="6,6"/>`;
+  // Simple midline
+  const midline = `<line x1="${pad.left}" y1="${midY}" x2="${pad.left + cw}" y2="${midY}" stroke="rgba(255,255,255,0.08)" stroke-width="1" stroke-dasharray="4,4"/>`;
 
   // Data points
   const points = history.map((pt, i) => ({
@@ -157,14 +146,14 @@ function buildTrendChartSvg(
   const pathD = points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x} ${p.y}`).join(' ');
   const line = points.length > 1 ? `<path d="${pathD}" fill="none" stroke="${themeColor}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>` : '';
 
-  // Dots with ranking numbers inside
+  // Dots with ranking numbers + round labels
   const dots = points.map(p =>
     `<circle cx="${p.x}" cy="${p.y}" r="10" fill="#0B1120" stroke="${themeColor}" stroke-width="2.5"/>` +
     `<text x="${p.x}" y="${p.y + 4}" text-anchor="middle" fill="${themeColor}" font-size="11" font-weight="bold" font-family="monospace">${p.ranking}</text>` +
     `<text x="${p.x}" y="${h - 6}" text-anchor="middle" fill="#5A6577" font-size="12" font-family="monospace">${p.round}</text>`
   ).join('');
 
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">${zones}${gridlines}${midline}${line}${dots}</svg>`;
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">${midline}${line}${dots}</svg>`;
 }
 
 // ── Fetch coach photos helper ──
@@ -503,29 +492,33 @@ export async function GET(
               {isCoCoached && photoUrls.length >= 2 ? (
                 <div style={{ display: 'flex', position: 'relative', width: 116, height: 80, flexShrink: 0, marginLeft: 20 }}>
                   {photoUrls.slice(0, 2).map((url, i) => (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img key={i} src={url} alt="" width={80} height={80} style={{
-                      borderRadius: '50%', objectFit: 'cover',
+                    <div key={i} style={{
+                      width: 80, height: 80, borderRadius: 40, overflow: 'hidden',
                       border: `3px solid ${theme.border}`,
                       position: 'absolute', left: i * 36, top: 0,
-                    }} />
+                    }}>
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img src={url} alt="" width={80} height={80} style={{ objectFit: 'cover', display: 'block' }} />
+                    </div>
                   ))}
+                </div>
+              ) : photoUrls.length > 0 ? (
+                <div style={{
+                  display: 'flex', width: 100, height: 100, borderRadius: 50, flexShrink: 0, marginLeft: 20,
+                  overflow: 'hidden', border: `3px solid ${theme.border}`,
+                }}>
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={photoUrls[0]} alt="" width={100} height={100} style={{ objectFit: 'cover', display: 'block' }} />
                 </div>
               ) : (
                 <div style={{
-                  display: 'flex', width: 100, height: 100, borderRadius: '50px', flexShrink: 0, marginLeft: 20,
-                  overflow: 'hidden',
-                  background: photoUrls.length > 0 ? 'transparent' : `linear-gradient(135deg, ${theme.subtle}, rgba(0,100,200,0.04))`,
+                  display: 'flex', width: 100, height: 100, borderRadius: 50, flexShrink: 0, marginLeft: 20,
+                  background: `linear-gradient(135deg, ${theme.subtle}, rgba(0,100,200,0.04))`,
                   border: `3px solid ${theme.border}`,
                   alignItems: 'center', justifyContent: 'center',
                   fontSize: 28, fontWeight: 700, color: theme.primary,
                 }}>
-                  {photoUrls.length > 0 ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img src={photoUrls[0]} alt="" width={100} height={100} style={{ objectFit: 'cover' }} />
-                  ) : (
-                    coachInitials
-                  )}
+                  {coachInitials}
                 </div>
               )}
             </div>
