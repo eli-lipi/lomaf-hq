@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, memo } from 'react';
 import {
   DndContext,
   closestCenter,
@@ -437,17 +437,11 @@ export default function RankingsTab() {
           <>
             {/* Writeup textarea */}
             <div className="mb-4 shrink-0">
-              <div className="flex items-center justify-between mb-1">
-                <label className="text-xs text-muted-foreground font-semibold uppercase tracking-wide">Writeup</label>
-                <span className="text-xs text-muted-foreground">{selectedItem.writeup.length} chars</span>
-              </div>
-              <textarea
+              <WriteupTextarea
+                key={selectedItem.team_id}
                 value={selectedItem.writeup}
-                onChange={(e) => updateWriteup(selectedItem.team_id, e.target.value)}
-                placeholder="Write about this team..."
-                rows={8}
+                onChange={(text) => updateWriteup(selectedItem.team_id, text)}
                 disabled={isPublished}
-                className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary disabled:opacity-50 resize-y"
               />
               <div className="flex items-center justify-between mt-1">
                 <p className="text-xs text-muted-foreground">Tip: Start a line with <code className="bg-muted px-1 rounded">##</code> to create a section header on the slide</p>
@@ -495,6 +489,52 @@ export default function RankingsTab() {
     </div>
   );
 }
+
+// ── Writeup textarea with local state ──
+// Isolates re-renders so typing doesn't trigger the full rankings re-render cycle.
+// Syncs external value changes (e.g., AI draft) via the `value` prop.
+
+const WriteupTextarea = memo(function WriteupTextarea({
+  value, onChange, disabled,
+}: {
+  value: string; onChange: (text: string) => void; disabled: boolean;
+}) {
+  const [local, setLocal] = useState(value);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Sync from parent when value changes externally (AI draft, team switch)
+  useEffect(() => {
+    setLocal(value);
+  }, [value]);
+
+  const handleChange = (text: string) => {
+    setLocal(text);
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => onChange(text), 300);
+  };
+
+  // Flush pending changes on unmount
+  useEffect(() => {
+    return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
+  }, []);
+
+  return (
+    <>
+      <div className="flex items-center justify-between mb-1">
+        <label className="text-xs text-muted-foreground font-semibold uppercase tracking-wide">Writeup</label>
+        <span className="text-xs text-muted-foreground">{local.length} chars</span>
+      </div>
+      <textarea
+        value={local}
+        onChange={(e) => handleChange(e.target.value)}
+        placeholder="Write about this team..."
+        rows={8}
+        disabled={disabled}
+        className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary disabled:opacity-50 resize-y"
+      />
+    </>
+  );
+});
 
 // ── Sortable row ──
 
