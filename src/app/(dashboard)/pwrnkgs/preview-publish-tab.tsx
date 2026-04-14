@@ -1,10 +1,13 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { Download, Loader2, Image as ImageIcon, Send, Save, CheckCircle, AlertCircle } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { cn } from '@/lib/utils';
+import { TEAMS } from '@/lib/constants';
 import { getWorkingRound } from '@/lib/get-working-round';
+import { computeSlideData, type SlideTeamData } from '@/lib/compute-slide-data';
+import SlidePreview, { type SlidePreviewData } from './slide-preview';
 
 export default function PreviewPublishTab() {
   const [roundNumber, setRoundNumber] = useState<number | null>(null);
@@ -19,12 +22,21 @@ export default function PreviewPublishTab() {
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [enlargedSlide, setEnlargedSlide] = useState<string | null>(null);
 
+  // Data for client-side slide rendering (same as Rankings Editor)
+  const [slideDataList, setSlideDataList] = useState<{ slideIndex: number; data: SlidePreviewData }[]>([]);
+  const slideRefs = useRef<Map<number, HTMLDivElement>>(new Map());
+
   // Checklist state
   const [checklist, setChecklist] = useState<{
     previewText: boolean;
     weekAheadText: boolean;
     teamWriteups: { teamName: string; done: boolean }[];
   } | null>(null);
+
+  const setSlideRef = useCallback((slideIndex: number, el: HTMLDivElement | null) => {
+    if (el) slideRefs.current.set(slideIndex, el);
+    else slideRefs.current.delete(slideIndex);
+  }, []);
 
   useEffect(() => {
     async function loadData() {
@@ -36,13 +48,14 @@ export default function PreviewPublishTab() {
       setRoundId(workingRound.id);
       setIsPublished(workingRound.status === 'published');
 
-      // Build checklist
+      // Fetch rankings
       const { data: rankings } = await supabase
         .from('pwrnkgs_rankings')
-        .select('team_name, writeup')
+        .select('*')
         .eq('round_number', currentRound)
         .order('ranking', { ascending: true });
 
+      // Build checklist
       setChecklist({
         previewText: !!workingRound.preview_text?.trim(),
         weekAheadText: !!workingRound.week_ahead_text?.trim(),
@@ -51,6 +64,71 @@ export default function PreviewPublishTab() {
           done: !!r.writeup?.trim(),
         })),
       });
+
+      if (!rankings || rankings.length === 0) return;
+
+      // Compute slide data (same as Rankings Editor)
+      const computed = await computeSlideData(supabase, currentRound);
+
+      // Fetch sparkline data
+      const { data: allRankings } = await supabase
+        .from('pwrnkgs_rankings')
+        .select('team_id, ranking, round_number')
+        .lte('round_number', currentRound)
+        .order('round_number', { ascending: true });
+
+      const sparkMap = new Map<number, { round: string; ranking: number }[]>();
+      allRankings?.forEach((r: { team_id: number; ranking: number; round_number: number }) => {
+        if (!sparkMap.has(r.team_id)) sparkMap.set(r.team_id, []);
+        sparkMap.get(r.team_id)!.push({ round: `R${r.round_number}`, ranking: r.ranking });
+      });
+
+      // Fetch coach photos
+      const coachPhotoMap = new Map<string, string>();
+      const { data: photoFiles } = await supabase.storage.from('coach-photos').list('', { limit: 100 });
+      if (photoFiles) {
+        for (const f of photoFiles) {
+          const key = f.name.split('.')[0];
+          const { data: urlData } = supabase.storage.from('coach-photos').getPublicUrl(f.name);
+          coachPhotoMap.set(key, urlData.publicUrl);
+        }
+      }
+
+      // Build SlidePreviewData for each team (slides 1–10)
+      const slideList: { slideIndex: number; data: SlidePreviewData }[] = [];
+      for (const r of rankings) {
+        const team = TEAMS.find(t => t.team_id === r.team_id);
+        const cd = computed.get(r.team_id);
+        const photoKeys = team ? (Array.isArray(team.coach_photo_key) ? team.coach_photo_key : [team.coach_photo_key]) : [];
+        const photoUrls = photoKeys.map(k => coachPhotoMap.get(k)).filter(Boolean) as string[];
+
+        const previewData: SlidePreviewData = {
+          ranking: r.ranking,
+          previousRanking: r.previous_ranking,
+          teamName: r.team_name,
+          coachName: team?.coach || '',
+          coachPhotoUrls: photoUrls,
+          isCoCoached: team?.is_co_coached,
+          scoreThisWeek: cd?.scoreThisWeek ?? null,
+          scoreThisWeekRank: cd?.scoreThisWeekRank ?? null,
+          seasonTotal: cd?.seasonTotal ?? null,
+          seasonTotalRank: cd?.seasonTotalRank ?? null,
+          record: cd?.record ?? { wins: 0, losses: 0, ties: 0 },
+          ladderPosition: cd?.ladderPosition ?? null,
+          luckScore: cd?.luckScore ?? null,
+          luckRank: cd?.luckRank ?? null,
+          lineRanks: cd?.lineRanks ?? { def: null, mid: null, fwd: null, ruc: null, utl: null },
+          pwrnkgsHistory: sparkMap.get(r.team_id) || [],
+          writeup: r.writeup || '',
+          roundNumber: currentRound,
+        };
+
+        // Slide index: rank 10 → slide 1, rank 1 → slide 10
+        const slideIndex = 11 - r.ranking;
+        slideList.push({ slideIndex, data: previewData });
+      }
+
+      setSlideDataList(slideList);
     }
     loadData();
   }, []);
@@ -63,31 +141,55 @@ export default function PreviewPublishTab() {
     const newSlides: (string | null)[] = Array(12).fill(null);
 
     try {
-      for (let i = 0; i < 12; i++) {
+      // Import html-to-image for client-side capture
+      const { toPng } = await import('html-to-image');
+
+      // Slide 0 (Preview) and Slide 11 (Summary) — still use API route
+      for (const i of [0, 11]) {
         try {
           const res = await fetch(`/api/carousel/slide/${i}?round=${roundNumber}&v=${Date.now()}`);
           if (!res.ok) {
-            let errMsg = `Slide ${i + 1}: HTTP ${res.status}`;
+            let errMsg = `Slide ${i === 0 ? 'Preview' : 'Summary'}: HTTP ${res.status}`;
             try { const body = await res.json(); errMsg += ` — ${body.error || JSON.stringify(body)}`; } catch { /* not JSON */ }
             throw new Error(errMsg);
           }
-          const contentType = res.headers.get('content-type') || '';
-          if (!contentType.includes('image')) {
-            throw new Error(`Slide ${i + 1}: Expected image, got ${contentType}`);
-          }
           const blob = await res.blob();
           newSlides[i] = URL.createObjectURL(blob);
-          setSlides([...newSlides]);
-          setProgress(i + 1);
         } catch (slideErr) {
           console.error(`Failed to generate slide ${i}:`, slideErr);
-          // Continue generating remaining slides even if one fails
           setError((prev) => {
-            const msg = slideErr instanceof Error ? slideErr.message : `Slide ${i + 1} failed`;
+            const msg = slideErr instanceof Error ? slideErr.message : `Slide ${i} failed`;
             return prev ? `${prev}\n${msg}` : msg;
           });
-          setProgress(i + 1);
         }
+        setProgress(i === 0 ? 1 : 12);
+        setSlides([...newSlides]);
+      }
+
+      // Slides 1–10 (Team rankings) — render client-side using SlidePreview
+      for (const { slideIndex } of slideDataList) {
+        try {
+          const el = slideRefs.current.get(slideIndex);
+          if (!el) {
+            throw new Error(`Slide #${11 - slideIndex}: DOM element not found`);
+          }
+          // Capture at 2x pixel ratio: 540 × 2 = 1080
+          const dataUrl = await toPng(el, {
+            width: 540,
+            height: 540,
+            pixelRatio: 2,
+            cacheBust: true,
+          });
+          newSlides[slideIndex] = dataUrl;
+        } catch (slideErr) {
+          console.error(`Failed to capture slide ${slideIndex}:`, slideErr);
+          setError((prev) => {
+            const msg = slideErr instanceof Error ? slideErr.message : `Slide ${slideIndex} failed`;
+            return prev ? `${prev}\n${msg}` : msg;
+          });
+        }
+        setProgress(slideIndex + 1);
+        setSlides([...newSlides]);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Generation failed');
@@ -126,7 +228,6 @@ export default function PreviewPublishTab() {
     setSaving(true);
     setMessage(null);
     try {
-      // Just re-fetch to ensure data is saved (rankings tab auto-saves)
       setMessage({ type: 'success', text: 'Draft saved!' });
     } catch (err) {
       setMessage({ type: 'error', text: err instanceof Error ? err.message : 'Save failed' });
@@ -167,6 +268,19 @@ export default function PreviewPublishTab() {
 
   return (
     <div>
+      {/* Hidden off-screen container for client-side slide rendering */}
+      <div style={{ position: 'fixed', left: '-9999px', top: 0, pointerEvents: 'none' }} aria-hidden>
+        {slideDataList.map(({ slideIndex, data }) => (
+          <div
+            key={slideIndex}
+            ref={(el) => setSlideRef(slideIndex, el)}
+            style={{ width: 540, height: 540 }}
+          >
+            <SlidePreview data={data} />
+          </div>
+        ))}
+      </div>
+
       {/* Enlarged slide modal */}
       {enlargedSlide && (
         <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-8" onClick={() => setEnlargedSlide(null)}>
