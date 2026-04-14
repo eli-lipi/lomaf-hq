@@ -65,7 +65,7 @@ export default function PreviewPublishTab() {
     try {
       for (let i = 0; i < 12; i++) {
         try {
-          const res = await fetch(`/api/carousel/slide/${i}?round=${roundNumber}`);
+          const res = await fetch(`/api/carousel/slide/${i}?round=${roundNumber}&v=${Date.now()}`);
           if (!res.ok) {
             let errMsg = `Slide ${i + 1}: HTTP ${res.status}`;
             try { const body = await res.json(); errMsg += ` — ${body.error || JSON.stringify(body)}`; } catch { /* not JSON */ }
