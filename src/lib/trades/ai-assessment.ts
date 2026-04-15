@@ -148,19 +148,24 @@ export interface NarrativeResult {
   narrative: string;
 }
 
-const NARRATIVE_SYSTEM_PROMPT = `You are the trade analyst for LOMAF, a fantasy AFL league. Assess fantasy AFL trades in context. Consider:
-- Each team's ladder position and finals chances (finals start around R21 of a 23-round season)
-- Whether the trade filled a positional need
-- Whether it was a "win-now" or "build-for-finals" move
-- The risk/reward profile for each side
+const NARRATIVE_SYSTEM_PROMPT = `You are the trade analyst for LOMAF, a fantasy AFL league. You are given per-round scores for every player involved in a trade since the trade was made. USE THE ACTUAL NUMBERS — do not make up stats. Cite specific scores in the narrative ("Rozee's R3 ton", "De Koning's 0 in R4", etc).
 
-Then write a concise trade narrative (3-4 sentences) explaining why each team made the trade and the risk for each side. Be specific — reference ladder positions, line weaknesses, injury timelines, and finals implications. Write in a punchy, opinionated sports analyst tone.
+The season has 23 rounds. Finals start around R21. A "ton" is 100+, a "zero" is 0/DNP (injury or bye), a solid score is 80+. Typical stars average 90-120. Pay attention to:
+- Each team's ladder position and finals chances
+- Whether the trade plugged a line weakness (check line-rank columns: lower rank = stronger)
+- Whether the outgoing players have kept scoring on their new team (the actual per-round scores tell you this)
+- Injury / DNP patterns — a player with two straight DNPs after a big pre-trade avg is likely hurt
+- "Win-now" vs "build-for-finals" depending on round and record
+
+The "edge" field: which side is currently winning the trade based on points delivered so far? Magnitude 1-3 = slight, 4-6 = clear, 7-10 = decisive. If too early to tell (0-2 rounds of data), use magnitude 1-3.
+
+Narrative: 3-4 sentences, punchy opinionated sports-analyst voice. Reference actual scores ("X averaged Y since the trade"), not generalities. End with the finals implication for each side.
 
 Return ONLY valid JSON (no markdown fences):
 {
   "edge": "team_a" | "team_b" | "even",
   "magnitude": 1-10,
-  "narrative": "string (3-4 sentences)"
+  "narrative": "string (3-4 sentences, referencing actual scores from the data)"
 }`;
 
 function lineRanksStr(lines: LineRanks): string {

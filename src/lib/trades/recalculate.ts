@@ -120,8 +120,15 @@ export async function recalculateTradeForRound(
     const playerBreakdownLines = performance.map((p) => {
       const status = p.injured ? '🔴 Injured' : '✅ Active';
       const pre = p.pre_trade_avg?.toFixed(0) ?? '?';
-      const post = p.post_trade_avg.toFixed(0);
-      return `- ${p.player_name} → ${p.receiving_team_name}: pre ${pre}, post ${post}, ${p.rounds_played}/${p.rounds_possible} rounds ${status}`;
+      const post = p.rounds_played > 0 ? p.post_trade_avg.toFixed(0) : '—';
+      // Per-round scores: "R3:72, R4:0, R5:88" — 0/null shown explicitly so
+      // the model can see DNPs / injuries / bye patterns.
+      const perRound = p.round_scores.length > 0
+        ? p.round_scores
+            .map((s) => `R${s.round}:${s.points == null ? 'DNP' : s.points}`)
+            .join(', ')
+        : '(no rounds played since trade)';
+      return `- ${p.player_name} (${p.raw_position ?? '?'}) → ${p.receiving_team_name}: pre-trade avg ${pre}, post-trade avg ${post}, ${p.rounds_played}/${p.rounds_possible} rounds, ${status}\n    scores: ${perRound}`;
     });
 
     const teamAReceives = teamA.map((p) => p.player_name);

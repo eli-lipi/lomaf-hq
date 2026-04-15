@@ -1,9 +1,8 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
-import { X, Upload, Loader2 } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { X, Loader2 } from 'lucide-react';
 import { TEAMS } from '@/lib/constants';
-import type { ParsedTradeScreenshot } from '@/lib/trades/ai-assessment';
 
 interface Props {
   onClose: () => void;
@@ -23,73 +22,24 @@ interface PlayerOption {
   pos: string | null;
 }
 
-type Step = 'upload' | 'review' | 'manual' | 'saving';
+type Step = 'form' | 'saving';
+type Timing = 'after' | 'before';
 
 export default function LogTradeModal({ onClose, onCreated }: Props) {
-  const [step, setStep] = useState<Step>('upload');
+  const [step, setStep] = useState<Step>('form');
   const [error, setError] = useState<string | null>(null);
-  const [parsing, setParsing] = useState(false);
 
   const [teamAId, setTeamAId] = useState<number | null>(null);
   const [teamBId, setTeamBId] = useState<number | null>(null);
-  const [roundExecuted, setRoundExecuted] = useState<number>(0);
+  const [timing, setTiming] = useState<Timing>('after');
+  const [roundPicked, setRoundPicked] = useState<number>(1);
   const [contextNotes, setContextNotes] = useState<string>('');
-  const [screenshotUrl, setScreenshotUrl] = useState<string | null>(null);
   const [players, setPlayers] = useState<DraftPlayer[]>([]);
 
-  const fileRef = useRef<HTMLInputElement>(null);
-
-  const handleFile = async (file: File) => {
-    setError(null);
-    setParsing(true);
-    try {
-      const base64 = await fileToBase64(file);
-      const mediaType = (file.type || 'image/png') as 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif';
-
-      // 1. Upload to storage
-      const formData = new FormData();
-      formData.append('file', file);
-      const uploadRes = await fetch('/api/trades/upload-screenshot', { method: 'POST', body: formData });
-      const uploadJson = await uploadRes.json();
-      if (!uploadRes.ok) throw new Error(uploadJson.error || 'Upload failed');
-      setScreenshotUrl(uploadJson.url);
-
-      // 2. Parse with Claude Vision
-      const parseRes = await fetch('/api/trades/parse-screenshot', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ image_base64: base64, media_type: mediaType, current_round: null }),
-      });
-      const parseJson = (await parseRes.json()) as ParsedTradeScreenshot & { error?: string };
-      if (!parseRes.ok) throw new Error(parseJson.error || 'Parse failed');
-
-      // 3. Pre-fill form
-      setTeamAId(parseJson.team_a_id);
-      setTeamBId(parseJson.team_b_id);
-      if (parseJson.round_executed != null) setRoundExecuted(parseJson.round_executed);
-
-      // Build draft players list — we only have names from vision, player_ids will
-      // be resolved via the picker in review step.
-      const draftPlayers: DraftPlayer[] = [];
-      if (parseJson.team_a_id) {
-        for (const name of parseJson.team_a_receives) {
-          draftPlayers.push({ player_id: 0, player_name: name, pos: null, receiving_team_id: parseJson.team_a_id });
-        }
-      }
-      if (parseJson.team_b_id) {
-        for (const name of parseJson.team_b_receives) {
-          draftPlayers.push({ player_id: 0, player_name: name, pos: null, receiving_team_id: parseJson.team_b_id });
-        }
-      }
-      setPlayers(draftPlayers);
-
-      setStep('review');
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to process screenshot');
-    } finally {
-      setParsing(false);
-    }
-  };
+  // round_executed = the last round where OLD rosters applied.
+  // "After Round N" → trade took effect R(N+1) → round_executed = N.
+  // "Before Round N" → trade took effect R(N)   → round_executed = N - 1.
+  const effectiveRoundExecuted = timing === 'after' ? roundPicked : Math.max(0, roundPicked - 1);
 
   const handleSave = async () => {
     setError(null);
@@ -115,9 +65,9 @@ export default function LogTradeModal({ onClose, onCreated }: Props) {
         body: JSON.stringify({
           team_a_id: teamAId,
           team_b_id: teamBId,
-          round_executed: roundExecuted,
+          round_executed: effectiveRoundExecuted,
           context_notes: contextNotes || null,
-          screenshot_url: screenshotUrl,
+          screenshot_url: null,
           players: players.map((p) => ({
             player_id: p.player_id,
             player_name: p.player_name,
@@ -131,16 +81,8 @@ export default function LogTradeModal({ onClose, onCreated }: Props) {
       onCreated();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Save failed');
-      setStep('review');
+      setStep('form');
     }
-  };
-
-  const startManual = () => {
-    setTeamAId(null);
-    setTeamBId(null);
-    setRoundExecuted(0);
-    setPlayers([]);
-    setStep('manual');
   };
 
   return (
@@ -166,55 +108,16 @@ export default function LogTradeModal({ onClose, onCreated }: Props) {
             </div>
           )}
 
-          {step === 'upload' && (
-            <div className="space-y-4">
-              <button
-                onClick={() => fileRef.current?.click()}
-                disabled={parsing}
-                className="w-full border-2 border-dashed border-border rounded-lg p-10 text-center hover:border-primary transition-colors disabled:opacity-50"
-              >
-                {parsing ? (
-                  <div className="flex flex-col items-center gap-2">
-                    <Loader2 className="animate-spin text-primary" size={28} />
-                    <p className="text-sm text-muted-foreground">Processing screenshot...</p>
-                  </div>
-                ) : (
-                  <div className="flex flex-col items-center gap-2">
-                    <Upload className="text-muted-foreground" size={28} />
-                    <p className="text-sm font-medium">Click or drop a trade screenshot</p>
-                    <p className="text-xs text-muted-foreground">PNG or JPG from fantasy-footy</p>
-                  </div>
-                )}
-              </button>
-              <input
-                ref={fileRef}
-                type="file"
-                accept="image/png,image/jpeg,image/jpg,image/webp"
-                className="hidden"
-                onChange={(e) => {
-                  const f = e.target.files?.[0];
-                  if (f) handleFile(f);
-                }}
-              />
-              <div className="text-center">
-                <button
-                  onClick={startManual}
-                  className="text-sm text-primary hover:underline"
-                >
-                  or log manually →
-                </button>
-              </div>
-            </div>
-          )}
-
-          {(step === 'review' || step === 'manual') && (
+          {step === 'form' && (
             <TradeForm
               teamAId={teamAId}
               teamBId={teamBId}
               setTeamAId={setTeamAId}
               setTeamBId={setTeamBId}
-              roundExecuted={roundExecuted}
-              setRoundExecuted={setRoundExecuted}
+              timing={timing}
+              setTiming={setTiming}
+              roundPicked={roundPicked}
+              setRoundPicked={setRoundPicked}
               contextNotes={contextNotes}
               setContextNotes={setContextNotes}
               players={players}
@@ -230,7 +133,7 @@ export default function LogTradeModal({ onClose, onCreated }: Props) {
           )}
         </div>
 
-        {(step === 'review' || step === 'manual') && (
+        {step === 'form' && (
           <div className="flex items-center justify-end gap-2 px-5 py-4 border-t border-border">
             <button
               onClick={onClose}
@@ -252,7 +155,7 @@ export default function LogTradeModal({ onClose, onCreated }: Props) {
 }
 
 // ============================================================
-// Trade form (used for both review & manual entry)
+// Trade form
 // ============================================================
 
 interface TradeFormProps {
@@ -260,8 +163,10 @@ interface TradeFormProps {
   teamBId: number | null;
   setTeamAId: (id: number | null) => void;
   setTeamBId: (id: number | null) => void;
-  roundExecuted: number;
-  setRoundExecuted: (r: number) => void;
+  timing: Timing;
+  setTiming: (t: Timing) => void;
+  roundPicked: number;
+  setRoundPicked: (r: number) => void;
   contextNotes: string;
   setContextNotes: (s: string) => void;
   players: DraftPlayer[];
@@ -271,10 +176,12 @@ interface TradeFormProps {
 function TradeForm(props: TradeFormProps) {
   const {
     teamAId, teamBId, setTeamAId, setTeamBId,
-    roundExecuted, setRoundExecuted,
+    timing, setTiming, roundPicked, setRoundPicked,
     contextNotes, setContextNotes,
     players, setPlayers,
   } = props;
+
+  const firstPostTradeRound = timing === 'after' ? roundPicked + 1 : roundPicked;
 
   return (
     <div className="space-y-4">
@@ -283,17 +190,30 @@ function TradeForm(props: TradeFormProps) {
         <TeamSelect label="Team B" value={teamBId} onChange={setTeamBId} excludeId={teamAId} />
       </div>
 
-      <div className="grid grid-cols-2 gap-3">
-        <div>
-          <label className="text-xs font-semibold text-muted-foreground block mb-1">Round executed</label>
+      <div>
+        <label className="text-xs font-semibold text-muted-foreground block mb-1">
+          When was the trade made?
+        </label>
+        <div className="flex items-center gap-2">
+          <select
+            value={timing}
+            onChange={(e) => setTiming(e.target.value as Timing)}
+            className="border border-border rounded px-3 py-2 text-sm bg-white"
+          >
+            <option value="after">After Round</option>
+            <option value="before">Before Round</option>
+          </select>
           <input
             type="number"
-            min={0}
-            value={roundExecuted}
-            onChange={(e) => setRoundExecuted(Number(e.target.value))}
-            className="w-full border border-border rounded px-3 py-2 text-sm"
+            min={timing === 'after' ? 0 : 1}
+            value={roundPicked}
+            onChange={(e) => setRoundPicked(Number(e.target.value))}
+            className="w-24 border border-border rounded px-3 py-2 text-sm"
           />
         </div>
+        <p className="text-[11px] text-muted-foreground mt-1">
+          First round with new rosters: <span className="font-medium">R{firstPostTradeRound}</span>
+        </p>
       </div>
 
       <div>
@@ -396,27 +316,6 @@ function PlayerPicker({
     })();
   }, [sourceTeamId]);
 
-  // For each named player in `players`, try to auto-match against roster
-  useEffect(() => {
-    if (roster.length === 0) return;
-    const updated = players.map((p) => {
-      if (p.player_id) return p;
-      const match = roster.find(
-        (r) => r.player_name.toLowerCase() === p.player_name.toLowerCase()
-      ) || roster.find((r) => r.player_name.toLowerCase().includes(p.player_name.toLowerCase()))
-        || roster.find((r) => p.player_name.toLowerCase().includes(r.player_name.toLowerCase()));
-      if (match) {
-        return { ...p, player_id: match.player_id, player_name: match.player_name, pos: match.pos };
-      }
-      return p;
-    });
-    // Only trigger update if anything changed
-    if (JSON.stringify(updated) !== JSON.stringify(players)) {
-      onChange(updated);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [roster]);
-
   const filtered = query
     ? roster.filter((r) => r.player_name.toLowerCase().includes(query.toLowerCase()))
     : roster;
@@ -430,8 +329,7 @@ function PlayerPicker({
     setQuery('');
   };
 
-  const removePlayer = (playerId: number, idx: number) => {
-    // Remove by idx to handle unresolved (player_id=0) duplicates
+  const removePlayer = (idx: number) => {
     onChange(players.filter((_, i) => i !== idx));
   };
 
@@ -455,7 +353,7 @@ function PlayerPicker({
               )}
             </span>
             <button
-              onClick={() => removePlayer(p.player_id, idx)}
+              onClick={() => removePlayer(idx)}
               className="text-muted-foreground hover:text-foreground"
             >
               <X size={14} />
@@ -493,17 +391,4 @@ function PlayerPicker({
       )}
     </div>
   );
-}
-
-async function fileToBase64(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const result = reader.result as string;
-      const base64 = result.split(',')[1] ?? '';
-      resolve(base64);
-    };
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
-  });
 }

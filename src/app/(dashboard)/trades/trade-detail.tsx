@@ -264,9 +264,16 @@ export default function TradeDetail({ tradeId, onBack, onDeleted }: Props) {
         </div>
       )}
 
-      {/* Per-player table */}
+      {/* Per-round scores grid — the raw data behind the analysis */}
+      <PerRoundScoresGrid
+        performance={playerPerformance}
+        roundExecuted={trade.round_executed}
+        latestRound={latestProbability?.round_number ?? trade.round_executed}
+      />
+
+      {/* Per-player summary table */}
       <div className="bg-white border border-border rounded-lg p-5">
-        <h3 className="text-sm font-semibold mb-3">Per-player performance</h3>
+        <h3 className="text-sm font-semibold mb-3">Per-player summary</h3>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
@@ -276,37 +283,146 @@ export default function TradeDetail({ tradeId, onBack, onDeleted }: Props) {
                 <th className="py-2 pr-4">Position</th>
                 <th className="py-2 pr-4 text-right">Pre-trade avg</th>
                 <th className="py-2 pr-4 text-right">Post-trade avg</th>
+                <th className="py-2 pr-4 text-right">Δ</th>
                 <th className="py-2 pr-4 text-right">Rounds</th>
                 <th className="py-2">Status</th>
               </tr>
             </thead>
             <tbody>
-              {playerPerformance.map((p) => (
-                <tr key={p.player_id} className="border-b border-border last:border-0">
-                  <td className="py-2 pr-4 font-medium">{p.player_name}</td>
-                  <td className="py-2 pr-4 text-xs">{p.receiving_team_name}</td>
-                  <td className="py-2 pr-4 text-xs text-muted-foreground">{p.raw_position ?? '?'}</td>
-                  <td className="py-2 pr-4 text-right tabular-nums">
-                    {p.pre_trade_avg?.toFixed(0) ?? '—'}
-                  </td>
-                  <td className="py-2 pr-4 text-right tabular-nums">
-                    {p.rounds_possible > 0 ? p.post_trade_avg.toFixed(0) : '—'}
-                  </td>
-                  <td className="py-2 pr-4 text-right text-xs tabular-nums">
-                    {p.rounds_played}/{p.rounds_possible}
-                  </td>
-                  <td className="py-2 text-xs">
-                    {p.injured ? (
-                      <span className="text-red-600">🔴 Injured</span>
-                    ) : (
-                      <span className="text-green-600">✅ Active</span>
-                    )}
-                  </td>
-                </tr>
-              ))}
+              {playerPerformance.map((p) => {
+                const delta = p.rounds_played > 0 && p.pre_trade_avg != null
+                  ? p.post_trade_avg - p.pre_trade_avg
+                  : null;
+                return (
+                  <tr key={p.player_id} className="border-b border-border last:border-0">
+                    <td className="py-2 pr-4 font-medium">{p.player_name}</td>
+                    <td className="py-2 pr-4 text-xs">{p.receiving_team_name}</td>
+                    <td className="py-2 pr-4 text-xs text-muted-foreground">{p.raw_position ?? '?'}</td>
+                    <td className="py-2 pr-4 text-right tabular-nums">
+                      {p.pre_trade_avg?.toFixed(0) ?? '—'}
+                    </td>
+                    <td className="py-2 pr-4 text-right tabular-nums">
+                      {p.rounds_played > 0 ? p.post_trade_avg.toFixed(0) : '—'}
+                    </td>
+                    <td className="py-2 pr-4 text-right text-xs tabular-nums">
+                      {delta == null ? '—' : (
+                        <span className={delta >= 0 ? 'text-green-600' : 'text-red-600'}>
+                          {delta >= 0 ? '+' : ''}{delta.toFixed(0)}
+                        </span>
+                      )}
+                    </td>
+                    <td className="py-2 pr-4 text-right text-xs tabular-nums">
+                      {p.rounds_played}/{p.rounds_possible}
+                    </td>
+                    <td className="py-2 text-xs">
+                      {p.injured ? (
+                        <span className="text-red-600">🔴 Injured</span>
+                      ) : (
+                        <span className="text-green-600">✅ Active</span>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// Per-round scores grid — cells colored by score band
+// ============================================================
+
+function PerRoundScoresGrid({
+  performance,
+  roundExecuted,
+  latestRound,
+}: {
+  performance: PlayerPerformance[];
+  roundExecuted: number;
+  latestRound: number;
+}) {
+  if (performance.length === 0 || latestRound <= roundExecuted) {
+    return (
+      <div className="bg-white border border-border rounded-lg p-5">
+        <h3 className="text-sm font-semibold mb-1">Scores since trade</h3>
+        <p className="text-sm text-muted-foreground py-4 text-center">
+          Trade just logged — scores will appear here after R{roundExecuted + 1} is uploaded.
+        </p>
+      </div>
+    );
+  }
+
+  const rounds: number[] = [];
+  for (let r = roundExecuted + 1; r <= latestRound; r++) rounds.push(r);
+
+  const scoreColor = (pts: number | null | undefined): string => {
+    if (pts == null) return 'bg-gray-100 text-muted-foreground';
+    if (pts === 0) return 'bg-red-100 text-red-700';
+    if (pts < 60) return 'bg-orange-50 text-orange-700';
+    if (pts < 80) return 'bg-yellow-50 text-yellow-800';
+    if (pts < 100) return 'bg-lime-50 text-lime-800';
+    return 'bg-green-100 text-green-800 font-semibold';
+  };
+
+  return (
+    <div className="bg-white border border-border rounded-lg p-5">
+      <h3 className="text-sm font-semibold mb-1">Scores since trade</h3>
+      <p className="text-xs text-muted-foreground mb-4">
+        All rounds since trade took effect (R{roundExecuted + 1} onwards). Colored by score band;
+        DNP = did not play.
+      </p>
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm border-collapse">
+          <thead>
+            <tr className="text-xs text-muted-foreground border-b border-border">
+              <th className="py-2 pr-4 text-left font-medium">Player</th>
+              <th className="py-2 pr-4 text-left font-medium">→ Team</th>
+              {rounds.map((r) => (
+                <th key={r} className="py-2 px-2 text-center font-medium">
+                  R{r}
+                </th>
+              ))}
+              <th className="py-2 pl-3 text-right font-medium">Avg</th>
+            </tr>
+          </thead>
+          <tbody>
+            {performance.map((p) => {
+              const scoreByRound = new Map<number, number | null>();
+              for (const s of p.round_scores) scoreByRound.set(s.round, s.points);
+              return (
+                <tr key={p.player_id} className="border-b border-border last:border-0">
+                  <td className="py-2 pr-4 font-medium whitespace-nowrap">
+                    {p.player_name}
+                    {p.raw_position && (
+                      <span className="text-muted-foreground ml-1 text-xs">({p.raw_position})</span>
+                    )}
+                  </td>
+                  <td className="py-2 pr-4 text-xs whitespace-nowrap">{p.receiving_team_name}</td>
+                  {rounds.map((r) => {
+                    const pts = scoreByRound.get(r);
+                    const hasRound = scoreByRound.has(r);
+                    return (
+                      <td key={r} className="py-1 px-1 text-center">
+                        <span
+                          className={`inline-block min-w-[2.5rem] px-2 py-1 rounded text-xs tabular-nums ${scoreColor(pts)}`}
+                        >
+                          {!hasRound ? '—' : pts == null ? 'DNP' : pts}
+                        </span>
+                      </td>
+                    );
+                  })}
+                  <td className="py-2 pl-3 text-right tabular-nums text-sm">
+                    {p.rounds_played > 0 ? p.post_trade_avg.toFixed(0) : '—'}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
       </div>
     </div>
   );
