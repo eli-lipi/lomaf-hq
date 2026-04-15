@@ -90,6 +90,26 @@ export default function TradeDetail({ tradeId, onBack, onDeleted }: Props) {
     onDeleted();
   };
 
+  // Chart data must be computed before any early returns to satisfy Rules of Hooks.
+  // We derive from `data` (which may be null on first render).
+  const chartData = useMemo(() => {
+    if (!data) return [] as { round: string; probA: number; probAbove: number; probBelow: number }[];
+    const map = new Map<number, number>();
+    map.set(data.trade.round_executed, 50);
+    for (const p of data.probabilityHistory) {
+      if (p.round_number === data.trade.round_executed) continue;
+      map.set(p.round_number, Number(p.team_a_probability));
+    }
+    return Array.from(map.entries())
+      .sort(([a], [b]) => a - b)
+      .map(([round, pa]) => ({
+        round: `R${round}`,
+        probA: pa,
+        probAbove: Math.max(pa, 50),
+        probBelow: Math.min(pa, 50),
+      }));
+  }, [data]);
+
   if (loading) return <div className="py-12 text-center text-muted-foreground">Loading...</div>;
   if (!data) return <div className="py-12 text-center text-muted-foreground">Trade not found.</div>;
 
@@ -125,24 +145,6 @@ export default function TradeDetail({ tradeId, onBack, onDeleted }: Props) {
     const latestSide = winningIsA ? Number(last.team_a_probability) : Number(last.team_b_probability);
     heroDelta = latestSide - 50;
   }
-
-  // Chart data: R(round_executed) anchor at 50/50, then one entry per round from history (deduped)
-  const chartData = useMemo(() => {
-    const map = new Map<number, number>();
-    map.set(trade.round_executed, 50); // probA at round_executed = 50
-    for (const p of probabilityHistory) {
-      if (p.round_number === trade.round_executed) continue;
-      map.set(p.round_number, Number(p.team_a_probability));
-    }
-    return Array.from(map.entries())
-      .sort(([a], [b]) => a - b)
-      .map(([round, pa]) => ({
-        round: `R${round}`,
-        probA: pa,
-        probAbove: Math.max(pa, 50),
-        probBelow: Math.min(pa, 50),
-      }));
-  }, [trade.round_executed, probabilityHistory]);
 
   const factors = latestProbability?.factors as TradeFactorsBreakdown | null;
 
