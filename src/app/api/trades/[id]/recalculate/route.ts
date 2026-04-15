@@ -1,6 +1,9 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { recalculateTradeForRound } from '@/lib/trades/recalculate';
+import {
+  recalculateTradeAcrossPostTradeRounds,
+  recalculateTradeForRound,
+} from '@/lib/trades/recalculate';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -11,22 +14,17 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
   try {
     const { id } = await ctx.params;
     const body = (await request.json().catch(() => ({}))) as { round?: number; force?: boolean };
+    const force = body.force === true;
 
-    let round: number;
-    if (body.round === undefined || body.round === null) {
-      // Fallback: latest round with snapshots
-      const { data: latest } = await supabase
-        .from('team_snapshots')
-        .select('round_number')
-        .order('round_number', { ascending: false })
-        .limit(1);
-      round = latest?.[0]?.round_number ?? 0;
-    } else {
-      round = body.round;
+    // If a specific round is provided, just recalc that one round (legacy behavior).
+    // Otherwise, recalc the entire post-trade span — this is what the UI button does.
+    if (body.round !== undefined && body.round !== null) {
+      await recalculateTradeForRound(supabase, id, body.round, force);
+      return NextResponse.json({ success: true, rounds: [body.round] });
     }
 
-    await recalculateTradeForRound(supabase, id, round, body.force === true);
-    return NextResponse.json({ success: true, round });
+    const { rounds } = await recalculateTradeAcrossPostTradeRounds(supabase, id, { force });
+    return NextResponse.json({ success: true, rounds });
   } catch (err) {
     console.error('[trades/[id]/recalculate]', err);
     return NextResponse.json(

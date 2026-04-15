@@ -1,7 +1,8 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { ArrowLeft, RefreshCw, Trash2 } from 'lucide-react';
+import { ArrowLeft, RefreshCw, Trash2, Pencil } from 'lucide-react';
+import LogTradeModal, { type InitialTradeData } from './log-trade-modal';
 import {
   AreaChart,
   Area,
@@ -41,6 +42,7 @@ export default function TradeDetail({ tradeId, onBack, onDeleted }: Props) {
   const [data, setData] = useState<DetailData | null>(null);
   const [loading, setLoading] = useState(true);
   const [recalculating, setRecalculating] = useState(false);
+  const [editing, setEditing] = useState(false);
 
   const load = async () => {
     setLoading(true);
@@ -92,6 +94,20 @@ export default function TradeDetail({ tradeId, onBack, onDeleted }: Props) {
 
   const factors = latestProbability?.factors as TradeFactorsBreakdown | null;
 
+  const editInitial: InitialTradeData = {
+    tradeId: trade.id,
+    teamAId: trade.team_a_id,
+    teamBId: trade.team_b_id,
+    roundExecuted: trade.round_executed,
+    contextNotes: trade.context_notes ?? '',
+    players: players.map((p) => ({
+      player_id: p.player_id,
+      player_name: p.player_name,
+      pos: p.raw_position,
+      receiving_team_id: p.receiving_team_id,
+    })),
+  };
+
   return (
     <div className="space-y-6">
       {/* Back + actions */}
@@ -103,6 +119,12 @@ export default function TradeDetail({ tradeId, onBack, onDeleted }: Props) {
           <ArrowLeft size={16} /> Back to all trades
         </button>
         <div className="flex items-center gap-2">
+          <button
+            onClick={() => setEditing(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-muted hover:bg-muted/80 rounded transition-colors"
+          >
+            <Pencil size={12} /> Edit
+          </button>
           <button
             onClick={handleRecalculate}
             disabled={recalculating}
@@ -328,6 +350,17 @@ export default function TradeDetail({ tradeId, onBack, onDeleted }: Props) {
           </table>
         </div>
       </div>
+
+      {editing && (
+        <LogTradeModal
+          initial={editInitial}
+          onClose={() => setEditing(false)}
+          onCreated={() => {
+            setEditing(false);
+            load();
+          }}
+        />
+      )}
     </div>
   );
 }

@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { TEAMS } from '@/lib/constants';
 import { normalizePosition } from '@/lib/trades/positions';
-import { recalculateTradeForRound } from '@/lib/trades/recalculate';
+import { recalculateTradeAcrossPostTradeRounds } from '@/lib/trades/recalculate';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -102,10 +102,11 @@ export async function POST(request: Request) {
     const { error: playersErr } = await supabase.from('trade_players').insert(playerRows);
     if (playersErr) throw playersErr;
 
-    // 4. Kick off initial recalc for current round
-    const currentRound = body.current_round ?? body.round_executed;
+    // 4. Kick off initial recalc across every post-trade round that has data.
+    //    This builds the full probability-over-time curve even if the trade is
+    //    logged retroactively after several rounds of scores are already in.
     try {
-      await recalculateTradeForRound(supabase, tradeRow.id, currentRound);
+      await recalculateTradeAcrossPostTradeRounds(supabase, tradeRow.id);
     } catch (e) {
       console.error('[trades/create] Initial recalc failed', e);
     }

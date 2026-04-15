@@ -1,7 +1,10 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { TEAMS } from '@/lib/constants';
 import type { NormalizedPosition, PlayerPerformance, Trade, TradePlayer } from '@/lib/trades/types';
 import { detectInjury } from '@/lib/trades/compute-probability';
+import { normalizePosition } from '@/lib/trades/positions';
+import { recalculateTradeAcrossPostTradeRounds } from '@/lib/trades/recalculate';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -84,6 +87,127 @@ export async function GET(_request: Request, ctx: { params: Promise<{ id: string
     console.error('[trades/[id] GET]', err);
     return NextResponse.json(
       { error: err instanceof Error ? err.message : 'Fetch failed' },
+      { status: 500 }
+    );
+  }
+}
+
+// ============================================================
+// PATCH — edit an existing trade (teams, round, context, players)
+// ============================================================
+
+interface PatchPlayer {
+  player_id: number;
+  player_name: string;
+  raw_position: string | null;
+  receiving_team_id: number;
+}
+
+interface PatchBody {
+  team_a_id?: number;
+  team_b_id?: number;
+  round_executed?: number;
+  context_notes?: string | null;
+  players?: PatchPlayer[];
+}
+
+export async function PATCH(request: Request, ctx: { params: Promise<{ id: string }> }) {
+  try {
+    const { id } = await ctx.params;
+    const body = (await request.json()) as PatchBody;
+
+    // 1. Fetch existing trade
+    const { data: existing, error: fetchErr } = await supabase
+      .from('trades')
+      .select('*')
+      .eq('id', id)
+      .single();
+    if (fetchErr || !existing) {
+      return NextResponse.json({ error: 'Trade not found' }, { status: 404 });
+    }
+
+    // 2. Resolve team updates (validate IDs exist in TEAMS)
+    const nextTeamAId = body.team_a_id ?? existing.team_a_id;
+    const nextTeamBId = body.team_b_id ?? existing.team_b_id;
+    const teamA = TEAMS.find((t) => t.team_id === nextTeamAId);
+    const teamB = TEAMS.find((t) => t.team_id === nextTeamBId);
+    if (!teamA || !teamB || teamA.team_id === teamB.team_id) {
+      return NextResponse.json({ error: 'Invalid team selection' }, { status: 400 });
+    }
+
+    const nextRound = body.round_executed ?? existing.round_executed;
+
+    // 3. Update trade row
+    const { error: updateErr } = await supabase
+      .from('trades')
+      .update({
+        team_a_id: teamA.team_id,
+        team_a_name: teamA.team_name,
+        team_b_id: teamB.team_id,
+        team_b_name: teamB.team_name,
+        round_executed: nextRound,
+        context_notes: body.context_notes !== undefined ? body.context_notes : existing.context_notes,
+      })
+      .eq('id', id);
+    if (updateErr) throw updateErr;
+
+    // 4. If players changed, fully replace them (easier than diffing)
+    if (body.players && body.players.length > 0) {
+      await supabase.from('trade_players').delete().eq('trade_id', id);
+
+      // Recompute pre_trade_avg + raw position based on new round_executed
+      const playerIds = body.players.map((p) => p.player_id);
+      const { data: preRounds } = await supabase
+        .from('player_rounds')
+        .select('player_id, points, round_number, pos')
+        .in('player_id', playerIds)
+        .lt('round_number', nextRound);
+
+      const scoresByPlayer = new Map<number, number[]>();
+      const posByPlayer = new Map<number, string>();
+      for (const r of preRounds ?? []) {
+        if (r.points !== null && r.points !== undefined) {
+          if (!scoresByPlayer.has(r.player_id)) scoresByPlayer.set(r.player_id, []);
+          scoresByPlayer.get(r.player_id)!.push(Number(r.points));
+        }
+        if (r.pos && !posByPlayer.has(r.player_id)) posByPlayer.set(r.player_id, r.pos);
+      }
+
+      const playerRows = body.players.map((p) => {
+        const receivingTeam = p.receiving_team_id === teamA.team_id ? teamA : teamB;
+        const scores = scoresByPlayer.get(p.player_id) ?? [];
+        const preAvg = scores.length > 0 ? scores.reduce((a, b) => a + b, 0) / scores.length : null;
+        const rawPos = p.raw_position || posByPlayer.get(p.player_id) || null;
+        return {
+          trade_id: id,
+          player_id: p.player_id,
+          player_name: p.player_name,
+          player_position: normalizePosition(rawPos),
+          raw_position: rawPos,
+          receiving_team_id: receivingTeam.team_id,
+          receiving_team_name: receivingTeam.team_name,
+          pre_trade_avg: preAvg,
+        };
+      });
+
+      const { error: insertErr } = await supabase.from('trade_players').insert(playerRows);
+      if (insertErr) throw insertErr;
+    }
+
+    // 5. Wipe old probability rows — they're based on stale assumptions — and recompute fresh
+    await supabase.from('trade_probabilities').delete().eq('trade_id', id);
+
+    try {
+      await recalculateTradeAcrossPostTradeRounds(supabase, id, { force: true });
+    } catch (e) {
+      console.error('[trades/[id] PATCH] Recalc failed', e);
+    }
+
+    return NextResponse.json({ success: true });
+  } catch (err) {
+    console.error('[trades/[id] PATCH]', err);
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : 'Edit failed' },
       { status: 500 }
     );
   }

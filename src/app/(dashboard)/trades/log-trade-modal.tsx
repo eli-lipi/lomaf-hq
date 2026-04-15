@@ -4,16 +4,26 @@ import { useEffect, useState } from 'react';
 import { X, Loader2 } from 'lucide-react';
 import { TEAMS } from '@/lib/constants';
 
-interface Props {
-  onClose: () => void;
-  onCreated: () => void;
-}
-
 interface DraftPlayer {
   player_id: number;
   player_name: string;
   pos: string | null;
   receiving_team_id: number;
+}
+
+export interface InitialTradeData {
+  tradeId: string;
+  teamAId: number;
+  teamBId: number;
+  roundExecuted: number;
+  contextNotes: string;
+  players: DraftPlayer[];
+}
+
+interface Props {
+  onClose: () => void;
+  onCreated: () => void;
+  initial?: InitialTradeData; // if provided → edit mode
 }
 
 interface PlayerOption {
@@ -25,16 +35,18 @@ interface PlayerOption {
 type Step = 'form' | 'saving';
 type Timing = 'after' | 'before';
 
-export default function LogTradeModal({ onClose, onCreated }: Props) {
+export default function LogTradeModal({ onClose, onCreated, initial }: Props) {
+  const isEdit = !!initial;
   const [step, setStep] = useState<Step>('form');
   const [error, setError] = useState<string | null>(null);
 
-  const [teamAId, setTeamAId] = useState<number | null>(null);
-  const [teamBId, setTeamBId] = useState<number | null>(null);
+  const [teamAId, setTeamAId] = useState<number | null>(initial?.teamAId ?? null);
+  const [teamBId, setTeamBId] = useState<number | null>(initial?.teamBId ?? null);
+  // When editing, default the timing picker to "After Round N" where N = round_executed.
   const [timing, setTiming] = useState<Timing>('after');
-  const [roundPicked, setRoundPicked] = useState<number>(1);
-  const [contextNotes, setContextNotes] = useState<string>('');
-  const [players, setPlayers] = useState<DraftPlayer[]>([]);
+  const [roundPicked, setRoundPicked] = useState<number>(initial?.roundExecuted ?? 1);
+  const [contextNotes, setContextNotes] = useState<string>(initial?.contextNotes ?? '');
+  const [players, setPlayers] = useState<DraftPlayer[]>(initial?.players ?? []);
 
   // round_executed = the last round where OLD rosters applied.
   // "After Round N" → trade took effect R(N+1) → round_executed = N.
@@ -59,22 +71,26 @@ export default function LogTradeModal({ onClose, onCreated }: Props) {
 
     setStep('saving');
     try {
-      const res = await fetch('/api/trades/create', {
-        method: 'POST',
+      const url = isEdit ? `/api/trades/${initial!.tradeId}` : '/api/trades/create';
+      const method = isEdit ? 'PATCH' : 'POST';
+      const payload: Record<string, unknown> = {
+        team_a_id: teamAId,
+        team_b_id: teamBId,
+        round_executed: effectiveRoundExecuted,
+        context_notes: contextNotes || null,
+        players: players.map((p) => ({
+          player_id: p.player_id,
+          player_name: p.player_name,
+          raw_position: p.pos,
+          receiving_team_id: p.receiving_team_id,
+        })),
+      };
+      if (!isEdit) payload.screenshot_url = null;
+
+      const res = await fetch(url, {
+        method,
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          team_a_id: teamAId,
-          team_b_id: teamBId,
-          round_executed: effectiveRoundExecuted,
-          context_notes: contextNotes || null,
-          screenshot_url: null,
-          players: players.map((p) => ({
-            player_id: p.player_id,
-            player_name: p.player_name,
-            raw_position: p.pos,
-            receiving_team_id: p.receiving_team_id,
-          })),
-        }),
+        body: JSON.stringify(payload),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || 'Save failed');
@@ -95,7 +111,7 @@ export default function LogTradeModal({ onClose, onCreated }: Props) {
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between px-5 py-4 border-b border-border">
-          <h2 className="text-lg font-semibold">Log a Trade</h2>
+          <h2 className="text-lg font-semibold">{isEdit ? 'Edit Trade' : 'Log a Trade'}</h2>
           <button onClick={onClose} className="text-muted-foreground hover:text-foreground">
             <X size={20} />
           </button>
@@ -145,7 +161,7 @@ export default function LogTradeModal({ onClose, onCreated }: Props) {
               onClick={handleSave}
               className="px-4 py-2 text-sm font-medium bg-primary text-primary-foreground rounded hover:bg-primary/90"
             >
-              Save Trade
+              {isEdit ? 'Save Changes' : 'Save Trade'}
             </button>
           </div>
         )}

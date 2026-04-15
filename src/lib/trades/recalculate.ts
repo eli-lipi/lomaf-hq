@@ -211,6 +211,57 @@ export async function recalculateTradeForRound(
 }
 
 /**
+ * Recalculate probabilities for every round since the trade took effect, up to
+ * the latest round with player_rounds data. This is the right behavior when a
+ * trade is newly logged (or edited) after several rounds of scores already exist,
+ * so we build the full probability-over-time curve instead of a single point.
+ */
+export async function recalculateTradeAcrossPostTradeRounds(
+  supabase: SupabaseClient,
+  tradeId: string,
+  opts: { force?: boolean; maxRound?: number } = {}
+): Promise<{ rounds: number[] }> {
+  const { data: trade } = await supabase
+    .from('trades')
+    .select('round_executed')
+    .eq('id', tradeId)
+    .single();
+  if (!trade) return { rounds: [] };
+
+  const { data: playerRows } = await supabase
+    .from('trade_players')
+    .select('player_id')
+    .eq('trade_id', tradeId);
+  const playerIds = (playerRows ?? []).map((p: { player_id: number }) => p.player_id);
+
+  let maxRound: number | null = opts.maxRound ?? null;
+  if (maxRound == null && playerIds.length > 0) {
+    const { data } = await supabase
+      .from('player_rounds')
+      .select('round_number')
+      .in('player_id', playerIds)
+      .gt('round_number', trade.round_executed)
+      .order('round_number', { ascending: false })
+      .limit(1);
+    maxRound = (data as { round_number: number }[] | null)?.[0]?.round_number ?? null;
+  }
+
+  // No post-trade data yet — seed a single baseline row at round_executed so
+  // the UI has something to render (shows ~50/50 at confidence 0).
+  if (maxRound == null || maxRound <= trade.round_executed) {
+    await recalculateTradeForRound(supabase, tradeId, trade.round_executed, opts.force === true);
+    return { rounds: [trade.round_executed] };
+  }
+
+  const rounds: number[] = [];
+  for (let r = trade.round_executed + 1; r <= maxRound; r++) rounds.push(r);
+  for (const r of rounds) {
+    await recalculateTradeForRound(supabase, tradeId, r, opts.force === true);
+  }
+  return { rounds };
+}
+
+/**
  * Recalculate probabilities for all trades that are "active" for the given round
  * (i.e., trades executed at or before this round).
  */
