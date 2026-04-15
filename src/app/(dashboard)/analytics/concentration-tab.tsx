@@ -3,15 +3,10 @@
 import { useState, useEffect, useMemo } from 'react';
 import { supabase } from '@/lib/supabase';
 import { TEAMS } from '@/lib/constants';
+import { TEAM_COLOR_MAP, TEAM_SHORT_NAMES } from '@/lib/team-colors';
 import { cn } from '@/lib/utils';
 
-const TEAM_COLOR_MAP: Record<number, string> = {
-  3194002: '#1A56DB', 3194005: '#DC2626', 3194009: '#16A34A', 3194003: '#F59E0B',
-  3194006: '#9333EA', 3194010: '#0891B2', 3194008: '#EA580C', 3194001: '#DB2777',
-  3194004: '#4F46E5', 3194007: '#059669',
-};
-
-// AFL clubs — full names, primary brand colours, contrast text for badges.
+// ─── AFL clubs ──────────────────────────────────────────────────────────────
 interface AflClub { name: string; primary: string; text: string }
 const AFL_CLUBS: Record<string, AflClub> = {
   ADE: { name: 'Adelaide Crows',    primary: '#002B5C', text: '#E21937' },
@@ -37,7 +32,8 @@ const ALL_CLUB_CODES = Object.keys(AFL_CLUBS).sort((a, b) =>
   AFL_CLUBS[a].name.localeCompare(AFL_CLUBS[b].name)
 );
 
-function ClubBadge({ code, size = 26 }: { code: string; size?: number }) {
+// ─── Badges ─────────────────────────────────────────────────────────────────
+function ClubBadge({ code, size = 24 }: { code: string; size?: number }) {
   const club = AFL_CLUBS[code];
   const bg = club?.primary ?? '#6B7280';
   const fg = club?.text ?? '#FFFFFF';
@@ -85,6 +81,7 @@ export default function ConcentrationTab() {
   const [latestRound, setLatestRound] = useState<number>(0);
   const [expandedClub, setExpandedClub] = useState<string | null>(null);
   const [sortBy, setSortBy] = useState<'alpha' | 'popularity' | 'concentration'>('alpha');
+  const [hover, setHover] = useState<{ row?: string; col?: number }>({});
 
   useEffect(() => { loadData(); }, []);
 
@@ -132,11 +129,8 @@ export default function ConcentrationTab() {
   };
 
   const stats = useMemo(() => {
-    // (team_id, club) → count
     const countMap = new Map<string, number>();
-    // club → { team_id → players[] }
     const clubTeamPlayers = new Map<string, Map<number, { player_id: number; player_name: string }[]>>();
-    // team_id → Set<club>
     const clubsByTeam = new Map<number, Set<string>>();
 
     for (const row of data) {
@@ -149,7 +143,6 @@ export default function ConcentrationTab() {
       m.get(row.team_id)!.push({ player_id: row.player_id, player_name: row.player_name });
     }
 
-    // Totals per AFL club (across LOMAF)
     const clubTotals = new Map<string, number>();
     for (const code of ALL_CLUB_CODES) {
       let t = 0;
@@ -157,17 +150,6 @@ export default function ConcentrationTab() {
       clubTotals.set(code, t);
     }
 
-    // Totals per LOMAF team (for HHI + widest-net)
-    const teamTotals = new Map<number, number>();
-    for (const team of TEAMS) {
-      let total = 0;
-      for (const code of ALL_CLUB_CODES) total += countMap.get(`${team.team_id}-${code}`) || 0;
-      teamTotals.set(team.team_id, total);
-    }
-
-    // HHI per AFL club: how concentrated is a club's representation in ONE LOMAF roster?
-    // Sum of squared shares, where share = (count for LOMAF team) / (total for this AFL club).
-    // 100% = one LOMAF team owns every player from that club. ~10% = spread evenly across 10.
     const clubConcentration = new Map<string, number>();
     for (const code of ALL_CLUB_CODES) {
       const total = clubTotals.get(code) || 0;
@@ -181,7 +163,7 @@ export default function ConcentrationTab() {
       clubConcentration.set(code, Math.round(hhi * 1000) / 10);
     }
 
-    // Top 5: biggest single-club bets (team × club combos with highest count)
+    // Top 5 biggest bets
     const biggestBets: { team_id: number; club: string; count: number }[] = [];
     for (const team of TEAMS) {
       for (const code of ALL_CLUB_CODES) {
@@ -191,39 +173,28 @@ export default function ConcentrationTab() {
     }
     biggestBets.sort((a, b) => b.count - a.count);
 
-    // Top 5: widest nets (LOMAF teams by # distinct AFL clubs)
     const widestNets = TEAMS.map((t) => ({
-      team_id: t.team_id,
-      name: t.team_name,
+      team_id: t.team_id, name: t.team_name,
       count: clubsByTeam.get(t.team_id)?.size || 0,
     })).sort((a, b) => b.count - a.count);
 
-    // Top 5: most-drafted AFL clubs
     const mostDrafted = ALL_CLUB_CODES
       .map((code) => ({ code, count: clubTotals.get(code) || 0 }))
       .sort((a, b) => b.count - a.count);
 
-    // Bottom 5: blind spots (fewest LOMAF players)
     const blindSpots = [...mostDrafted].sort((a, b) => a.count - b.count);
 
-    return {
-      countMap, clubTotals, teamTotals, clubConcentration,
-      clubsByTeam, clubTeamPlayers,
-      biggestBets, widestNets, mostDrafted, blindSpots,
-    };
+    return { countMap, clubTotals, clubConcentration, clubsByTeam, clubTeamPlayers,
+             biggestBets, widestNets, mostDrafted, blindSpots };
   }, [data]);
 
   const sortedClubs = useMemo(() => {
     const arr = [...ALL_CLUB_CODES];
     if (sortBy === 'alpha') return arr;
-    if (sortBy === 'popularity') {
-      return arr.sort((a, b) => (stats.clubTotals.get(b) || 0) - (stats.clubTotals.get(a) || 0));
-    }
-    // concentration: highest HHI first (one LOMAF team dominating that club)
+    if (sortBy === 'popularity') return arr.sort((a, b) => (stats.clubTotals.get(b) || 0) - (stats.clubTotals.get(a) || 0));
     return arr.sort((a, b) => (stats.clubConcentration.get(b) || 0) - (stats.clubConcentration.get(a) || 0));
   }, [sortBy, stats]);
 
-  // Max club total (for bar chart scaling)
   const maxClubTotal = useMemo(() => {
     let m = 0;
     for (const v of stats.clubTotals.values()) if (v > m) m = v;
@@ -233,7 +204,6 @@ export default function ConcentrationTab() {
   if (loading) {
     return <div className="py-12 text-center text-muted-foreground">Loading AFL team concentration data...</div>;
   }
-
   if (!hasClubData) {
     return (
       <div className="py-12 text-center">
@@ -243,125 +213,131 @@ export default function ConcentrationTab() {
     );
   }
 
-  const heatColor = (count: number) => {
-    if (count === 0) return 'bg-gray-50 text-transparent';
-    if (count === 1) return 'bg-blue-50 text-blue-700';
-    if (count === 2) return 'bg-blue-200 text-blue-900';
-    if (count === 3) return 'bg-blue-400 text-white font-semibold';
-    return 'bg-blue-700 text-white font-bold';
+  // Heat scale — makes 3+ pop in orange, 5+ in red
+  const heatStyle = (count: number): { bg: string; color: string; fontWeight: number } => {
+    if (count === 0)  return { bg: 'rgba(0,0,0,0.015)',        color: 'transparent',   fontWeight: 400 };
+    if (count === 1)  return { bg: 'rgba(59,130,246,0.15)',    color: '#1E40AF',       fontWeight: 500 };
+    if (count === 2)  return { bg: 'rgba(59,130,246,0.38)',    color: '#1E3A8A',       fontWeight: 600 };
+    if (count === 3)  return { bg: 'rgba(59,130,246,0.78)',    color: '#FFFFFF',       fontWeight: 700 };
+    if (count === 4)  return { bg: '#FF7B3A',                  color: '#FFFFFF',       fontWeight: 800 };
+    return              { bg: '#FF4757',                       color: '#FFFFFF',       fontWeight: 800 };
   };
 
-  const teamById = (id: number) => TEAMS.find((t) => t.team_id === id);
-  const shortTeamName = (name: string) => name.length > 14 ? name.slice(0, 13) + '…' : name;
-
-  // Leaderboard row renderers
-  const leaderRow = (
-    rank: number,
-    left: React.ReactNode,
-    label: React.ReactNode,
-    value: React.ReactNode
-  ) => (
-    <li className="flex items-center gap-2.5 py-1">
-      <span className="text-[10px] font-bold text-muted-foreground/70 w-3 tabular-nums">{rank}</span>
-      {left}
-      <span className="text-xs flex-1 truncate">{label}</span>
-      <span className="text-xs font-semibold tabular-nums">{value}</span>
+  // Leaderboard row: rank | icon | (two-line name) | value
+  const LeaderRow = ({
+    rank, icon, line1, line2, value,
+  }: { rank: number; icon: React.ReactNode; line1: React.ReactNode; line2?: React.ReactNode; value: React.ReactNode }) => (
+    <li className="flex items-center gap-3 py-1.5">
+      <span className="text-[11px] font-bold text-muted-foreground/60 w-3 tabular-nums">{rank}</span>
+      {icon}
+      <div className="flex-1 min-w-0">
+        <div className="text-xs font-semibold truncate">{line1}</div>
+        {line2 && <div className="text-[10px] text-muted-foreground truncate">{line2}</div>}
+      </div>
+      <span className="text-sm font-bold tabular-nums">{value}</span>
     </li>
   );
 
   return (
     <div className="space-y-6">
-      {/* ============ Leaderboard cards (2 cards, each with 2 Top-5 columns) ============ */}
+      {/* ============ Leaderboard cards ============ */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        {/* Card 1: Coach leaderboards */}
+        {/* Coach leaderboards */}
         <div className="bg-card border border-border rounded-lg shadow-sm">
           <div className="px-4 pt-3 pb-2 border-b border-border/50">
             <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
               Coach leaderboards
             </h3>
           </div>
-          <div className="grid grid-cols-2 divide-x divide-border/50">
+          <div className="grid grid-cols-1 md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-border/50">
             <div className="p-4">
               <p className="text-[11px] font-semibold text-foreground mb-2">Biggest single-club bets</p>
-              <ol className="space-y-0.5">
-                {stats.biggestBets.slice(0, 5).map((b, i) =>
-                  leaderRow(
-                    i + 1,
-                    <ClubBadge code={b.club} size={18} />,
-                    <span>
-                      <span className="font-medium" style={{ color: TEAM_COLOR_MAP[b.team_id] }}>
-                        {shortTeamName(teamById(b.team_id)?.team_name ?? '')}
+              <ol className="space-y-0">
+                {stats.biggestBets.slice(0, 5).map((b, i) => (
+                  <LeaderRow
+                    key={`bb-${i}`}
+                    rank={i + 1}
+                    icon={<ClubBadge code={b.club} size={22} />}
+                    line1={
+                      <span style={{ color: TEAM_COLOR_MAP[b.team_id] }}>
+                        {TEAM_SHORT_NAMES[b.team_id]}
                       </span>
-                      <span className="text-muted-foreground"> × {AFL_CLUBS[b.club].name}</span>
-                    </span>,
-                    b.count
-                  )
-                )}
+                    }
+                    line2={<>× {AFL_CLUBS[b.club].name}</>}
+                    value={b.count}
+                  />
+                ))}
               </ol>
             </div>
             <div className="p-4">
-              <p className="text-[11px] font-semibold text-foreground mb-2">Widest nets (distinct clubs)</p>
-              <ol className="space-y-0.5">
-                {stats.widestNets.slice(0, 5).map((w, i) =>
-                  leaderRow(
-                    i + 1,
-                    <TeamDot teamId={w.team_id} />,
-                    <span className="font-medium" style={{ color: TEAM_COLOR_MAP[w.team_id] }}>
-                      {w.name}
-                    </span>,
-                    w.count
-                  )
-                )}
+              <p className="text-[11px] font-semibold text-foreground mb-2">Widest nets</p>
+              <ol className="space-y-0">
+                {stats.widestNets.slice(0, 5).map((w, i) => (
+                  <LeaderRow
+                    key={`wn-${i}`}
+                    rank={i + 1}
+                    icon={<TeamDot teamId={w.team_id} size={14} />}
+                    line1={
+                      <span style={{ color: TEAM_COLOR_MAP[w.team_id] }}>
+                        {TEAM_SHORT_NAMES[w.team_id]}
+                      </span>
+                    }
+                    line2={<>{w.name}</>}
+                    value={<>{w.count} <span className="text-[10px] text-muted-foreground font-normal">clubs</span></>}
+                  />
+                ))}
               </ol>
             </div>
           </div>
         </div>
 
-        {/* Card 2: AFL club leaderboards */}
+        {/* AFL club leaderboards */}
         <div className="bg-card border border-border rounded-lg shadow-sm">
           <div className="px-4 pt-3 pb-2 border-b border-border/50">
             <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
               AFL club leaderboards
             </h3>
           </div>
-          <div className="grid grid-cols-2 divide-x divide-border/50">
+          <div className="grid grid-cols-1 md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-border/50">
             <div className="p-4">
               <p className="text-[11px] font-semibold text-foreground mb-2">Most-drafted</p>
-              <ol className="space-y-0.5">
-                {stats.mostDrafted.slice(0, 5).map((m, i) =>
-                  leaderRow(
-                    i + 1,
-                    <ClubBadge code={m.code} size={18} />,
-                    <span className="font-medium">{AFL_CLUBS[m.code].name}</span>,
-                    m.count
-                  )
-                )}
+              <ol className="space-y-0">
+                {stats.mostDrafted.slice(0, 5).map((m, i) => (
+                  <LeaderRow
+                    key={`md-${i}`}
+                    rank={i + 1}
+                    icon={<ClubBadge code={m.code} size={22} />}
+                    line1={AFL_CLUBS[m.code].name}
+                    value={m.count}
+                  />
+                ))}
               </ol>
             </div>
             <div className="p-4">
               <p className="text-[11px] font-semibold text-foreground mb-2">Blind spots</p>
-              <ol className="space-y-0.5">
-                {stats.blindSpots.slice(0, 5).map((m, i) =>
-                  leaderRow(
-                    i + 1,
-                    <ClubBadge code={m.code} size={18} />,
-                    <span className="font-medium">{AFL_CLUBS[m.code].name}</span>,
-                    m.count
-                  )
-                )}
+              <ol className="space-y-0">
+                {stats.blindSpots.slice(0, 5).map((m, i) => (
+                  <LeaderRow
+                    key={`bs-${i}`}
+                    rank={i + 1}
+                    icon={<ClubBadge code={m.code} size={22} />}
+                    line1={AFL_CLUBS[m.code].name}
+                    value={m.count}
+                  />
+                ))}
               </ol>
             </div>
           </div>
         </div>
       </div>
 
-      {/* ============ Stacked bar chart (AFL clubs as rows) ============ */}
+      {/* ============ Focused bar chart: labeled top contenders + others ============ */}
       <div className="bg-card border border-border rounded-lg p-5 shadow-sm">
         <div className="flex items-center justify-between mb-1 flex-wrap gap-2">
           <div>
             <h3 className="font-semibold text-sm">AFL club draft spread</h3>
             <p className="text-xs text-muted-foreground">
-              Each bar is one AFL club (R{latestRound}). Segments show which LOMAF rosters its players are on.
+              R{latestRound}. Top 3 LOMAF teams owning each AFL club are labelled; the rest fold into <span className="text-foreground">others</span>.
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -377,122 +353,143 @@ export default function ConcentrationTab() {
                     : 'bg-card border-border text-muted-foreground hover:text-foreground'
                 )}
               >
-                {s === 'alpha' ? 'A–Z' : s === 'popularity' ? 'Popularity' : 'Concentration'}
+                {s === 'alpha' ? 'A–Z' : s === 'popularity' ? 'Total' : 'Concentration'}
               </button>
             ))}
           </div>
         </div>
 
-        <div className="mt-4 space-y-1.5">
+        <div className="mt-4 space-y-3">
           {sortedClubs.map((code) => {
             const total = stats.clubTotals.get(code) || 0;
             const club = AFL_CLUBS[code];
-            // Build segments per LOMAF team (ordered by count desc for visual stability)
-            const segments = TEAMS
-              .map((t) => ({ team_id: t.team_id, team_name: t.team_name, count: stats.countMap.get(`${t.team_id}-${code}`) || 0 }))
+            const allSegments = TEAMS
+              .map((t) => ({ team_id: t.team_id, count: stats.countMap.get(`${t.team_id}-${code}`) || 0 }))
               .filter((s) => s.count > 0)
               .sort((a, b) => b.count - a.count);
-            const widthPct = maxClubTotal > 0 ? (total / maxClubTotal) * 100 : 0;
+            // Highlight top 3 with count >= 2, rest fold into 'others'
+            const highlighted = allSegments.filter((s) => s.count >= 2).slice(0, 3);
+            const highlightedIds = new Set(highlighted.map((s) => s.team_id));
+            const othersTotal = allSegments.filter((s) => !highlightedIds.has(s.team_id)).reduce((a, b) => a + b.count, 0);
+            const barWidth = maxClubTotal > 0 ? (total / maxClubTotal) * 100 : 0;
+
             return (
-              <div key={code} className="grid grid-cols-[170px_1fr_42px] gap-3 items-center">
-                <div className="flex items-center gap-2 min-w-0">
-                  <ClubBadge code={code} size={22} />
-                  <span className="text-xs font-medium truncate">{club.name}</span>
+              <div key={code} className="grid grid-cols-[200px_40px_1fr] gap-3 items-start">
+                <div className="flex items-center gap-2 min-w-0 pt-0.5">
+                  <ClubBadge code={code} size={24} />
+                  <span className="text-sm font-medium truncate">{club.name}</span>
                 </div>
-                <div className="relative h-6">
+                <div className="text-sm font-bold tabular-nums text-right pt-0.5">{total}</div>
+                <div>
                   <div
-                    className="flex h-6 rounded-md overflow-hidden border border-border bg-muted/30"
-                    style={{ width: `${Math.max(widthPct, 3)}%` }}
+                    className="flex h-5 rounded-md overflow-hidden border border-border/60"
+                    style={{ width: `${Math.max(barWidth, 3)}%`, minWidth: 40 }}
                   >
-                    {segments.map((seg) => {
-                      const segPct = total > 0 ? (seg.count / total) * 100 : 0;
+                    {highlighted.map((seg) => {
+                      const pct = total > 0 ? (seg.count / total) * 100 : 0;
                       return (
                         <div
                           key={seg.team_id}
-                          title={`${seg.team_name}: ${seg.count} player${seg.count === 1 ? '' : 's'}`}
-                          style={{
-                            width: `${segPct}%`,
-                            background: TEAM_COLOR_MAP[seg.team_id],
-                          }}
-                          className="flex items-center justify-center text-[10px] text-white font-bold min-w-0"
-                        >
-                          {segPct >= 15 ? seg.count : ''}
-                        </div>
+                          style={{ width: `${pct}%`, background: TEAM_COLOR_MAP[seg.team_id] }}
+                          title={`${TEAM_SHORT_NAMES[seg.team_id]}: ${seg.count}`}
+                        />
                       );
                     })}
+                    {othersTotal > 0 && (
+                      <div
+                        style={{ width: `${total > 0 ? (othersTotal / total) * 100 : 0}%`, background: '#D1D5DB' }}
+                        title={`others: ${othersTotal}`}
+                      />
+                    )}
                   </div>
-                </div>
-                <div className="text-xs text-muted-foreground tabular-nums text-right">
-                  {total}
+                  <div className="flex flex-wrap gap-1.5 mt-1.5">
+                    {highlighted.map((seg) => (
+                      <span
+                        key={seg.team_id}
+                        className="text-[10px] font-semibold px-2 py-0.5 rounded-full"
+                        style={{
+                          background: `${TEAM_COLOR_MAP[seg.team_id]}22`,
+                          color: TEAM_COLOR_MAP[seg.team_id],
+                          border: `1px solid ${TEAM_COLOR_MAP[seg.team_id]}44`,
+                        }}
+                      >
+                        {TEAM_SHORT_NAMES[seg.team_id]} ×{seg.count}
+                      </span>
+                    ))}
+                    {othersTotal > 0 && (
+                      <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-gray-100 text-gray-600 border border-gray-200">
+                        others ×{othersTotal}
+                      </span>
+                    )}
+                  </div>
                 </div>
               </div>
             );
           })}
         </div>
-
-        {/* LOMAF team legend */}
-        <div className="mt-5 pt-4 border-t border-border/50 flex flex-wrap gap-x-3 gap-y-1.5">
-          {TEAMS.map((t) => (
-            <div key={t.team_id} className="flex items-center gap-1.5">
-              <TeamDot teamId={t.team_id} size={8} />
-              <span className="text-[10px] text-muted-foreground">{t.team_name}</span>
-            </div>
-          ))}
-        </div>
       </div>
 
-      {/* ============ Heatmap (AFL clubs = rows, LOMAF teams = columns) ============ */}
+      {/* ============ Heatmap ============ */}
       <div className="bg-card border border-border rounded-lg p-5 shadow-sm overflow-x-auto">
         <div className="flex items-center justify-between mb-1">
           <h3 className="font-semibold text-sm">AFL Club × LOMAF Team Heatmap</h3>
           <span
             className="text-[10px] text-muted-foreground cursor-help"
-            title="Club HHI = sum of squared LOMAF-team shares for that club. 100% means one LOMAF team owns every player from that club; ~10% means spread evenly across rosters."
+            title="Club HHI = sum of squared LOMAF-team shares for that club. 100% = one LOMAF team owns every player from that club; ~10% = spread evenly across all rosters."
           >
             ⓘ What&apos;s HHI?
           </span>
         </div>
         <p className="text-xs text-muted-foreground mb-4">
-          Rows are AFL clubs; columns are LOMAF rosters. Click a row to see player names.
+          Rows are AFL clubs; columns are LOMAF rosters.
+          Cells: <span className="inline-block w-2.5 h-2.5 rounded-sm align-middle" style={{ background: 'rgba(59,130,246,0.38)' }} /> blue = 1–2
+          <span className="inline-block w-2.5 h-2.5 rounded-sm align-middle ml-2 mr-0.5" style={{ background: 'rgba(59,130,246,0.78)' }} /> dark blue = 3
+          <span className="inline-block w-2.5 h-2.5 rounded-sm align-middle ml-2 mr-0.5" style={{ background: '#FF7B3A' }} /> orange = 4
+          <span className="inline-block w-2.5 h-2.5 rounded-sm align-middle ml-2 mr-0.5" style={{ background: '#FF4757' }} /> red = 5+.
+          Click a row to see player names.
         </p>
         <table className="w-full text-xs border-collapse">
           <thead>
             <tr>
-              <th className="py-2 pr-2 text-left font-medium text-muted-foreground sticky left-0 bg-card z-10 min-w-[180px]">
+              <th className="py-2 pr-3 text-left font-medium text-muted-foreground sticky left-0 bg-card z-10 min-w-[180px]">
                 AFL Club
               </th>
-              <th className="py-2 px-2 text-center font-medium text-muted-foreground w-12">Total</th>
+              <th className="py-2 px-2 text-center font-medium text-muted-foreground w-14">Total</th>
               <th
                 className="py-2 px-2 text-center font-medium text-muted-foreground cursor-help w-14"
                 title="How concentrated this AFL club is in one LOMAF roster"
               >
                 HHI
               </th>
-              {TEAMS.map((team) => (
-                <th key={team.team_id} className="py-2 px-1 text-center font-medium" style={{ minWidth: 46 }}>
-                  <div className="flex flex-col items-center gap-1">
-                    <TeamDot teamId={team.team_id} />
-                    <span
-                      className="text-[9px] whitespace-nowrap"
-                      style={{
-                        writingMode: 'vertical-rl',
-                        textOrientation: 'mixed',
-                        transform: 'rotate(180deg)',
-                        height: 88,
-                        color: TEAM_COLOR_MAP[team.team_id],
-                        fontWeight: 600,
-                      }}
-                    >
-                      {team.team_name}
-                    </span>
-                  </div>
-                </th>
-              ))}
+              {TEAMS.map((team, colIdx) => {
+                const isColHot = hover.col === colIdx;
+                return (
+                  <th
+                    key={team.team_id}
+                    className={cn(
+                      'py-2 px-1.5 text-center font-medium transition-colors',
+                      isColHot && 'bg-muted/40'
+                    )}
+                    style={{ minWidth: 68 }}
+                  >
+                    <div className="flex flex-col items-center gap-1">
+                      <TeamDot teamId={team.team_id} size={10} />
+                      <span
+                        className="text-[10px] whitespace-nowrap font-semibold"
+                        style={{ color: TEAM_COLOR_MAP[team.team_id] }}
+                      >
+                        {TEAM_SHORT_NAMES[team.team_id]}
+                      </span>
+                    </div>
+                  </th>
+                );
+              })}
             </tr>
           </thead>
           <tbody>
             {sortedClubs.map((code) => {
               const isExpanded = expandedClub === code;
+              const isRowHot = hover.row === code;
               const total = stats.clubTotals.get(code) || 0;
               const hhi = stats.clubConcentration.get(code) || 0;
               return (
@@ -500,12 +497,13 @@ export default function ConcentrationTab() {
                   <tr
                     key={code}
                     className={cn(
-                      'border-t border-border/50 cursor-pointer hover:bg-muted/30 transition-colors',
+                      'border-t border-border/50 cursor-pointer transition-colors',
+                      isRowHot ? 'bg-muted/40' : 'hover:bg-muted/20',
                       isExpanded && 'bg-muted/20'
                     )}
                     onClick={() => setExpandedClub(isExpanded ? null : code)}
                   >
-                    <td className="py-1.5 pr-2 sticky left-0 bg-card z-10">
+                    <td className={cn('py-1.5 pr-3 sticky left-0 z-10', isRowHot ? 'bg-muted/40' : 'bg-card')}>
                       <div className="flex items-center gap-2">
                         <ClubBadge code={code} size={22} />
                         <span className="font-medium">{AFL_CLUBS[code].name}</span>
@@ -513,15 +511,33 @@ export default function ConcentrationTab() {
                     </td>
                     <td className="py-1.5 px-2 text-center font-semibold tabular-nums">{total}</td>
                     <td className="py-1.5 px-2 text-center font-mono text-muted-foreground tabular-nums">{hhi}%</td>
-                    {TEAMS.map((team) => {
+                    {TEAMS.map((team, colIdx) => {
                       const count = stats.countMap.get(`${team.team_id}-${code}`) || 0;
+                      const s = heatStyle(count);
+                      const isColHot = hover.col === colIdx;
                       return (
                         <td
                           key={team.team_id}
-                          className={cn('py-1.5 px-1 text-center', heatColor(count))}
+                          onMouseEnter={() => setHover({ row: code, col: colIdx })}
+                          onMouseLeave={() => setHover({})}
+                          className="px-0.5 py-0.5 transition-colors"
+                          style={{
+                            outline: (isRowHot || isColHot) ? '1px solid rgba(0,0,0,0.08)' : 'none',
+                          }}
                           title={`${AFL_CLUBS[code].name} × ${team.team_name}: ${count}`}
                         >
-                          {count > 0 ? count : ''}
+                          <div
+                            className="text-center rounded-sm flex items-center justify-center"
+                            style={{
+                              background: s.bg,
+                              color: s.color,
+                              fontWeight: s.fontWeight,
+                              height: 28,
+                              fontSize: 12,
+                            }}
+                          >
+                            {count > 0 ? count : ''}
+                          </div>
                         </td>
                       );
                     })}
@@ -529,15 +545,15 @@ export default function ConcentrationTab() {
                   {isExpanded && (
                     <tr key={`${code}-detail`} className="bg-muted/10">
                       <td colSpan={TEAMS.length + 3} className="py-3 px-4">
-                        <div className="flex flex-wrap gap-x-4 gap-y-2">
+                        <div className="flex flex-wrap gap-x-5 gap-y-2">
                           {TEAMS.map((team) => {
                             const players = stats.clubTeamPlayers.get(code)?.get(team.team_id) || [];
                             if (players.length === 0) return null;
                             return (
                               <div key={team.team_id} className="text-xs flex items-center gap-2">
-                                <TeamDot teamId={team.team_id} />
+                                <TeamDot teamId={team.team_id} size={9} />
                                 <span className="font-semibold" style={{ color: TEAM_COLOR_MAP[team.team_id] }}>
-                                  {team.team_name}
+                                  {TEAM_SHORT_NAMES[team.team_id]}
                                 </span>
                                 <span className="text-muted-foreground">
                                   ({players.length}): {players.map((p) => p.player_name).join(', ')}
