@@ -36,11 +36,29 @@ export async function GET(request: Request) {
 
     const seen = new Set<number>();
     const players: { player_id: number; player_name: string; pos: string | null }[] = [];
+    const playerIds: number[] = [];
     for (const r of rows ?? []) {
       if (seen.has(r.player_id)) continue;
       seen.add(r.player_id);
       if (q && !r.player_name.toLowerCase().includes(q)) continue;
       players.push({ player_id: r.player_id, player_name: r.player_name, pos: r.pos ?? null });
+      playerIds.push(r.player_id);
+    }
+
+    // Prefer the draft position over the round-specific position (which can be 'BN')
+    if (playerIds.length > 0) {
+      const { data: draftRows } = await supabase
+        .from('draft_picks')
+        .select('player_id, position')
+        .in('player_id', playerIds);
+      const draftPos = new Map<number, string>();
+      for (const d of (draftRows ?? []) as { player_id: number; position: string | null }[]) {
+        if (d.position) draftPos.set(d.player_id, d.position);
+      }
+      for (const p of players) {
+        const dp = draftPos.get(p.player_id);
+        if (dp) p.pos = dp;
+      }
     }
 
     players.sort((a, b) => a.player_name.localeCompare(b.player_name));

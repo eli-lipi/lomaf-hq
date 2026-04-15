@@ -77,6 +77,7 @@ export async function recalculateTradeForRound(
       receiving_team_name: p.receiving_team_name,
       position: (p.player_position as NormalizedPosition | null) ?? null,
       raw_position: p.raw_position,
+      draft_position: null,
       pre_trade_avg: p.pre_trade_avg,
       post_trade_avg: postTradeAvg,
       rounds_played: roundsPlayed,

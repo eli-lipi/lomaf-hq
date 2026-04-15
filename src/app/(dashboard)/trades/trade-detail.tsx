@@ -1,7 +1,7 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { ArrowLeft, RefreshCw, Trash2, Pencil } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { ArrowLeft, RefreshCw, Trash2, Pencil, TrendingUp, TrendingDown, ChevronDown } from 'lucide-react';
 import LogTradeModal, { type InitialTradeData } from './log-trade-modal';
 import {
   ComposedChart,
@@ -14,8 +14,6 @@ import {
   ResponsiveContainer,
   ReferenceLine,
 } from 'recharts';
-import ProbabilityBar from './probability-bar';
-import TradeContextBox from './trade-context-box';
 import { getTeamColor } from '@/lib/team-colors';
 import type {
   PlayerPerformance,
@@ -39,19 +37,20 @@ interface Props {
   onDeleted: () => void;
 }
 
-// League-average baseline by position — used to judge "expected" performance
-// when a player has no pre_trade_avg (e.g. a bench player activated by the trade).
-const POSITION_BASELINE: Record<string, number> = {
-  DEF: 70,
-  MID: 85,
-  FWD: 70,
-  RUC: 80,
-};
+// League-avg baseline by position, used when a player has no pre-trade avg
+const POSITION_BASELINE: Record<string, number> = { DEF: 70, MID: 85, FWD: 70, RUC: 80 };
 
-function baselineForPlayer(p: { pre_trade_avg: number | null; position: string | null; raw_position: string | null }): number {
+function displayPosition(p: {
+  draft_position: string | null;
+  raw_position: string | null;
+}): string {
+  // Prefer draft position (stable, never 'BN'). Fall back to whatever was recorded at trade time.
+  return p.draft_position || p.raw_position || '?';
+}
+
+function baselineForPerformance(p: PlayerPerformance): number {
   if (p.pre_trade_avg != null && p.pre_trade_avg > 0) return p.pre_trade_avg;
-  // Use normalized position first, then raw (first token of DPP)
-  const pos = p.position || (p.raw_position?.split('/')[0] ?? '');
+  const pos = p.position || (p.draft_position?.split('/')[0] ?? p.raw_position?.split('/')[0] ?? '');
   return POSITION_BASELINE[pos] ?? 70;
 }
 
@@ -60,6 +59,7 @@ export default function TradeDetail({ tradeId, onBack, onDeleted }: Props) {
   const [loading, setLoading] = useState(true);
   const [recalculating, setRecalculating] = useState(false);
   const [editing, setEditing] = useState(false);
+  const [showDetails, setShowDetails] = useState(false);
 
   const load = async () => {
     setLoading(true);
@@ -96,34 +96,53 @@ export default function TradeDetail({ tradeId, onBack, onDeleted }: Props) {
   const { trade, players, latestProbability, probabilityHistory, playerPerformance } = data;
   const teamAPlayers = players.filter((p) => p.receiving_team_id === trade.team_a_id);
   const teamBPlayers = players.filter((p) => p.receiving_team_id === trade.team_b_id);
+  const perfById = new Map(playerPerformance.map((p) => [p.player_id, p]));
+
   const probA = latestProbability?.team_a_probability ?? 50;
   const probB = latestProbability?.team_b_probability ?? 50;
 
   const colorA = getTeamColor(trade.team_a_id);
   const colorB = getTeamColor(trade.team_b_id);
 
-  // Build chart data:
-  //   - R(round_executed) is always a 50/50 anchor point (trade just executed).
-  //   - Then one entry per subsequent round from probabilityHistory.
-  //   - Dedupe: if probabilityHistory accidentally has a row at round_executed
-  //     (legacy data), skip it.
-  const chartRounds = new Map<number, { a: number; b: number }>();
-  chartRounds.set(trade.round_executed, { a: 50, b: 50 });
-  for (const p of probabilityHistory) {
-    if (p.round_number === trade.round_executed) continue; // keep the 50/50 anchor
-    chartRounds.set(p.round_number, {
-      a: Number(p.team_a_probability),
-      b: Number(p.team_b_probability),
-    });
+  // Hero side — whichever team is currently winning
+  const winningIsA = probA >= probB;
+  const heroPct = winningIsA ? probA : probB;
+  const heroTeamName = winningIsA ? trade.team_a_name : trade.team_b_name;
+  const heroColor = winningIsA ? colorA : colorB;
+
+  // Change since previous round (for the hero badge) — look at same side's previous value
+  const sortedHistory = [...probabilityHistory].sort((a, b) => a.round_number - b.round_number);
+  let heroDelta: number | null = null;
+  if (sortedHistory.length >= 2) {
+    const last = sortedHistory[sortedHistory.length - 1];
+    const prev = sortedHistory[sortedHistory.length - 2];
+    const latestSide = winningIsA ? Number(last.team_a_probability) : Number(last.team_b_probability);
+    const prevSide = winningIsA ? Number(prev.team_a_probability) : Number(prev.team_b_probability);
+    heroDelta = latestSide - prevSide;
+  } else if (sortedHistory.length === 1) {
+    // Compare against the R(executed) 50/50 starting point
+    const last = sortedHistory[0];
+    const latestSide = winningIsA ? Number(last.team_a_probability) : Number(last.team_b_probability);
+    heroDelta = latestSide - 50;
   }
-  const chartData = Array.from(chartRounds.entries())
-    .sort(([a], [b]) => a - b)
-    .map(([round, v]) => ({
-      round: `R${round}`,
-      probA: v.a,
-      probAbove: Math.max(v.a, 50), // for the team-A-winning zone fill
-      probBelow: Math.min(v.a, 50), // for the team-B-winning zone fill
-    }));
+
+  // Chart data: R(round_executed) anchor at 50/50, then one entry per round from history (deduped)
+  const chartData = useMemo(() => {
+    const map = new Map<number, number>();
+    map.set(trade.round_executed, 50); // probA at round_executed = 50
+    for (const p of probabilityHistory) {
+      if (p.round_number === trade.round_executed) continue;
+      map.set(p.round_number, Number(p.team_a_probability));
+    }
+    return Array.from(map.entries())
+      .sort(([a], [b]) => a - b)
+      .map(([round, pa]) => ({
+        round: `R${round}`,
+        probA: pa,
+        probAbove: Math.max(pa, 50),
+        probBelow: Math.min(pa, 50),
+      }));
+  }, [trade.round_executed, probabilityHistory]);
 
   const factors = latestProbability?.factors as TradeFactorsBreakdown | null;
 
@@ -142,8 +161,8 @@ export default function TradeDetail({ tradeId, onBack, onDeleted }: Props) {
   };
 
   return (
-    <div className="space-y-6">
-      {/* Back + actions */}
+    <div className="space-y-4">
+      {/* Back + actions (kept on light background) */}
       <div className="flex items-center justify-between">
         <button
           onClick={onBack}
@@ -175,173 +194,232 @@ export default function TradeDetail({ tradeId, onBack, onDeleted }: Props) {
         </div>
       </div>
 
-      {/* Header card — the hero */}
-      <div className="bg-white border border-border rounded-lg p-6 space-y-5">
-        <div>
-          <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+      {/* The Polymarket-style dark card */}
+      <div className="bg-[#0B1120] text-white rounded-xl p-6 md:p-8 space-y-7 shadow-lg">
+        {/* Header */}
+        <div className="text-center md:text-left">
+          <p className="text-[11px] font-bold uppercase tracking-[0.15em] text-slate-400">
             Trade executed after Round {trade.round_executed}
           </p>
-          <h2 className="text-xl font-bold mt-1">
-            {trade.team_a_name} ←→ {trade.team_b_name}
+          <h2 className="text-2xl md:text-3xl font-bold mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 justify-center md:justify-start">
+            <span>{trade.team_a_name}</span>
+            <span className="text-slate-500 text-xl">←→</span>
+            <span>{trade.team_b_name}</span>
           </h2>
         </div>
 
-        <ProbabilityBar
-          teamAId={trade.team_a_id}
+        {/* Player cards — grid with the two sides */}
+        <div className="grid md:grid-cols-[1fr_auto_1fr] gap-4 items-center">
+          <div className="space-y-2">
+            <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500 text-center md:text-left">
+              {trade.team_a_name} receives
+            </p>
+            {teamAPlayers.map((p) => (
+              <PlayerCard
+                key={p.id}
+                tradePlayer={p}
+                performance={perfById.get(p.player_id)}
+              />
+            ))}
+          </div>
+          <div className="text-slate-600 text-3xl font-light text-center hidden md:block">⇄</div>
+          <div className="space-y-2">
+            <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500 text-center md:text-left">
+              {trade.team_b_name} receives
+            </p>
+            {teamBPlayers.map((p) => (
+              <PlayerCard
+                key={p.id}
+                tradePlayer={p}
+                performance={perfById.get(p.player_id)}
+              />
+            ))}
+          </div>
+        </div>
+
+        {/* Probability bar */}
+        <DarkProbabilityBar
           teamAName={trade.team_a_name}
-          teamBId={trade.team_b_id}
           teamBName={trade.team_b_name}
           probA={probA}
           probB={probB}
-          large
-        />
-
-        <div className="grid grid-cols-2 gap-6">
-          <div>
-            <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-2">
-              {trade.team_a_name} receives
-            </p>
-            <ul className="space-y-1">
-              {teamAPlayers.map((p) => (
-                <li key={p.id} className="text-sm">
-                  • {p.player_name}
-                  {p.raw_position && (
-                    <span className="text-muted-foreground ml-1">({p.raw_position})</span>
-                  )}
-                </li>
-              ))}
-            </ul>
-          </div>
-          <div>
-            <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-2">
-              {trade.team_b_name} receives
-            </p>
-            <ul className="space-y-1">
-              {teamBPlayers.map((p) => (
-                <li key={p.id} className="text-sm">
-                  • {p.player_name}
-                  {p.raw_position && (
-                    <span className="text-muted-foreground ml-1">({p.raw_position})</span>
-                  )}
-                </li>
-              ))}
-            </ul>
-          </div>
-        </div>
-      </div>
-
-      {/* AI-only context box */}
-      <TradeContextBox
-        aiNarrative={latestProbability?.ai_assessment ?? null}
-        updatedRound={latestProbability?.round_number ?? null}
-      />
-
-      {/* Probability over time — single line, color zones above/below 50% */}
-      <div className="bg-white border border-border rounded-lg p-5">
-        <h3 className="text-sm font-semibold mb-4">Probability over time</h3>
-        {chartData.length < 2 ? (
-          <p className="text-sm text-muted-foreground py-8 text-center">
-            No round data yet — probabilities will appear after the next round&apos;s scores are uploaded.
-          </p>
-        ) : (
-          <ResponsiveContainer width="100%" height={300}>
-            <ComposedChart data={chartData} margin={{ top: 10, right: 20, bottom: 10, left: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" vertical={false} />
-              <XAxis dataKey="round" tick={{ fontSize: 11, fill: '#6B7280' }} />
-              <YAxis
-                domain={[0, 100]}
-                ticks={[0, 25, 50, 75, 100]}
-                tickFormatter={(v) => `${v}%`}
-                tick={{ fontSize: 11, fill: '#6B7280' }}
-                width={44}
-              />
-              <Tooltip
-                formatter={(value, name) => {
-                  if (name !== 'probA') return [null, null] as unknown as [string, string];
-                  const v = typeof value === 'number' ? value : Number(value);
-                  return [`${Math.round(v)}% ${trade.team_a_name}`, 'Team A'];
-                }}
-                labelFormatter={(label) => `Round ${String(label).replace('R', '')}`}
-                contentStyle={{ fontSize: 12 }}
-              />
-              {/* Team-A-winning zone: filled between line and 50 when line is above 50 */}
-              <Area
-                type="monotone"
-                dataKey="probAbove"
-                stroke="none"
-                fill={colorA}
-                fillOpacity={0.22}
-                baseValue={50}
-                isAnimationActive={false}
-                legendType="none"
-                activeDot={false}
-              />
-              {/* Team-B-winning zone: filled between line and 50 when line is below 50 */}
-              <Area
-                type="monotone"
-                dataKey="probBelow"
-                stroke="none"
-                fill={colorB}
-                fillOpacity={0.22}
-                baseValue={50}
-                isAnimationActive={false}
-                legendType="none"
-                activeDot={false}
-              />
-              {/* The single probability line (Team A %) */}
-              <Line
-                type="monotone"
-                dataKey="probA"
-                stroke="#111827"
-                strokeWidth={2.5}
-                dot={{ r: 4, fill: '#111827', stroke: '#FFFFFF', strokeWidth: 2 }}
-                activeDot={{ r: 6 }}
-                isAnimationActive={false}
-              />
-              {/* Prominent midline at 50% */}
-              <ReferenceLine
-                y={50}
-                stroke="#9CA3AF"
-                strokeWidth={1.5}
-                strokeDasharray="6 4"
-                label={{ value: 'EVEN', position: 'right', fill: '#6B7280', fontSize: 10, fontWeight: 600 }}
-              />
-            </ComposedChart>
-          </ResponsiveContainer>
-        )}
-        {chartData.length >= 2 && (
-          <div className="flex items-center justify-center gap-6 mt-3 text-[11px] text-muted-foreground">
-            <span className="flex items-center gap-1.5">
-              <span className="w-3 h-3 rounded-sm" style={{ backgroundColor: colorA, opacity: 0.5 }} />
-              {trade.team_a_name} winning
-            </span>
-            <span className="flex items-center gap-1.5">
-              <span className="w-3 h-3 rounded-sm" style={{ backgroundColor: colorB, opacity: 0.5 }} />
-              {trade.team_b_name} winning
-            </span>
-          </div>
-        )}
-      </div>
-
-      {/* Factor breakdown — visual bars */}
-      {factors && (
-        <FactorBreakdown
-          factors={factors}
-          trade={trade}
           colorA={colorA}
           colorB={colorB}
         />
+
+        {/* AI narrative */}
+        {latestProbability?.ai_assessment && (
+          <div className="border-t border-slate-800 pt-5">
+            <div className="flex items-start gap-3">
+              <span className="text-xl leading-none mt-0.5">🧠</span>
+              <div className="flex-1">
+                <div className="flex items-center justify-between mb-1.5">
+                  <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                    Trade Context
+                  </p>
+                  {latestProbability.round_number !== null && (
+                    <p className="text-[10px] text-slate-500">Updated R{latestProbability.round_number}</p>
+                  )}
+                </div>
+                <p className="text-sm text-slate-200 leading-relaxed whitespace-pre-wrap">
+                  {latestProbability.ai_assessment}
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Hero % + chart */}
+        <div className="border-t border-slate-800 pt-6 space-y-5">
+          <div className="flex items-end justify-between gap-4 flex-wrap">
+            <div>
+              <div
+                className="text-[56px] md:text-[72px] font-bold leading-none tabular-nums"
+                style={{ color: heroColor }}
+              >
+                {Math.round(heroPct)}%
+              </div>
+              <p className="text-sm text-slate-400 mt-1 font-medium">{heroTeamName} winning</p>
+            </div>
+            {heroDelta !== null && Math.abs(heroDelta) >= 0.5 && (
+              <div
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-semibold ${
+                  heroDelta >= 0
+                    ? 'bg-green-500/15 text-green-400'
+                    : 'bg-red-500/15 text-red-400'
+                }`}
+              >
+                {heroDelta >= 0 ? <TrendingUp size={14} /> : <TrendingDown size={14} />}
+                {heroDelta >= 0 ? '+' : ''}
+                {heroDelta.toFixed(1)}% since last round
+              </div>
+            )}
+          </div>
+
+          <div className="rounded-lg overflow-hidden bg-[#111827] p-4 pr-6">
+            {chartData.length < 2 ? (
+              <p className="text-sm text-slate-500 py-12 text-center">
+                No round data yet — probabilities will appear after the next round&apos;s scores are uploaded.
+              </p>
+            ) : (
+              <ResponsiveContainer width="100%" height={260}>
+                <ComposedChart data={chartData} margin={{ top: 10, right: 24, bottom: 6, left: 0 }}>
+                  <defs>
+                    <linearGradient id="heroLineFill" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor={heroColor} stopOpacity={0.25} />
+                      <stop offset="100%" stopColor={heroColor} stopOpacity={0} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#1F2937" vertical={false} />
+                  <XAxis
+                    dataKey="round"
+                    tick={{ fontSize: 11, fill: '#9CA3AF' }}
+                    axisLine={{ stroke: '#1F2937' }}
+                    tickLine={false}
+                  />
+                  <YAxis
+                    domain={[0, 100]}
+                    ticks={[0, 25, 50, 75, 100]}
+                    tickFormatter={(v) => `${v}%`}
+                    tick={{ fontSize: 11, fill: '#9CA3AF' }}
+                    axisLine={false}
+                    tickLine={false}
+                    width={40}
+                  />
+                  <Tooltip
+                    cursor={{ stroke: '#475569', strokeWidth: 1, strokeDasharray: '3 3' }}
+                    formatter={(value, name) => {
+                      if (name !== 'probA') return [null, null] as unknown as [string, string];
+                      const v = typeof value === 'number' ? value : Number(value);
+                      const side = v >= 50 ? trade.team_a_name : trade.team_b_name;
+                      const sidePct = v >= 50 ? v : 100 - v;
+                      return [`${Math.round(sidePct)}% ${side}`, 'Winning'];
+                    }}
+                    labelFormatter={(label) => `Round ${String(label).replace('R', '')}`}
+                    contentStyle={{
+                      fontSize: 12,
+                      background: '#0B1120',
+                      border: '1px solid #1F2937',
+                      borderRadius: 6,
+                      color: '#F3F4F6',
+                    }}
+                    labelStyle={{ color: '#9CA3AF' }}
+                  />
+                  {/* Faint area fill under the curve, only where team A is winning */}
+                  <Area
+                    type="monotone"
+                    dataKey="probAbove"
+                    stroke="none"
+                    fill={`url(#heroLineFill)`}
+                    baseValue={50}
+                    isAnimationActive={false}
+                    legendType="none"
+                    activeDot={false}
+                  />
+                  {/* Area fill when team B is winning, same subtle treatment */}
+                  <Area
+                    type="monotone"
+                    dataKey="probBelow"
+                    stroke="none"
+                    fill={colorB}
+                    fillOpacity={0.12}
+                    baseValue={50}
+                    isAnimationActive={false}
+                    legendType="none"
+                    activeDot={false}
+                  />
+                  {/* Subtle dashed EVEN line */}
+                  <ReferenceLine y={50} stroke="#374151" strokeDasharray="4 4" strokeWidth={1} />
+                  {/* The hero probability line */}
+                  <Line
+                    type="monotone"
+                    dataKey="probA"
+                    stroke={heroColor}
+                    strokeWidth={2.5}
+                    dot={{ r: 3, fill: heroColor, strokeWidth: 0 }}
+                    activeDot={{ r: 6, fill: heroColor, stroke: '#0B1120', strokeWidth: 3 }}
+                    isAnimationActive={false}
+                  />
+                </ComposedChart>
+              </ResponsiveContainer>
+            )}
+          </div>
+        </div>
+
+        {/* Show details toggle */}
+        <div className="border-t border-slate-800 pt-4 text-center">
+          <button
+            onClick={() => setShowDetails((s) => !s)}
+            className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-400 hover:text-slate-200 transition-colors"
+          >
+            {showDetails ? 'Hide detailed breakdown' : 'Show detailed breakdown'}
+            <ChevronDown
+              size={14}
+              className={`transition-transform ${showDetails ? 'rotate-180' : ''}`}
+            />
+          </button>
+        </div>
+      </div>
+
+      {/* Deep dive — only visible when expanded */}
+      {showDetails && (
+        <div className="space-y-4">
+          {factors && (
+            <FactorBreakdown
+              factors={factors}
+              trade={trade}
+              colorA={colorA}
+              colorB={colorB}
+            />
+          )}
+          <PerRoundScoresGrid
+            performance={playerPerformance}
+            roundExecuted={trade.round_executed}
+            latestRound={latestProbability?.round_number ?? trade.round_executed}
+          />
+          <PerPlayerSummary performance={playerPerformance} />
+        </div>
       )}
-
-      {/* Per-round scores grid — colored relative to expected */}
-      <PerRoundScoresGrid
-        performance={playerPerformance}
-        roundExecuted={trade.round_executed}
-        latestRound={latestProbability?.round_number ?? trade.round_executed}
-      />
-
-      {/* Per-player summary */}
-      <PerPlayerSummary performance={playerPerformance} />
 
       {editing && (
         <LogTradeModal
@@ -358,7 +436,133 @@ export default function TradeDetail({ tradeId, onBack, onDeleted }: Props) {
 }
 
 // ============================================================
-// Factor breakdown — mini directional bars
+// Dark player card — one per player in the trade
+// ============================================================
+
+function PlayerCard({
+  tradePlayer,
+  performance,
+}: {
+  tradePlayer: TradePlayer;
+  performance: PlayerPerformance | undefined;
+}) {
+  const injured = performance?.injured ?? false;
+  const pos = performance
+    ? displayPosition(performance)
+    : tradePlayer.raw_position ?? '?';
+  const pre = tradePlayer.pre_trade_avg;
+  const post = performance?.post_trade_avg ?? 0;
+  const roundsPlayed = performance?.rounds_played ?? 0;
+
+  // Which average to feature: pre-trade if injured (or no post-trade data yet),
+  // otherwise post-trade
+  const featured = injured || roundsPlayed === 0
+    ? { label: 'Pre-trade', value: pre }
+    : { label: 'Post-trade', value: post };
+
+  return (
+    <div className="bg-slate-800/60 border border-slate-700/70 rounded-lg px-4 py-3">
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0 flex-1">
+          <p className="font-semibold text-white truncate">{tradePlayer.player_name}</p>
+          <p className="text-[11px] text-slate-400 mt-0.5 tabular-nums">
+            <span className="font-medium">{pos}</span>
+            {featured.value != null && featured.value > 0 && (
+              <>
+                <span className="mx-1.5 text-slate-600">·</span>
+                {featured.label} {featured.value.toFixed(0)}
+              </>
+            )}
+          </p>
+        </div>
+        <span
+          className={`text-[10px] font-semibold px-2 py-0.5 rounded-full shrink-0 ${
+            injured
+              ? 'bg-red-500/20 text-red-400'
+              : 'bg-green-500/20 text-green-400'
+          }`}
+        >
+          {injured ? '🔴 Injured' : '✅ Active'}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// Dark probability bar (inlined for the hero card)
+// ============================================================
+
+function DarkProbabilityBar({
+  teamAName,
+  teamBName,
+  probA,
+  probB,
+  colorA,
+  colorB,
+}: {
+  teamAName: string;
+  teamBName: string;
+  probA: number;
+  probB: number;
+  colorA: string;
+  colorB: string;
+}) {
+  const showAInside = probA >= 20;
+  const showBInside = probB >= 20;
+
+  return (
+    <div className="w-full">
+      {(!showAInside || !showBInside) && (
+        <div className="flex items-center justify-between mb-1.5 text-sm font-semibold">
+          {!showAInside ? (
+            <span className="flex items-center gap-1.5" style={{ color: colorA }}>
+              <span className="w-2 h-2 rounded-full" style={{ backgroundColor: colorA }} />
+              {teamAName} {Math.round(probA)}%
+            </span>
+          ) : (
+            <span />
+          )}
+          {!showBInside ? (
+            <span className="flex items-center gap-1.5" style={{ color: colorB }}>
+              {teamBName} {Math.round(probB)}%
+              <span className="w-2 h-2 rounded-full" style={{ backgroundColor: colorB }} />
+            </span>
+          ) : (
+            <span />
+          )}
+        </div>
+      )}
+      <div className="relative w-full rounded-lg overflow-hidden flex" style={{ height: 36 }}>
+        <div
+          className="h-full flex items-center pl-3 transition-all duration-300"
+          style={{ width: `${probA}%`, backgroundColor: colorA }}
+        >
+          {showAInside && (
+            <div className="flex items-baseline gap-2 text-white truncate">
+              <span className="text-lg font-bold tabular-nums">{Math.round(probA)}%</span>
+              <span className="text-xs font-medium opacity-90 truncate">{teamAName}</span>
+            </div>
+          )}
+        </div>
+        <div
+          className="h-full flex items-center justify-end pr-3 transition-all duration-300"
+          style={{ width: `${probB}%`, backgroundColor: colorB }}
+        >
+          {showBInside && (
+            <div className="flex items-baseline gap-2 text-white truncate">
+              <span className="text-xs font-medium opacity-90 truncate">{teamBName}</span>
+              <span className="text-lg font-bold tabular-nums">{Math.round(probB)}%</span>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// Deep-dive: Factor breakdown
 // ============================================================
 
 function FactorBreakdown({
@@ -421,7 +625,6 @@ function FactorBreakdown({
         />
         <FactorBar
           label="AI strategic edge"
-          // AI nudge is in pct points; scale to match the pts/rd bars roughly
           value={factors.aiPctNudge}
           maxAbs={10}
           colorA={colorA}
@@ -433,10 +636,7 @@ function FactorBreakdown({
           }
           sub={`${factors.aiPctNudge > 0 ? '+' : ''}${factors.aiPctNudge.toFixed(1)}% probability nudge`}
         />
-        <ConfidenceBar
-          confidence={factors.confidence}
-          roundsSince={factors.roundsSince}
-        />
+        <ConfidenceBar confidence={factors.confidence} roundsSince={factors.roundsSince} />
       </div>
     </div>
   );
@@ -459,11 +659,9 @@ function FactorBar({
   valueText: string;
   sub?: string;
 }) {
-  // Normalize value to -1..+1 for bar rendering. Clip at the band edges.
   const clamped = Math.max(-1, Math.min(1, value / maxAbs));
-  const pct = Math.abs(clamped) * 50; // 0..50% of bar width from center
+  const pct = Math.abs(clamped) * 50;
   const isA = value >= 0;
-
   return (
     <div>
       <div className="flex items-baseline justify-between gap-3 mb-1">
@@ -471,25 +669,16 @@ function FactorBar({
         <span className="text-xs font-semibold tabular-nums">{valueText}</span>
       </div>
       <div className="relative w-full h-2.5 bg-muted rounded-full overflow-hidden">
-        {/* Center divider */}
         <div className="absolute top-0 bottom-0 left-1/2 w-px bg-border z-10" />
         {isA ? (
           <div
             className="absolute top-0 bottom-0 rounded-full transition-all"
-            style={{
-              left: '50%',
-              width: `${pct}%`,
-              backgroundColor: colorA,
-            }}
+            style={{ left: '50%', width: `${pct}%`, backgroundColor: colorA }}
           />
         ) : (
           <div
             className="absolute top-0 bottom-0 rounded-full transition-all"
-            style={{
-              right: '50%',
-              width: `${pct}%`,
-              backgroundColor: colorB,
-            }}
+            style={{ right: '50%', width: `${pct}%`, backgroundColor: colorB }}
           />
         )}
       </div>
@@ -520,7 +709,7 @@ function ConfidenceBar({ confidence, roundsSince }: { confidence: number; rounds
 }
 
 // ============================================================
-// Per-round scores grid — colored relative to expected
+// Deep-dive: Per-round scores grid
 // ============================================================
 
 function PerRoundScoresGrid({
@@ -546,7 +735,6 @@ function PerRoundScoresGrid({
   const rounds: number[] = [];
   for (let r = roundExecuted + 1; r <= latestRound; r++) rounds.push(r);
 
-  // Score coloring: relative to baseline (pre_trade_avg, or position league avg)
   const cellClass = (pts: number | null | undefined, hasRound: boolean, baseline: number): string => {
     if (!hasRound) return 'bg-gray-50 text-muted-foreground';
     if (pts == null) return 'bg-gray-100 text-gray-500 italic';
@@ -562,8 +750,7 @@ function PerRoundScoresGrid({
     <div className="bg-white border border-border rounded-lg p-5">
       <h3 className="text-sm font-semibold mb-1">Scores since trade</h3>
       <p className="text-xs text-muted-foreground mb-4">
-        Colored by score vs. player&apos;s expected output (pre-trade avg, or league avg for their
-        position). Green = above expected, red = well below, DNP = did not play.
+        Colored by score vs. player&apos;s expected output. Green = above expected, red = well below.
       </p>
       <div className="overflow-x-auto">
         <table className="w-full text-sm border-collapse">
@@ -584,14 +771,14 @@ function PerRoundScoresGrid({
             {performance.map((p) => {
               const scoreByRound = new Map<number, number | null>();
               for (const s of p.round_scores) scoreByRound.set(s.round, s.points);
-              const baseline = baselineForPlayer(p);
+              const baseline = baselineForPerformance(p);
               return (
                 <tr key={p.player_id} className="border-b border-border last:border-0">
                   <td className="py-2 pr-4 font-medium whitespace-nowrap">
                     {p.player_name}
-                    {p.raw_position && (
-                      <span className="text-muted-foreground ml-1 text-xs">({p.raw_position})</span>
-                    )}
+                    <span className="text-muted-foreground ml-1 text-xs">
+                      ({displayPosition(p)})
+                    </span>
                   </td>
                   <td className="py-2 pr-4 text-xs whitespace-nowrap">{p.receiving_team_name}</td>
                   <td className="py-2 pr-3 text-right text-xs text-muted-foreground tabular-nums">
@@ -624,7 +811,7 @@ function PerRoundScoresGrid({
 }
 
 // ============================================================
-// Per-player summary table
+// Deep-dive: Per-player summary
 // ============================================================
 
 function PerPlayerSummary({ performance }: { performance: PlayerPerformance[] }) {
@@ -649,19 +836,13 @@ function PerPlayerSummary({ performance }: { performance: PlayerPerformance[] })
             {performance.map((p) => {
               const isInjured = p.injured;
               const hasPost = p.rounds_played > 0;
-              const delta = hasPost && p.pre_trade_avg != null
-                ? p.post_trade_avg - p.pre_trade_avg
-                : null;
-
+              const delta = hasPost && p.pre_trade_avg != null ? p.post_trade_avg - p.pre_trade_avg : null;
               return (
                 <tr key={p.player_id} className="border-b border-border last:border-0">
                   <td className="py-2 pr-4 font-medium">{p.player_name}</td>
                   <td className="py-2 pr-4 text-xs">{p.receiving_team_name}</td>
-                  <td className="py-2 pr-4 text-xs text-muted-foreground">{p.raw_position ?? '?'}</td>
-                  <td className="py-2 pr-4 text-right tabular-nums">
-                    {p.pre_trade_avg?.toFixed(0) ?? '—'}
-                  </td>
-                  {/* Post-trade avg — shows "Injured" when no data + injury flag */}
+                  <td className="py-2 pr-4 text-xs text-muted-foreground">{displayPosition(p)}</td>
+                  <td className="py-2 pr-4 text-right tabular-nums">{p.pre_trade_avg?.toFixed(0) ?? '—'}</td>
                   <td className="py-2 pr-4 text-right tabular-nums">
                     {isInjured && !hasPost ? (
                       <span className="text-red-600 text-xs font-medium">🔴 Injured</span>
@@ -671,12 +852,9 @@ function PerPlayerSummary({ performance }: { performance: PlayerPerformance[] })
                       '—'
                     )}
                   </td>
-                  {/* Δ — shows projected return avg when injured */}
                   <td className="py-2 pr-4 text-right text-xs tabular-nums">
                     {isInjured && !hasPost && p.pre_trade_avg != null ? (
-                      <span className="text-amber-600 italic">
-                        Proj. {p.pre_trade_avg.toFixed(0)}
-                      </span>
+                      <span className="text-amber-600 italic">Proj. {p.pre_trade_avg.toFixed(0)}</span>
                     ) : delta == null ? (
                       '—'
                     ) : (
@@ -686,7 +864,9 @@ function PerPlayerSummary({ performance }: { performance: PlayerPerformance[] })
                       </span>
                     )}
                   </td>
-                  <td className={`py-2 pr-4 text-right text-xs tabular-nums ${isInjured && !hasPost ? 'text-red-600' : ''}`}>
+                  <td
+                    className={`py-2 pr-4 text-right text-xs tabular-nums ${isInjured && !hasPost ? 'text-red-600' : ''}`}
+                  >
                     {p.rounds_played}/{p.rounds_possible}
                   </td>
                   <td className="py-2 text-xs">

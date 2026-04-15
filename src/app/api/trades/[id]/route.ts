@@ -52,6 +52,16 @@ export async function GET(_request: Request, ctx: { params: Promise<{ id: string
 
     const roundsPossible = Math.max(0, latestRound - trade.round_executed);
 
+    // Draft position lookup — the stable per-player position (not BN)
+    const { data: draftRows } = await supabase
+      .from('draft_picks')
+      .select('player_id, position')
+      .in('player_id', playerIds);
+    const draftPosByPlayer = new Map<number, string>();
+    for (const d of (draftRows ?? []) as { player_id: number; position: string | null }[]) {
+      if (d.position) draftPosByPlayer.set(d.player_id, d.position);
+    }
+
     const playerPerformance: PlayerPerformance[] = players.map((p) => {
       const key = `${p.player_id}-${p.receiving_team_id}`;
       const rounds = (scoresByKey.get(key) ?? []).sort((a, b) => a.round - b.round);
@@ -66,6 +76,7 @@ export async function GET(_request: Request, ctx: { params: Promise<{ id: string
         receiving_team_name: p.receiving_team_name,
         position: (p.player_position as NormalizedPosition | null) ?? null,
         raw_position: p.raw_position,
+        draft_position: draftPosByPlayer.get(p.player_id) ?? null,
         pre_trade_avg: p.pre_trade_avg,
         post_trade_avg: postAvg,
         rounds_played: roundsPlayed,

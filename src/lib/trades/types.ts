@@ -61,6 +61,7 @@ export interface PlayerPerformance {
   receiving_team_name: string;
   position: NormalizedPosition | null;
   raw_position: string | null;
+  draft_position: string | null; // from draft_picks — stable, never 'BN'
   pre_trade_avg: number | null;
   post_trade_avg: number;
   rounds_played: number;
