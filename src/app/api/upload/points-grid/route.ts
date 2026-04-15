@@ -71,17 +71,13 @@ export async function POST(request: Request) {
       if (aflClub) playerClubMap.set(playerId, aflClub);
     }
 
-    // Build the set of upsert rows (one per existing player_rounds row that has a score this grid)
-    interface UpsertRow {
+    // Build the set of update rows (one per existing player_rounds row that has a score this grid)
+    interface UpdateRow {
       id: string;
-      round_number: number;
-      player_id: number;
-      team_id: number;
-      player_name: string;
       points: number;
       club: string | null;
     }
-    const upsertRows: UpsertRow[] = [];
+    const updateRows: UpdateRow[] = [];
 
     for (const { col, roundNum } of roundColumns) {
       for (const row of data) {
@@ -96,63 +92,54 @@ export async function POST(request: Request) {
         const existing = existingMap.get(`${roundNum}-${playerId}`);
         if (!existing) continue;
 
-        upsertRows.push({
+        updateRows.push({
           id: existing.id,
-          round_number: existing.round_number,
-          player_id: existing.player_id,
-          team_id: existing.team_id,
-          player_name: existing.player_name,
           points,
           club: playerClubMap.get(playerId) || null,
         });
       }
     }
 
-    // Batch upsert in chunks of 500
+    // Parallel UPDATE calls in batches (we only ever update existing rows — never insert).
+    // This avoids upsert's NOT NULL column requirements.
     let pointsUpdatedCount = 0;
-    const CHUNK = 500;
-    for (let i = 0; i < upsertRows.length; i += CHUNK) {
-      const chunk = upsertRows.slice(i, i + CHUNK);
-      const { error } = await supabase
-        .from('player_rounds')
-        .upsert(chunk, { onConflict: 'id' });
-      if (error) {
-        console.error('[points-grid] Chunk upsert failed:', error);
-        throw error;
-      }
-      pointsUpdatedCount += chunk.length;
+    const updateErrors: string[] = [];
+    const PARALLEL = 50;
+    for (let i = 0; i < updateRows.length; i += PARALLEL) {
+      const batch = updateRows.slice(i, i + PARALLEL);
+      await Promise.all(
+        batch.map(async (r) => {
+          const patch: { points: number; club?: string } = { points: r.points };
+          if (r.club) patch.club = r.club;
+          const { error } = await supabase
+            .from('player_rounds')
+            .update(patch)
+            .eq('id', r.id);
+          if (error) {
+            updateErrors.push(error.message);
+          } else {
+            pointsUpdatedCount++;
+          }
+        })
+      );
+    }
+    if (updateErrors.length > 0) {
+      console.error('[points-grid] Update errors (first 5):', updateErrors.slice(0, 5));
+      throw new Error(`${updateErrors.length} update(s) failed. First: ${updateErrors[0]}`);
     }
 
-    // ─── Backfill club across every round for each player (batch). ───────────
-    // Even rows that had no score entry in this grid get their club populated.
-    // Do this via batch upsert: build one row per existing player_round whose
-    // player has a club but club is still null. We already have existingRows in memory.
-    const clubBackfillRows: UpsertRow[] = [];
-    // Track which (round,player) keys already got a points update so we don't stomp them
-    const alreadyUpdated = new Set(upsertRows.map(r => r.id));
-
+    // ─── Backfill club across every round for each player (rows w/ no score this grid) ──
+    const alreadyUpdated = new Set(updateRows.map((r) => r.id));
+    const clubBackfillRows: { id: string; club: string }[] = [];
     for (const er of existingRows) {
       if (alreadyUpdated.has(er.id)) continue;
       const club = playerClubMap.get(er.player_id);
       if (!club) continue;
-      clubBackfillRows.push({
-        id: er.id,
-        round_number: er.round_number,
-        player_id: er.player_id,
-        team_id: er.team_id,
-        player_name: er.player_name,
-        // points: don't overwrite — set to existing value? We don't have it.
-        // Safer: skip the backfill if we'd need to preserve an unknown points value.
-        // Instead, use a lightweight update() below for club-only changes.
-        points: 0, // placeholder, never used
-        club,
-      });
+      clubBackfillRows.push({ id: er.id, club });
     }
 
-    // For the backfill, do club-only UPDATE in parallel chunks (not upsert, to avoid stomping points).
     let clubBackfilledCount = 0;
     if (clubBackfillRows.length > 0) {
-      const PARALLEL = 20;
       for (let i = 0; i < clubBackfillRows.length; i += PARALLEL) {
         const batch = clubBackfillRows.slice(i, i + PARALLEL);
         await Promise.all(
@@ -200,9 +187,12 @@ export async function POST(request: Request) {
     });
   } catch (err) {
     console.error('Points grid upload error:', err);
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Upload failed' },
-      { status: 500 }
-    );
+    let message = 'Upload failed';
+    if (err instanceof Error) message = err.message;
+    else if (err && typeof err === 'object') {
+      const e = err as { message?: string; details?: string; hint?: string };
+      message = e.message || e.details || e.hint || JSON.stringify(err);
+    }
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }
