@@ -12,6 +12,11 @@ interface Props {
   large?: boolean;
 }
 
+/**
+ * Hero probability bar — the visual centerpiece of the detail view.
+ * Names and % live INSIDE the bar when the segment is >= 25% wide;
+ * otherwise they flip outside so they stay legible.
+ */
 export default function ProbabilityBar({
   teamAId,
   teamAName,
@@ -24,23 +29,65 @@ export default function ProbabilityBar({
   const colorA = getTeamColor(teamAId);
   const colorB = getTeamColor(teamBId);
 
+  const height = large ? 44 : 28; // px
+  const pctSize = large ? 'text-xl' : 'text-sm';
+  const nameSize = large ? 'text-[13px]' : 'text-[11px]';
+
+  const showALabelInside = probA >= 25;
+  const showBLabelInside = probB >= 25;
+
   return (
-    <div className={large ? 'space-y-2' : 'space-y-1.5'}>
-      <div className={`flex items-center justify-between ${large ? 'text-base' : 'text-sm'} font-semibold`}>
-        <div className="flex items-center gap-2">
-          <span className="w-2 h-2 rounded-full" style={{ backgroundColor: colorA }} />
-          <span className="truncate">{teamAName}</span>
-          <span style={{ color: colorA }}>{probA.toFixed(0)}%</span>
+    <div className="w-full">
+      {/* External labels shown only when corresponding side is too narrow to fit inside */}
+      {(!showALabelInside || !showBLabelInside) && (
+        <div className="flex items-center justify-between mb-1.5 text-sm font-semibold">
+          {!showALabelInside ? (
+            <span className="flex items-center gap-1.5">
+              <span className="w-2 h-2 rounded-full" style={{ backgroundColor: colorA }} />
+              <span>{teamAName}</span>
+              <span style={{ color: colorA }}>{Math.round(probA)}%</span>
+            </span>
+          ) : (
+            <span />
+          )}
+          {!showBLabelInside ? (
+            <span className="flex items-center gap-1.5">
+              <span style={{ color: colorB }}>{Math.round(probB)}%</span>
+              <span>{teamBName}</span>
+              <span className="w-2 h-2 rounded-full" style={{ backgroundColor: colorB }} />
+            </span>
+          ) : (
+            <span />
+          )}
         </div>
-        <div className="flex items-center gap-2">
-          <span style={{ color: colorB }}>{probB.toFixed(0)}%</span>
-          <span className="truncate">{teamBName}</span>
-          <span className="w-2 h-2 rounded-full" style={{ backgroundColor: colorB }} />
+      )}
+
+      <div
+        className="relative w-full rounded-lg overflow-hidden flex shadow-sm"
+        style={{ height: `${height}px` }}
+      >
+        <div
+          className="h-full flex items-center pl-3 pr-2 transition-all duration-300"
+          style={{ width: `${probA}%`, backgroundColor: colorA }}
+        >
+          {showALabelInside && (
+            <div className="flex items-baseline gap-2 text-white truncate">
+              <span className={`${pctSize} font-bold tabular-nums`}>{Math.round(probA)}%</span>
+              <span className={`${nameSize} font-medium truncate opacity-95`}>{teamAName}</span>
+            </div>
+          )}
         </div>
-      </div>
-      <div className={`w-full ${large ? 'h-4' : 'h-2.5'} rounded-full overflow-hidden flex bg-muted`}>
-        <div style={{ width: `${probA}%`, backgroundColor: colorA }} className="h-full transition-all" />
-        <div style={{ width: `${probB}%`, backgroundColor: colorB }} className="h-full transition-all" />
+        <div
+          className="h-full flex items-center justify-end pr-3 pl-2 transition-all duration-300"
+          style={{ width: `${probB}%`, backgroundColor: colorB }}
+        >
+          {showBLabelInside && (
+            <div className="flex items-baseline gap-2 text-white truncate">
+              <span className={`${nameSize} font-medium truncate opacity-95`}>{teamBName}</span>
+              <span className={`${pctSize} font-bold tabular-nums`}>{Math.round(probB)}%</span>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
