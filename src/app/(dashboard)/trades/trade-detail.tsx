@@ -20,7 +20,6 @@ import type {
   Trade,
   TradePlayer,
   TradeProbability,
-  TradeFactorsBreakdown,
 } from '@/lib/trades/types';
 
 interface DetailData {
@@ -145,8 +144,6 @@ export default function TradeDetail({ tradeId, onBack, onDeleted }: Props) {
     const latestSide = winningIsA ? Number(last.team_a_probability) : Number(last.team_b_probability);
     heroDelta = latestSide - 50;
   }
-
-  const factors = latestProbability?.factors as TradeFactorsBreakdown | null;
 
   const editInitial: InitialTradeData = {
     tradeId: trade.id,
@@ -403,17 +400,11 @@ export default function TradeDetail({ tradeId, onBack, onDeleted }: Props) {
         </div>
       </div>
 
-      {/* Deep dive — only visible when expanded */}
+      {/* Deep dive — only visible when expanded. Factor breakdown is kept in the
+          database (`trade_probabilities.factors`) but hidden from the UI per Lipi's
+          request — the numbers were confusing without context. */}
       {showDetails && (
         <div className="space-y-4">
-          {factors && (
-            <FactorBreakdown
-              factors={factors}
-              trade={trade}
-              colorA={colorA}
-              colorB={colorB}
-            />
-          )}
           <PerRoundScoresGrid
             performance={playerPerformance}
             roundExecuted={trade.round_executed}
@@ -559,153 +550,6 @@ function DarkProbabilityBar({
           )}
         </div>
       </div>
-    </div>
-  );
-}
-
-// ============================================================
-// Deep-dive: Factor breakdown
-// ============================================================
-
-function FactorBreakdown({
-  factors,
-  trade,
-  colorA,
-  colorB,
-}: {
-  factors: TradeFactorsBreakdown;
-  trade: Trade;
-  colorA: string;
-  colorB: string;
-}) {
-  return (
-    <div className="bg-white border border-border rounded-lg p-5">
-      <h3 className="text-sm font-semibold mb-4">Factor breakdown</h3>
-      <div className="space-y-4">
-        <FactorBar
-          label="Production edge"
-          value={factors.productionEdge}
-          maxAbs={80}
-          colorA={colorA}
-          colorB={colorB}
-          valueText={
-            factors.productionEdge >= 0
-              ? `+${factors.productionEdge.toFixed(1)} pts/rd → ${trade.team_a_name}`
-              : `${factors.productionEdge.toFixed(1)} pts/rd → ${trade.team_b_name}`
-          }
-          sub={`Avg ${factors.avgA.toFixed(1)} (A) vs ${factors.avgB.toFixed(1)} (B)`}
-        />
-        <FactorBar
-          label="Positional scarcity"
-          value={factors.scarcityEdge}
-          maxAbs={20}
-          colorA={colorA}
-          colorB={colorB}
-          valueText={
-            Math.abs(factors.scarcityEdge) < 0.1
-              ? 'Even'
-              : factors.scarcityEdge > 0
-              ? `+${factors.scarcityEdge.toFixed(1)} pts/rd adj → ${trade.team_a_name}`
-              : `${factors.scarcityEdge.toFixed(1)} pts/rd adj → ${trade.team_b_name}`
-          }
-          sub="Bonus for rarer positions (RUC, FWD, DEF)"
-        />
-        <FactorBar
-          label="Projected value (injury)"
-          value={factors.projectedEdge}
-          maxAbs={80}
-          colorA={colorA}
-          colorB={colorB}
-          valueText={
-            Math.abs(factors.projectedEdge) < 0.1
-              ? 'No injured players'
-              : factors.projectedEdge > 0
-              ? `+${factors.projectedEdge.toFixed(1)} pts/rd → ${trade.team_a_name}`
-              : `${factors.projectedEdge.toFixed(1)} pts/rd → ${trade.team_b_name}`
-          }
-          sub="Projected return value of injured acquisitions"
-        />
-        <FactorBar
-          label="AI strategic edge"
-          value={factors.aiPctNudge}
-          maxAbs={10}
-          colorA={colorA}
-          colorB={colorB}
-          valueText={
-            factors.aiEdge === 'even'
-              ? 'Even'
-              : `${factors.aiEdge === 'team_a' ? trade.team_a_name : trade.team_b_name} (magnitude ${factors.aiMagnitude}/10)`
-          }
-          sub={`${factors.aiPctNudge > 0 ? '+' : ''}${factors.aiPctNudge.toFixed(1)}% probability nudge`}
-        />
-        <ConfidenceBar confidence={factors.confidence} roundsSince={factors.roundsSince} />
-      </div>
-    </div>
-  );
-}
-
-function FactorBar({
-  label,
-  value,
-  maxAbs,
-  colorA,
-  colorB,
-  valueText,
-  sub,
-}: {
-  label: string;
-  value: number;
-  maxAbs: number;
-  colorA: string;
-  colorB: string;
-  valueText: string;
-  sub?: string;
-}) {
-  const clamped = Math.max(-1, Math.min(1, value / maxAbs));
-  const pct = Math.abs(clamped) * 50;
-  const isA = value >= 0;
-  return (
-    <div>
-      <div className="flex items-baseline justify-between gap-3 mb-1">
-        <span className="text-xs font-medium text-muted-foreground">{label}</span>
-        <span className="text-xs font-semibold tabular-nums">{valueText}</span>
-      </div>
-      <div className="relative w-full h-2.5 bg-muted rounded-full overflow-hidden">
-        <div className="absolute top-0 bottom-0 left-1/2 w-px bg-border z-10" />
-        {isA ? (
-          <div
-            className="absolute top-0 bottom-0 rounded-full transition-all"
-            style={{ left: '50%', width: `${pct}%`, backgroundColor: colorA }}
-          />
-        ) : (
-          <div
-            className="absolute top-0 bottom-0 rounded-full transition-all"
-            style={{ right: '50%', width: `${pct}%`, backgroundColor: colorB }}
-          />
-        )}
-      </div>
-      {sub && <p className="text-[11px] text-muted-foreground mt-1">{sub}</p>}
-    </div>
-  );
-}
-
-function ConfidenceBar({ confidence, roundsSince }: { confidence: number; roundsSince: number }) {
-  const pct = Math.max(0, Math.min(1, confidence)) * 100;
-  return (
-    <div>
-      <div className="flex items-baseline justify-between gap-3 mb-1">
-        <span className="text-xs font-medium text-muted-foreground">Confidence</span>
-        <span className="text-xs font-semibold tabular-nums">{Math.round(pct)}%</span>
-      </div>
-      <div className="relative w-full h-2.5 bg-muted rounded-full overflow-hidden">
-        <div
-          className="absolute top-0 bottom-0 left-0 rounded-full bg-slate-600 transition-all"
-          style={{ width: `${pct}%` }}
-        />
-      </div>
-      <p className="text-[11px] text-muted-foreground mt-1">
-        {roundsSince} round{roundsSince === 1 ? '' : 's'} of data · full confidence at 8 rounds
-      </p>
     </div>
   );
 }
