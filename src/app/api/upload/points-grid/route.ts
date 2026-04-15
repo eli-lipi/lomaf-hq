@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { TEAMS } from '@/lib/constants';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -16,8 +15,8 @@ export async function POST(request: Request) {
     }
 
     // Points Grid CSV is in WIDE format:
-    // Columns: id, name, team, R0, R1, R2, R3, R4, ... R28
-    // Each row is one player, each R# column is their score for that round
+    // Columns: id, name, team (AFL club abbreviation: ADE, BRL, etc.), R0, R1, ... R28
+    // Each row is one player, each R# column is their score for that round.
 
     // Detect round columns (R0, R1, R2, etc.)
     const sampleRow = data[0];
@@ -33,28 +32,44 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'No round columns (R0, R1, ...) found in data' }, { status: 400 });
     }
 
-    // Build a lookup of existing player_rounds for fast matching
-    // Get all unique rounds that have data
-    const { data: existingRounds } = await supabase
-      .from('player_rounds')
-      .select('round_number, player_id, team_id, id')
-      .order('round_number');
+    // Build a lookup of existing player_rounds keyed by (round_number, player_id).
+    // Each player belongs to exactly one LOMAF team per round, so this key is unique.
+    // Paginate to handle >1000 rows.
+    const existingRows: { round_number: number; player_id: number; id: string }[] = [];
+    let offset = 0;
+    while (true) {
+      const { data: batch } = await supabase
+        .from('player_rounds')
+        .select('round_number, player_id, id')
+        .range(offset, offset + 999);
+      if (!batch || batch.length === 0) break;
+      existingRows.push(...batch);
+      if (batch.length < 1000) break;
+      offset += 1000;
+    }
 
     const existingMap = new Map<string, string>();
-    existingRounds?.forEach((r) => {
-      existingMap.set(`${r.round_number}-${r.player_id}-${r.team_id}`, r.id);
+    existingRows.forEach((r) => {
+      existingMap.set(`${r.round_number}-${r.player_id}`, r.id);
     });
 
-    let updatedCount = 0;
+    // Build per-player club map (from column 3 of the CSV)
+    const playerClubMap = new Map<number, string>();
+    for (const row of data) {
+      const playerId = Number(row['id'] || row['player_id'] || 0);
+      if (!playerId) continue;
+      const aflClubRaw = row['team'] || row['team_name'] || row['club'] || row['squad'] || '';
+      const aflClub = String(aflClubRaw).trim();
+      if (aflClub) playerClubMap.set(playerId, aflClub);
+    }
 
-    // Process in batches per round
+    let pointsUpdatedCount = 0;
+    let clubUpdatedCount = 0;
+
+    // Process each round column → update points on matching player_rounds
     for (const { col, roundNum } of roundColumns) {
-      const updates: { id: string; points: number }[] = [];
-
       for (const row of data) {
         const playerId = Number(row['id'] || row['player_id'] || 0);
-        const teamName = String(row['team'] || row['team_name'] || '');
-
         if (!playerId) continue;
 
         const val = row[col];
@@ -62,28 +77,34 @@ export async function POST(request: Request) {
         const points = Number(val);
         if (isNaN(points)) continue;
 
-        // Find team
-        const team = TEAMS.find(
-          (t) => t.team_name.toLowerCase() === teamName.toLowerCase()
-        );
-        const teamId = team?.team_id || 0;
-
-        // Look up existing record
-        const key = `${roundNum}-${playerId}-${teamId}`;
+        const key = `${roundNum}-${playerId}`;
         const existingId = existingMap.get(key);
-        if (existingId) {
-          updates.push({ id: existingId, points });
-        }
-      }
+        if (!existingId) continue;
 
-      // Batch update by ID
-      for (const { id, points } of updates) {
+        const club = playerClubMap.get(playerId) || null;
+
         const { error } = await supabase
           .from('player_rounds')
-          .update({ points })
-          .eq('id', id);
+          .update({ points, ...(club ? { club } : {}) })
+          .eq('id', existingId);
 
-        if (!error) updatedCount++;
+        if (!error) {
+          pointsUpdatedCount++;
+          if (club) clubUpdatedCount++;
+        }
+      }
+    }
+
+    // Also back-fill club on ALL existing player_rounds for each player (across every round),
+    // since club membership is stable regardless of round.
+    for (const [playerId, club] of playerClubMap.entries()) {
+      const { error } = await supabase
+        .from('player_rounds')
+        .update({ club })
+        .eq('player_id', playerId)
+        .is('club', null);
+      if (!error) {
+        // we don't count these for progress — just a best-effort backfill
       }
     }
 
@@ -92,7 +113,11 @@ export async function POST(request: Request) {
     await supabase.from('csv_uploads').insert({
       round_number: maxRound,
       upload_type: 'points_grid',
-      raw_data: { players: data.length, round_columns: roundColumns.map((r) => r.col) },
+      raw_data: {
+        players: data.length,
+        round_columns: roundColumns.map((r) => r.col),
+        clubs_found: playerClubMap.size,
+      },
     });
 
     // Recalculate all trade probabilities for the newly-finalized rounds.
@@ -110,7 +135,9 @@ export async function POST(request: Request) {
 
     return NextResponse.json({
       success: true,
-      count: updatedCount,
+      count: pointsUpdatedCount,
+      clubs_updated: clubUpdatedCount,
+      players_with_club: playerClubMap.size,
       rounds_in_grid: roundColumns.map((r) => r.roundNum),
     });
   } catch (err) {
