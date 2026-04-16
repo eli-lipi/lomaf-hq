@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { X, Loader2 } from 'lucide-react';
 import { TEAMS } from '@/lib/constants';
+import { cleanPositionDisplay } from '@/lib/trades/positions';
 
 interface DraftPlayer {
   player_id: number;
@@ -414,7 +415,7 @@ function PlayerPicker({
               <span className="flex items-center gap-1.5 min-w-0 flex-1">
                 <span className="truncate">
                   {p.player_name}
-                  {p.pos && <span className="text-muted-foreground ml-1 text-xs">({p.pos})</span>}
+                  {cleanPositionDisplay(p.pos) && <span className="text-muted-foreground ml-1 text-xs">({cleanPositionDisplay(p.pos)})</span>}
                 </span>
                 {!p.player_id && (
                   <span className="ml-1 text-xs text-amber-700 shrink-0">⚠ needs matching</span>
@@ -476,7 +477,7 @@ function PlayerPicker({
                 >
                   <span className="flex-1 truncate">
                     {opt.player_name}
-                    {opt.pos && <span className="text-muted-foreground ml-1 text-xs">({opt.pos})</span>}
+                    {cleanPositionDisplay(opt.pos) && <span className="text-muted-foreground ml-1 text-xs">({cleanPositionDisplay(opt.pos)})</span>}
                   </span>
                   {searchAll && opt.on_roster === false && (
                     <span className="text-[10px] text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded-full font-medium shrink-0">

@@ -2,6 +2,7 @@
 
 import { ArrowRight } from 'lucide-react';
 import ProbabilityBar from './probability-bar';
+import { cleanPositionDisplay } from '@/lib/trades/positions';
 import type { Trade, TradePlayer, TradeProbability } from '@/lib/trades/types';
 
 interface Props {
@@ -93,8 +94,8 @@ function PlayerList({ teamName, players }: { teamName: string; players: TradePla
         {players.map((p) => (
           <li key={p.id} className="flex items-baseline gap-1.5 text-xs">
             <span className="truncate font-medium">{p.player_name}</span>
-            {p.raw_position && (
-              <span className="text-[10px] text-muted-foreground shrink-0">{p.raw_position}</span>
+            {cleanPositionDisplay(p.raw_position) && (
+              <span className="text-[10px] text-muted-foreground shrink-0">{cleanPositionDisplay(p.raw_position)}</span>
             )}
           </li>
         ))}

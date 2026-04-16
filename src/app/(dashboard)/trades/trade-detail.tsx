@@ -15,6 +15,7 @@ import {
   ReferenceLine,
 } from 'recharts';
 import { getTeamColor } from '@/lib/team-colors';
+import { cleanPositionDisplay } from '@/lib/trades/positions';
 import type {
   PlayerPerformance,
   Trade,
@@ -43,13 +44,16 @@ function displayPosition(p: {
   draft_position: string | null;
   raw_position: string | null;
 }): string {
-  // Prefer draft position (stable, never 'BN'). Fall back to whatever was recorded at trade time.
-  return p.draft_position || p.raw_position || '?';
+  // Prefer draft position (stable, never 'BN'). Fall back to cleaned raw_position
+  // (strips UTL/BN which are lineup slots, not real positions).
+  return p.draft_position || cleanPositionDisplay(p.raw_position) || '?';
 }
 
 function baselineForPerformance(p: PlayerPerformance): number {
   if (p.pre_trade_avg != null && p.pre_trade_avg > 0) return p.pre_trade_avg;
-  const pos = p.position || (p.draft_position?.split('/')[0] ?? p.raw_position?.split('/')[0] ?? '');
+  // Use cleaned position — never match on UTL/BN which are lineup slots
+  const cleaned = cleanPositionDisplay(p.draft_position) ?? cleanPositionDisplay(p.raw_position);
+  const pos = p.position || (cleaned?.split('/')[0] ?? '');
   return POSITION_BASELINE[pos] ?? 70;
 }
 
@@ -442,7 +446,7 @@ function PlayerCard({
   const injured = performance?.injured ?? false;
   const pos = performance
     ? displayPosition(performance)
-    : tradePlayer.raw_position ?? '?';
+    : cleanPositionDisplay(tradePlayer.raw_position) ?? '?';
   const pre = tradePlayer.pre_trade_avg;
   const post = performance?.post_trade_avg ?? 0;
   const roundsPlayed = performance?.rounds_played ?? 0;

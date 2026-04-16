@@ -8,6 +8,7 @@ import type {
 } from './types';
 import { computeProbability, detectInjury } from './compute-probability';
 import { generateTradeNarrative, type LineRanks } from './ai-assessment';
+import { cleanPositionDisplay } from './positions';
 
 /**
  * Recalculate a single trade's probability for a given round and upsert to trade_probabilities.
@@ -129,7 +130,7 @@ export async function recalculateTradeForRound(
             .map((s) => `R${s.round}:${s.points == null ? 'DNP' : s.points}`)
             .join(', ')
         : '(no rounds played since trade)';
-      return `- ${p.player_name} (${p.raw_position ?? '?'}) → ${p.receiving_team_name}: pre-trade avg ${pre}, post-trade avg ${post}, ${p.rounds_played}/${p.rounds_possible} rounds, ${status}\n    scores: ${perRound}`;
+      return `- ${p.player_name} (${cleanPositionDisplay(p.raw_position) ?? p.position ?? '?'}) → ${p.receiving_team_name}: pre-trade avg ${pre}, post-trade avg ${post}, ${p.rounds_played}/${p.rounds_possible} rounds, ${status}\n    scores: ${perRound}`;
     });
 
     const teamAReceives = teamA.map((p) => p.player_name);

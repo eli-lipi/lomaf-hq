@@ -49,3 +49,23 @@ export function getScarcityMultiplier(pos: NormalizedPosition | null): number {
   if (!pos) return 1.0;
   return SCARCITY_MULTIPLIER[pos];
 }
+
+/** Lineup slots that are NOT real positions (position-agnostic bench/utility). */
+const SLOT_ONLY = new Set(['UTL', 'BN', 'BENCH', 'EMG']);
+
+/**
+ * Strips UTL/BN from a position string for display purposes.
+ *
+ * Examples:
+ *   "DEF"      -> "DEF"
+ *   "BN"       -> null
+ *   "UTL"      -> null
+ *   "MID/FWD"  -> "MID/FWD"
+ *   null       -> null
+ */
+export function cleanPositionDisplay(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  const trimmed = raw.trim().toUpperCase();
+  if (SLOT_ONLY.has(trimmed)) return null;
+  return raw.trim(); // preserve original casing
+}

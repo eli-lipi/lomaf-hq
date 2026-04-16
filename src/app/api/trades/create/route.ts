@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { TEAMS } from '@/lib/constants';
-import { normalizePosition } from '@/lib/trades/positions';
+import { normalizePosition, cleanPositionDisplay } from '@/lib/trades/positions';
 import { recalculateTradeAcrossPostTradeRounds } from '@/lib/trades/recalculate';
 
 const supabase = createClient(
@@ -73,8 +73,10 @@ export async function POST(request: Request) {
         if (!scoresByPlayer.has(r.player_id)) scoresByPlayer.set(r.player_id, []);
         scoresByPlayer.get(r.player_id)!.push(Number(r.points));
       }
-      if (r.pos && !posByPlayer.has(r.player_id)) {
-        posByPlayer.set(r.player_id, r.pos);
+      // Only store real positions (DEF/MID/FWD/RUC), never lineup slots (BN/UTL)
+      const cleaned = cleanPositionDisplay(r.pos);
+      if (cleaned && !posByPlayer.has(r.player_id)) {
+        posByPlayer.set(r.player_id, cleaned);
       }
     }
     for (const [id, scores] of scoresByPlayer.entries()) {

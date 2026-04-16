@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { cleanPositionDisplay } from '@/lib/trades/positions';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -103,7 +104,8 @@ export async function GET(request: Request) {
         players.push({
           player_id: r.player_id,
           player_name: r.player_name,
-          pos: draftPos.get(r.player_id) ?? r.pos ?? null,
+          // Draft pos > cleaned round pos (strip BN/UTL)
+          pos: draftPos.get(r.player_id) ?? cleanPositionDisplay(r.pos) ?? null,
           on_roster: rosterPlayerIds.has(r.player_id),
         });
       }
@@ -158,6 +160,11 @@ export async function GET(request: Request) {
         const dp = draftPos.get(p.player_id);
         if (dp) p.pos = dp;
       }
+    }
+
+    // Strip any remaining UTL/BN — these are lineup slots, not positions
+    for (const p of players) {
+      p.pos = cleanPositionDisplay(p.pos);
     }
 
     players.sort((a, b) => a.player_name.localeCompare(b.player_name));
