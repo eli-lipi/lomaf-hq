@@ -12,9 +12,10 @@ const supabase = createClient(
  * Modes:
  *  1. `?team_id=N`           — roster mode: distinct players on that team's
  *                               roster from the most recent few rounds.
- *  2. `?all=true&team_id=N`  — league mode: ALL drafted players. Each result
+ *  2. `?all=true&team_id=N`  — league mode: ALL players ever seen in the
+ *                               league (drafted + waiver pickups). Each result
  *                               includes `on_roster: boolean` so the UI can
- *                               flag waiver pickups / off-roster players.
+ *                               flag off-roster players.
  *
  * Both modes accept an optional `?q=...` text filter on player name.
  */
@@ -28,27 +29,26 @@ export async function GET(request: Request) {
     if (!teamId && !allMode) return NextResponse.json({ players: [] });
 
     // ------------------------------------------------------------------
-    // League-wide search (all drafted players)
+    // League-wide search (all players: drafted + waiver pickups)
     // ------------------------------------------------------------------
     if (allMode) {
-      // 1. Fetch all draft picks
-      let draftQuery = supabase
+      if (!q || q.length < 2) return NextResponse.json({ players: [] });
+
+      // 1. Search draft_picks for drafted players
+      const { data: draftRows } = await supabase
         .from('draft_picks')
         .select('player_id, player_name, position')
+        .ilike('player_name', `%${q}%`)
         .order('player_name');
 
-      // Apply name filter server-side if provided
-      if (q) {
-        draftQuery = draftQuery.ilike('player_name', `%${q}%`);
-      }
+      // 2. Search player_rounds for ALL players who've ever appeared
+      //    (catches waiver pickups not in draft_picks)
+      const { data: roundRows } = await supabase
+        .from('player_rounds')
+        .select('player_id, player_name, pos')
+        .ilike('player_name', `%${q}%`);
 
-      const { data: draftRows } = await draftQuery;
-      if (!draftRows || draftRows.length === 0) {
-        return NextResponse.json({ players: [] });
-      }
-
-      // 2. Determine which players are currently on the source team's roster
-      //    (from the most recent rounds of player_rounds).
+      // 3. Determine which players are on the source team's recent roster
       const rosterPlayerIds = new Set<number>();
       if (teamId) {
         const { data: latest } = await supabase
@@ -69,8 +69,8 @@ export async function GET(request: Request) {
         }
       }
 
-      // 3. Deduplicate (a player can appear in multiple draft rounds if
-      //    keeper-style, though unlikely) and build response.
+      // 4. Merge both sources — draft_picks position takes priority
+      const draftPos = new Map<number, string>();
       const seen = new Set<number>();
       const players: {
         player_id: number;
@@ -79,7 +79,13 @@ export async function GET(request: Request) {
         on_roster: boolean;
       }[] = [];
 
-      for (const d of draftRows) {
+      // Index draft positions
+      for (const d of draftRows ?? []) {
+        if (d.position) draftPos.set(d.player_id, d.position);
+      }
+
+      // Add drafted players first
+      for (const d of draftRows ?? []) {
         if (seen.has(d.player_id)) continue;
         seen.add(d.player_id);
         players.push({
@@ -90,6 +96,19 @@ export async function GET(request: Request) {
         });
       }
 
+      // Add any player_rounds players not already covered (waiver pickups)
+      for (const r of roundRows ?? []) {
+        if (seen.has(r.player_id)) continue;
+        seen.add(r.player_id);
+        players.push({
+          player_id: r.player_id,
+          player_name: r.player_name,
+          pos: draftPos.get(r.player_id) ?? r.pos ?? null,
+          on_roster: rosterPlayerIds.has(r.player_id),
+        });
+      }
+
+      players.sort((a, b) => a.player_name.localeCompare(b.player_name));
       return NextResponse.json({ players });
     }
 
