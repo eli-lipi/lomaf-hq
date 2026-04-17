@@ -209,8 +209,27 @@ function SummaryStats({ summary }: { summary: Summary }) {
 // ============================================================
 
 interface CoachActivityRow {
-  coach: string;
+  teamId: number;
+  teamName: string;
+  shortName: string;
   count: number;
+}
+
+/** Short team label for crowded x-axis tick labels. */
+function shortTeamName(fullName: string): string {
+  const map: Record<string, string> = {
+    'Mansion Mambas': 'Mansion',
+    'South Tel Aviv Dragons': 'Dragons',
+    'I believe in SEANO': 'SEANO',
+    "Littl' bit LIPI": 'LIPI',
+    'Melech Mitchito': 'Melech',
+    "Cripps Don't Lie": 'Cripps',
+    'Take Me Home Country Road': 'Country Rd',
+    'Doge Bombers': 'Doge',
+    'Gun M Down': 'Gun M',
+    'Warnered613': 'Warnered',
+  };
+  return map[fullName] ?? fullName.split(/\s+/)[0];
 }
 
 function computeCoachActivity(items: ListItem[]): CoachActivityRow[] {
@@ -222,34 +241,88 @@ function computeCoachActivity(items: ListItem[]): CoachActivityRow[] {
   const rows: CoachActivityRow[] = [];
   for (const team of TEAMS) {
     const count = countByTeamId.get(team.team_id) ?? 0;
-    if (count > 0) rows.push({ coach: team.coach, count });
+    if (count > 0) {
+      rows.push({
+        teamId: team.team_id,
+        teamName: team.team_name,
+        shortName: shortTeamName(team.team_name),
+        count,
+      });
+    }
   }
   rows.sort((a, b) => b.count - a.count);
   return rows;
 }
 
 function CoachActivity({ rows }: { rows: CoachActivityRow[] }) {
-  const max = Math.max(...rows.map((r) => r.count), 1);
+  // Integer-scaled y-axis (0, 1, 2, 3...). Pad at least +1 above the tallest bar
+  // so the count label has breathing room above the bar.
+  const maxCount = Math.max(...rows.map((r) => r.count), 1);
+  const yMax = maxCount + 1;
+  const yTicks = Array.from({ length: yMax + 1 }, (_, i) => i);
+
+  // Bar chart dimensions
+  const chartHeight = 180; // px
+
   return (
     <div className="bg-white border border-border rounded-lg p-5">
       <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-4">
         Trade Activity
       </h3>
-      <div className="space-y-2">
-        {rows.map((r) => (
-          <div key={r.coach} className="grid grid-cols-[140px_1fr_auto] gap-3 items-center">
-            <span className="text-sm font-medium truncate">{r.coach}</span>
-            <div className="h-5 bg-muted rounded overflow-hidden">
-              <div
-                className="h-full bg-primary rounded transition-all"
-                style={{ width: `${(r.count / max) * 100}%` }}
-              />
-            </div>
-            <span className="text-xs text-muted-foreground tabular-nums w-16 text-right">
-              {r.count} {r.count === 1 ? 'trade' : 'trades'}
+
+      <div className="flex gap-3">
+        {/* Y-axis tick labels */}
+        <div
+          className="flex flex-col-reverse justify-between text-[10px] text-muted-foreground tabular-nums pr-1"
+          style={{ height: chartHeight }}
+        >
+          {yTicks.map((t) => (
+            <span key={t}>{t}</span>
+          ))}
+        </div>
+
+        {/* Bars */}
+        <div
+          className="flex-1 grid gap-2 items-end border-l border-b border-border"
+          style={{
+            gridTemplateColumns: `repeat(${rows.length}, minmax(0, 1fr))`,
+            height: chartHeight,
+          }}
+        >
+          {rows.map((r) => {
+            const barPct = (r.count / yMax) * 100;
+            return (
+              <div key={r.teamId} className="relative h-full flex flex-col justify-end items-center">
+                {/* Count label above bar */}
+                <span className="text-[11px] font-semibold tabular-nums mb-1">{r.count}</span>
+                <div
+                  className="w-full max-w-[48px] bg-primary rounded-t transition-all hover:opacity-90"
+                  style={{ height: `${barPct}%` }}
+                  title={`${r.teamName}: ${r.count} ${r.count === 1 ? 'trade' : 'trades'}`}
+                />
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* X-axis team name labels — aligned with bars above */}
+      <div className="flex gap-3 mt-1">
+        <div className="w-4" /> {/* spacer to align with y-axis column */}
+        <div
+          className="flex-1 grid gap-2"
+          style={{ gridTemplateColumns: `repeat(${rows.length}, minmax(0, 1fr))` }}
+        >
+          {rows.map((r) => (
+            <span
+              key={r.teamId}
+              className="text-[11px] text-muted-foreground text-center truncate"
+              title={r.teamName}
+            >
+              {r.shortName}
             </span>
-          </div>
-        ))}
+          ))}
+        </div>
       </div>
     </div>
   );
