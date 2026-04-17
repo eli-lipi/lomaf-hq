@@ -1,10 +1,23 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { detectInjury } from '@/lib/trades/compute-probability';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 );
+
+interface TradePlayerRow {
+  id: string;
+  trade_id: string;
+  player_id: number;
+  player_name: string;
+  player_position: string | null;
+  raw_position: string | null;
+  receiving_team_id: number;
+  receiving_team_name: string;
+  pre_trade_avg: number | null;
+}
 
 export async function GET() {
   try {
@@ -26,8 +39,10 @@ export async function GET() {
         .order('round_number', { ascending: false }),
     ]);
 
-    const playersByTrade = new Map<string, unknown[]>();
-    for (const p of playersRes.data ?? []) {
+    const players = (playersRes.data ?? []) as TradePlayerRow[];
+
+    const playersByTrade = new Map<string, TradePlayerRow[]>();
+    for (const p of players) {
       if (!playersByTrade.has(p.trade_id)) playersByTrade.set(p.trade_id, []);
       playersByTrade.get(p.trade_id)!.push(p);
     }
@@ -41,9 +56,65 @@ export async function GET() {
       if (!latestProbByTrade.has(row.trade_id)) latestProbByTrade.set(row.trade_id, row);
     }
 
+    // Draft positions (stable, never 'BN') for every player across all trades
+    const uniquePlayerIds = Array.from(new Set(players.map((p) => p.player_id)));
+    const draftPosByPlayer = new Map<number, string>();
+    if (uniquePlayerIds.length > 0) {
+      const { data: draftRows } = await supabase
+        .from('draft_picks')
+        .select('player_id, position')
+        .in('player_id', uniquePlayerIds);
+      for (const d of (draftRows ?? []) as { player_id: number; position: string | null }[]) {
+        if (d.position) draftPosByPlayer.set(d.player_id, d.position);
+      }
+    }
+
+    // Injury status per (trade_id, player_id) — compute per-player using the
+    // same detectInjury helper as the detail view. Only looks at post-trade
+    // rounds on the player's receiving team.
+    const injuryByTradePlayer = new Map<string, boolean>();
+    if (uniquePlayerIds.length > 0) {
+      // Find max round with player_rounds data
+      const { data: latest } = await supabase
+        .from('player_rounds')
+        .select('round_number')
+        .order('round_number', { ascending: false })
+        .limit(1);
+      const latestRound = latest?.[0]?.round_number ?? 0;
+
+      // Fetch all post-trade rounds for all traded players
+      const { data: allRounds } = await supabase
+        .from('player_rounds')
+        .select('player_id, team_id, round_number, points')
+        .in('player_id', uniquePlayerIds)
+        .lte('round_number', latestRound);
+
+      // For each trade × player, filter to post-trade rounds on receiving team
+      for (const t of trades ?? []) {
+        const tradePlayers = playersByTrade.get(t.id) ?? [];
+        for (const tp of tradePlayers) {
+          const scores = (allRounds ?? [])
+            .filter(
+              (r) =>
+                r.player_id === tp.player_id &&
+                r.team_id === tp.receiving_team_id &&
+                r.round_number > t.round_executed
+            )
+            .sort((a, b) => a.round_number - b.round_number)
+            .map((r) => r.points);
+          const injury = detectInjury(scores, tp.pre_trade_avg);
+          injuryByTradePlayer.set(`${t.id}-${tp.player_id}`, injury.injured);
+        }
+      }
+    }
+
     const result = (trades ?? []).map((t) => ({
       trade: t,
-      players: playersByTrade.get(t.id) ?? [],
+      players: (playersByTrade.get(t.id) ?? []).map((p) => ({
+        ...p,
+        draft_position: draftPosByPlayer.get(p.player_id) ?? null,
+        injured: injuryByTradePlayer.get(`${t.id}-${p.player_id}`) ?? false,
+      })),
       latestProbability: latestProbByTrade.get(t.id) ?? null,
       probabilityHistory: (historyByTrade.get(t.id) ?? []).slice().reverse(),
     }));

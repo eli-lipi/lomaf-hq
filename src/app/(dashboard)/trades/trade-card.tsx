@@ -5,9 +5,15 @@ import ProbabilityBar from './probability-bar';
 import { cleanPositionDisplay } from '@/lib/trades/positions';
 import type { Trade, TradePlayer, TradeProbability } from '@/lib/trades/types';
 
+// List-view API adds these computed fields onto each trade player
+type ListPlayer = TradePlayer & {
+  draft_position?: string | null;
+  injured?: boolean;
+};
+
 interface Props {
   trade: Trade;
-  players: TradePlayer[];
+  players: ListPlayer[];
   latestProbability: TradeProbability | null;
   onViewDetails: () => void;
 }
@@ -16,11 +22,15 @@ function firstSentence(text: string | null | undefined, max = 180): string | nul
   if (!text) return null;
   const cleaned = text.trim();
   if (!cleaned) return null;
-  // Grab first sentence; fall back to character truncation
   const match = cleaned.match(/^[^.!?]+[.!?]/);
   let sentence = match ? match[0].trim() : cleaned;
   if (sentence.length > max) sentence = sentence.slice(0, max - 1).trimEnd() + '…';
   return sentence;
+}
+
+function positionFor(p: ListPlayer): string | null {
+  // Prefer stable draft position — never 'BN'. Fall back to cleaned raw position.
+  return p.draft_position || cleanPositionDisplay(p.raw_position);
 }
 
 export default function TradeCard({ trade, players, latestProbability, onViewDetails }: Props) {
@@ -84,21 +94,32 @@ export default function TradeCard({ trade, players, latestProbability, onViewDet
   );
 }
 
-function PlayerList({ teamName, players }: { teamName: string; players: TradePlayer[] }) {
+function PlayerList({ teamName, players }: { teamName: string; players: ListPlayer[] }) {
   return (
     <div className="min-w-0">
       <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-1.5 truncate">
         {teamName} gets
       </p>
       <ul className="space-y-1">
-        {players.map((p) => (
-          <li key={p.id} className="flex items-baseline gap-1.5 text-xs">
-            <span className="truncate font-medium">{p.player_name}</span>
-            {cleanPositionDisplay(p.raw_position) && (
-              <span className="text-[10px] text-muted-foreground shrink-0">{cleanPositionDisplay(p.raw_position)}</span>
-            )}
-          </li>
-        ))}
+        {players.map((p) => {
+          const pos = positionFor(p);
+          return (
+            <li key={p.id} className="flex items-baseline gap-1.5 text-xs">
+              <span className="truncate font-medium">{p.player_name}</span>
+              {(pos || p.injured !== undefined) && (
+                <span className="text-[10px] text-muted-foreground shrink-0">
+                  {pos && <span>{pos}</span>}
+                  {pos && p.injured !== undefined && <span className="mx-1">·</span>}
+                  {p.injured ? (
+                    <span className="text-red-600">🔴</span>
+                  ) : (
+                    <span className="text-green-600">✅</span>
+                  )}
+                </span>
+              )}
+            </li>
+          );
+        })}
       </ul>
     </div>
   );

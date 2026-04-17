@@ -373,13 +373,31 @@ export default function TradeDetail({ tradeId, onBack, onDeleted }: Props) {
                   />
                   {/* Subtle dashed EVEN line */}
                   <ReferenceLine y={50} stroke="#374151" strokeDasharray="4 4" strokeWidth={1} />
-                  {/* The hero probability line */}
+                  {/* The hero probability line. The last point is highlighted with a glow ring
+                      to match Polymarket's "current contract price" feel. */}
                   <Line
                     type="monotone"
                     dataKey="probA"
                     stroke={heroColor}
                     strokeWidth={2.5}
-                    dot={{ r: 3, fill: heroColor, strokeWidth: 0 }}
+                    dot={((dotProps: Record<string, unknown>) => {
+                      const cx = dotProps.cx as number | undefined;
+                      const cy = dotProps.cy as number | undefined;
+                      const index = dotProps.index as number | undefined;
+                      const k = String(dotProps.key ?? index ?? '');
+                      if (cx == null || cy == null) return <g key={k} />;
+                      const isLast = index === chartData.length - 1;
+                      if (isLast) {
+                        return (
+                          <g key={k}>
+                            <circle cx={cx} cy={cy} r={9} fill={heroColor} opacity={0.2} />
+                            <circle cx={cx} cy={cy} r={5.5} fill={heroColor} stroke="#0B1120" strokeWidth={2} />
+                          </g>
+                        );
+                      }
+                      return <circle key={k} cx={cx} cy={cy} r={3} fill={heroColor} />;
+                      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    }) as any}
                     activeDot={{ r: 6, fill: heroColor, stroke: '#0B1120', strokeWidth: 3 }}
                     isAnimationActive={false}
                   />
