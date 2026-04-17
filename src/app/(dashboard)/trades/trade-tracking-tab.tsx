@@ -110,17 +110,25 @@ export default function TradeTrackingTab() {
             <SortPill label="Oldest" active={sort === 'oldest'} onClick={() => setSort('oldest')} />
           </div>
 
-          {/* Single-column trade list */}
-          <div className="flex flex-col gap-4">
-            {sortedItems.map((item) => (
-              <TradeCard
-                key={item.trade.id}
-                trade={item.trade}
-                players={item.players}
-                onViewDetails={() => setActiveTradeId(item.trade.id)}
-              />
-            ))}
-          </div>
+          {/* Trade list — grouped by round under section headers for chronological
+              sorts, flat list for 'Largest' (where round grouping would be noise). */}
+          {sort === 'largest' ? (
+            <div className="flex flex-col gap-4">
+              {sortedItems.map((item) => (
+                <TradeCard
+                  key={item.trade.id}
+                  trade={item.trade}
+                  players={item.players}
+                  onViewDetails={() => setActiveTradeId(item.trade.id)}
+                />
+              ))}
+            </div>
+          ) : (
+            <GroupedByRound
+              items={sortedItems}
+              onOpen={(id) => setActiveTradeId(id)}
+            />
+          )}
         </>
       )}
 
@@ -133,6 +141,62 @@ export default function TradeTrackingTab() {
           }}
         />
       )}
+    </div>
+  );
+}
+
+// ============================================================
+// Grouped-by-round list
+// ============================================================
+
+function GroupedByRound({
+  items,
+  onOpen,
+}: {
+  items: ListItem[];
+  onOpen: (tradeId: string) => void;
+}) {
+  // Bucket into Map<round, ListItem[]> preserving incoming order so the sort
+  // direction (recent/oldest) naturally controls the order of round groups.
+  const groups = new Map<number, ListItem[]>();
+  for (const it of items) {
+    const r = it.trade.round_executed;
+    if (!groups.has(r)) groups.set(r, []);
+    groups.get(r)!.push(it);
+  }
+
+  return (
+    <div className="flex flex-col gap-2">
+      {Array.from(groups.entries()).map(([round, groupItems], idx) => (
+        <div key={round} className={idx === 0 ? 'space-y-4' : 'space-y-4 pt-6'}>
+          <RoundHeader round={round} />
+          <div className="flex flex-col gap-4">
+            {groupItems.map((item) => (
+              <TradeCard
+                key={item.trade.id}
+                trade={item.trade}
+                players={item.players}
+                onViewDetails={() => onOpen(item.trade.id)}
+              />
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function RoundHeader({ round }: { round: number }) {
+  return (
+    <div className="flex items-center gap-3 py-1">
+      <div className="h-px bg-border flex-1" />
+      <span
+        className="text-sm font-bold uppercase text-muted-foreground"
+        style={{ letterSpacing: '0.15em' }}
+      >
+        Round {round}
+      </span>
+      <div className="h-px bg-border flex-1" />
     </div>
   );
 }

@@ -41,16 +41,11 @@ export default function TradeCard({ trade, players, onViewDetails }: Props) {
       onClick={onViewDetails}
       className="text-left w-full bg-white border border-border rounded-lg p-5 hover:shadow-md hover:border-primary/30 transition-all"
     >
-      {/* Top line: round + team names + View → */}
+      {/* Top line: team names + View → (round is rendered as a section header above) */}
       <div className="flex items-start justify-between gap-3 mb-2">
-        <div className="min-w-0 flex items-baseline gap-3 flex-wrap">
-          <span className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground bg-muted px-2 py-0.5 rounded shrink-0">
-            R{trade.round_executed}
-          </span>
-          <h3 className="text-base font-semibold text-foreground leading-tight">
-            {trade.team_a_name} <span className="text-muted-foreground font-normal mx-1">↔</span> {trade.team_b_name}
-          </h3>
-        </div>
+        <h3 className="min-w-0 text-base font-semibold text-foreground leading-tight">
+          {trade.team_a_name} <span className="text-muted-foreground font-normal mx-1">↔</span> {trade.team_b_name}
+        </h3>
         <span className="text-xs font-medium text-primary flex items-center gap-1 shrink-0 pt-0.5">
           View <ArrowRight size={12} />
         </span>
