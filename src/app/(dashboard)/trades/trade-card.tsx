@@ -1,11 +1,12 @@
 'use client';
 
 import { ArrowRight } from 'lucide-react';
-import ProbabilityBar from './probability-bar';
-import { cleanPositionDisplay } from '@/lib/trades/positions';
-import type { Trade, TradePlayer, TradeProbability } from '@/lib/trades/types';
+import { TEAMS } from '@/lib/constants';
+import type { Trade, TradePlayer } from '@/lib/trades/types';
 
-// List-view API adds these computed fields onto each trade player
+// List-view API adds these computed fields onto each trade player — accepted
+// here for typing compatibility, but deliberately not rendered. The homepage
+// card is purely factual: who traded with whom, when, which players.
 type ListPlayer = TradePlayer & {
   draft_position?: string | null;
   injured?: boolean;
@@ -14,113 +15,79 @@ type ListPlayer = TradePlayer & {
 interface Props {
   trade: Trade;
   players: ListPlayer[];
-  latestProbability: TradeProbability | null;
   onViewDetails: () => void;
 }
 
-function firstSentence(text: string | null | undefined, max = 180): string | null {
-  if (!text) return null;
-  const cleaned = text.trim();
-  if (!cleaned) return null;
-  const match = cleaned.match(/^[^.!?]+[.!?]/);
-  let sentence = match ? match[0].trim() : cleaned;
-  if (sentence.length > max) sentence = sentence.slice(0, max - 1).trimEnd() + '…';
-  return sentence;
+/** Get just the player's surname (last token), keeping things scannable. */
+function surname(fullName: string): string {
+  const parts = fullName.trim().split(/\s+/);
+  return parts.length > 1 ? parts[parts.length - 1] : fullName;
 }
 
-function positionFor(p: ListPlayer): string | null {
-  // Prefer stable draft position — never 'BN'. Fall back to cleaned raw position.
-  return p.draft_position || cleanPositionDisplay(p.raw_position);
+/** Pull coach name from TEAMS lookup; fall back to the team name if unknown. */
+function coachFor(teamId: number): string {
+  return TEAMS.find((t) => t.team_id === teamId)?.coach ?? '';
 }
 
-export default function TradeCard({ trade, players, latestProbability, onViewDetails }: Props) {
+export default function TradeCard({ trade, players, onViewDetails }: Props) {
   const teamAPlayers = players.filter((p) => p.receiving_team_id === trade.team_a_id);
   const teamBPlayers = players.filter((p) => p.receiving_team_id === trade.team_b_id);
 
-  const probA = Number(latestProbability?.team_a_probability ?? 50);
-  const probB = Number(latestProbability?.team_b_probability ?? 50);
-  const updatedRound = latestProbability?.round_number ?? null;
-  const narrativeTeaser = firstSentence(latestProbability?.ai_assessment ?? null);
+  // Each side of a trade shows the players RECEIVED by that team. But the
+  // headline reads "Coach A ←→ Coach B" where Coach A is the one SENDING to B
+  // — which means Coach A's outbound players are the ones landing on Coach B.
+  // Easier to read as "who's on each side", so we just tie each coach to their
+  // own incoming haul (what they received).
+  const coachA = coachFor(trade.team_a_id);
+  const coachB = coachFor(trade.team_b_id);
 
   return (
     <button
       onClick={onViewDetails}
-      className="text-left w-full bg-white border border-border rounded-lg p-5 space-y-4 hover:shadow-md hover:border-primary/30 transition-all"
+      className="text-left w-full bg-white border border-border rounded-lg p-5 hover:shadow-md hover:border-primary/30 transition-all"
     >
-      {/* Header */}
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-            After Round {trade.round_executed}
-          </p>
-          <h3 className="text-sm font-semibold text-foreground mt-0.5 truncate">
-            {trade.team_a_name} <span className="text-muted-foreground font-normal">↔</span>{' '}
-            {trade.team_b_name}
+      {/* Top line: round + coaches + View → */}
+      <div className="flex items-start justify-between gap-3 mb-3">
+        <div className="min-w-0 flex items-baseline gap-3 flex-wrap">
+          <span className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground bg-muted px-2 py-0.5 rounded shrink-0">
+            R{trade.round_executed}
+          </span>
+          <h3 className="text-base font-semibold text-foreground leading-tight">
+            {coachA} <span className="text-muted-foreground font-normal mx-1">↔</span> {coachB}
           </h3>
         </div>
-        <span className="text-xs font-medium text-primary flex items-center gap-1 shrink-0">
+        <span className="text-xs font-medium text-primary flex items-center gap-1 shrink-0 pt-0.5">
           View <ArrowRight size={12} />
         </span>
       </div>
 
-      {/* Players exchanged */}
-      <div className="grid grid-cols-2 gap-4">
-        <PlayerList teamName={trade.team_a_name} players={teamAPlayers} />
-        <PlayerList teamName={trade.team_b_name} players={teamBPlayers} />
+      {/* Team names (muted, below coach headline) */}
+      <div className="flex items-baseline gap-3 text-xs text-muted-foreground mb-3 flex-wrap">
+        <span>{trade.team_a_name}</span>
+        <span className="text-muted-foreground/60">·</span>
+        <span>{trade.team_b_name}</span>
       </div>
 
-      {/* Probability bar */}
-      <ProbabilityBar
-        teamAId={trade.team_a_id}
-        teamAName={trade.team_a_name}
-        teamBId={trade.team_b_id}
-        teamBName={trade.team_b_name}
-        probA={probA}
-        probB={probB}
-      />
-
-      {/* AI narrative teaser */}
-      {narrativeTeaser && (
-        <p className="text-xs text-muted-foreground leading-relaxed line-clamp-2">
-          <span className="mr-1">🧠</span>
-          {narrativeTeaser}
-        </p>
-      )}
-
-      {updatedRound !== null && (
-        <p className="text-[11px] text-muted-foreground text-right">Updated R{updatedRound}</p>
-      )}
+      {/* Players received per side */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2 text-sm">
+        <PlayerLine players={teamAPlayers} />
+        <PlayerLine players={teamBPlayers} />
+      </div>
     </button>
   );
 }
 
-function PlayerList({ teamName, players }: { teamName: string; players: ListPlayer[] }) {
+function PlayerLine({ players }: { players: ListPlayer[] }) {
+  if (players.length === 0) {
+    return <p className="text-xs italic text-muted-foreground">—</p>;
+  }
+  const names = players.map((p) => surname(p.player_name)).join(', ');
   return (
-    <div className="min-w-0">
-      <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-1.5 truncate">
-        {teamName} gets
+    <div>
+      <p className="text-foreground leading-snug">{names}</p>
+      <p className="text-[11px] text-muted-foreground mt-0.5">
+        ({players.length} {players.length === 1 ? 'player' : 'players'})
       </p>
-      <ul className="space-y-1">
-        {players.map((p) => {
-          const pos = positionFor(p);
-          return (
-            <li key={p.id} className="flex items-baseline gap-1.5 text-xs">
-              <span className="truncate font-medium">{p.player_name}</span>
-              {(pos || p.injured !== undefined) && (
-                <span className="text-[10px] text-muted-foreground shrink-0">
-                  {pos && <span>{pos}</span>}
-                  {pos && p.injured !== undefined && <span className="mx-1">·</span>}
-                  {p.injured ? (
-                    <span className="text-red-600">🔴</span>
-                  ) : (
-                    <span className="text-green-600">✅</span>
-                  )}
-                </span>
-              )}
-            </li>
-          );
-        })}
-      </ul>
     </div>
   );
 }

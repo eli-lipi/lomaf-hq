@@ -10,16 +10,19 @@ import type { Trade, TradePlayer, TradeProbability } from '@/lib/trades/types';
 
 interface ListItem {
   trade: Trade;
-  players: TradePlayer[];
+  players: (TradePlayer & { draft_position?: string | null; injured?: boolean })[];
   latestProbability: TradeProbability | null;
   probabilityHistory: TradeProbability[];
 }
+
+type SortKey = 'recent' | 'largest' | 'oldest';
 
 export default function TradeTrackingTab() {
   const [items, setItems] = useState<ListItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
   const [activeTradeId, setActiveTradeId] = useState<string | null>(null);
+  const [sort, setSort] = useState<SortKey>('recent');
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -36,6 +39,29 @@ export default function TradeTrackingTab() {
   }, [load]);
 
   const summary = useMemo(() => computeSummary(items), [items]);
+  const activity = useMemo(() => computeCoachActivity(items), [items]);
+
+  const sortedItems = useMemo(() => {
+    const arr = [...items];
+    if (sort === 'recent') {
+      arr.sort((a, b) => {
+        if (b.trade.round_executed !== a.trade.round_executed) {
+          return b.trade.round_executed - a.trade.round_executed;
+        }
+        return new Date(b.trade.created_at).getTime() - new Date(a.trade.created_at).getTime();
+      });
+    } else if (sort === 'oldest') {
+      arr.sort((a, b) => {
+        if (a.trade.round_executed !== b.trade.round_executed) {
+          return a.trade.round_executed - b.trade.round_executed;
+        }
+        return new Date(a.trade.created_at).getTime() - new Date(b.trade.created_at).getTime();
+      });
+    } else if (sort === 'largest') {
+      arr.sort((a, b) => b.players.length - a.players.length);
+    }
+    return arr;
+  }, [items, sort]);
 
   if (activeTradeId) {
     return (
@@ -55,12 +81,11 @@ export default function TradeTrackingTab() {
 
   return (
     <div className="space-y-6">
-      {/* Summary + action bar */}
-      <div className="flex items-start justify-between gap-4">
-        <SummaryBar summary={summary} />
+      {/* Log Trade action */}
+      <div className="flex justify-end">
         <button
           onClick={() => setModalOpen(true)}
-          className="flex items-center gap-2 px-4 py-2 text-sm font-medium bg-primary text-primary-foreground rounded hover:bg-primary/90 shrink-0"
+          className="flex items-center gap-2 px-4 py-2 text-sm font-medium bg-primary text-primary-foreground rounded hover:bg-primary/90"
         >
           <Plus size={16} /> Log Trade
         </button>
@@ -71,17 +96,32 @@ export default function TradeTrackingTab() {
       ) : items.length === 0 ? (
         <EmptyState onLog={() => setModalOpen(true)} />
       ) : (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          {items.map((item) => (
-            <TradeCard
-              key={item.trade.id}
-              trade={item.trade}
-              players={item.players}
-              latestProbability={item.latestProbability}
-              onViewDetails={() => setActiveTradeId(item.trade.id)}
-            />
-          ))}
-        </div>
+        <>
+          {/* Row 1: key numbers */}
+          <SummaryStats summary={summary} />
+
+          {/* Row 2: trade activity by coach */}
+          {activity.length > 0 && <CoachActivity rows={activity} />}
+
+          {/* Sort pills */}
+          <div className="flex items-center gap-2">
+            <SortPill label="Most Recent" active={sort === 'recent'} onClick={() => setSort('recent')} />
+            <SortPill label="Largest" active={sort === 'largest'} onClick={() => setSort('largest')} />
+            <SortPill label="Oldest" active={sort === 'oldest'} onClick={() => setSort('oldest')} />
+          </div>
+
+          {/* Single-column trade list */}
+          <div className="flex flex-col gap-4">
+            {sortedItems.map((item) => (
+              <TradeCard
+                key={item.trade.id}
+                trade={item.trade}
+                players={item.players}
+                onViewDetails={() => setActiveTradeId(item.trade.id)}
+              />
+            ))}
+          </div>
+        </>
       )}
 
       {modalOpen && (
@@ -97,6 +137,10 @@ export default function TradeTrackingTab() {
   );
 }
 
+// ============================================================
+// Empty state
+// ============================================================
+
 function EmptyState({ onLog }: { onLog: () => void }) {
   return (
     <div className="bg-white border border-border rounded-lg p-10 text-center">
@@ -105,7 +149,7 @@ function EmptyState({ onLog }: { onLog: () => void }) {
       </div>
       <h3 className="text-base font-semibold">No trades logged yet</h3>
       <p className="text-sm text-muted-foreground mt-1 mb-4">
-        Upload a trade screenshot and we&apos;ll start tracking the win probability over time.
+        Log a trade and we&apos;ll start tracking the win probability over time.
       </p>
       <button
         onClick={onLog}
@@ -118,96 +162,114 @@ function EmptyState({ onLog }: { onLog: () => void }) {
 }
 
 // ============================================================
-// Summary stats
+// Row 1: Summary stats (# Trades, # Players, Trades/Coach, Avg Size)
 // ============================================================
 
 interface Summary {
-  total: number;
-  mostActive: { coach: string; count: number } | null;
-  bestTrade: { teamName: string; prob: number; id: string } | null;
-  worstTrade: { teamName: string; prob: number; id: string } | null;
-  mostVolatile: { id: string; range: number } | null;
+  totalTrades: number;
+  totalPlayers: number;           // total rows in trade_players — every player's move counted
+  tradesPerCoach: number;          // totalTrades / 10 coaches
+  avgTradeSize: number;            // avg players per trade (both sides combined)
 }
 
 function computeSummary(items: ListItem[]): Summary {
   if (items.length === 0) {
-    return { total: 0, mostActive: null, bestTrade: null, worstTrade: null, mostVolatile: null };
+    return { totalTrades: 0, totalPlayers: 0, tradesPerCoach: 0, avgTradeSize: 0 };
   }
-
-  // Most active trader — count appearances in trades per coach
-  const teamCounts = new Map<number, number>();
-  for (const it of items) {
-    teamCounts.set(it.trade.team_a_id, (teamCounts.get(it.trade.team_a_id) ?? 0) + 1);
-    teamCounts.set(it.trade.team_b_id, (teamCounts.get(it.trade.team_b_id) ?? 0) + 1);
-  }
-  let topTeamId = 0;
-  let topCount = 0;
-  for (const [id, c] of teamCounts.entries()) {
-    if (c > topCount) {
-      topCount = c;
-      topTeamId = id;
-    }
-  }
-  const topTeam = TEAMS.find((t) => t.team_id === topTeamId);
-  const mostActive = topTeam ? { coach: topTeam.coach, count: topCount } : null;
-
-  // Best / worst trade — highest & lowest winning-side probability
-  let best: Summary['bestTrade'] = null;
-  let worst: Summary['worstTrade'] = null;
-  for (const it of items) {
-    if (!it.latestProbability) continue;
-    const probA = Number(it.latestProbability.team_a_probability);
-    const probB = Number(it.latestProbability.team_b_probability);
-    const winSide = probA >= probB
-      ? { teamName: it.trade.team_a_name, prob: probA }
-      : { teamName: it.trade.team_b_name, prob: probB };
-    if (!best || winSide.prob > best.prob) best = { ...winSide, id: it.trade.id };
-
-    const loseSide = probA <= probB
-      ? { teamName: it.trade.team_a_name, prob: probA }
-      : { teamName: it.trade.team_b_name, prob: probB };
-    if (!worst || loseSide.prob < worst.prob) worst = { ...loseSide, id: it.trade.id };
-  }
-
-  // Most volatile — biggest range of team A probability across history
-  let mostVolatile: Summary['mostVolatile'] = null;
-  for (const it of items) {
-    if (it.probabilityHistory.length < 2) continue;
-    const probs = it.probabilityHistory.map((p) => Number(p.team_a_probability));
-    const range = Math.max(...probs) - Math.min(...probs);
-    if (!mostVolatile || range > mostVolatile.range) {
-      mostVolatile = { id: it.trade.id, range };
-    }
-  }
-
-  return { total: items.length, mostActive, bestTrade: best, worstTrade: worst, mostVolatile };
+  const totalTrades = items.length;
+  const totalPlayers = items.reduce((sum, it) => sum + it.players.length, 0);
+  const tradesPerCoach = totalTrades / TEAMS.length;
+  const avgTradeSize = totalPlayers / totalTrades;
+  return { totalTrades, totalPlayers, tradesPerCoach, avgTradeSize };
 }
 
-function SummaryBar({ summary }: { summary: Summary }) {
-  const stats: { label: string; value: string }[] = [
-    { label: 'Total trades', value: String(summary.total) },
+function SummaryStats({ summary }: { summary: Summary }) {
+  const cards = [
+    { label: '# Trades', value: String(summary.totalTrades) },
+    { label: '# Players Traded', value: String(summary.totalPlayers) },
+    { label: 'Trades per Coach', value: summary.tradesPerCoach.toFixed(1) },
+    { label: 'Avg Trade Size', value: `${summary.avgTradeSize.toFixed(1)} players` },
   ];
-  if (summary.mostActive) {
-    stats.push({ label: 'Most active', value: `${summary.mostActive.coach} (${summary.mostActive.count})` });
-  }
-  if (summary.bestTrade) {
-    stats.push({ label: 'Best trade', value: `${summary.bestTrade.teamName} ${summary.bestTrade.prob.toFixed(0)}%` });
-  }
-  if (summary.worstTrade && summary.worstTrade.prob < 50) {
-    stats.push({ label: 'Worst trade', value: `${summary.worstTrade.teamName} ${summary.worstTrade.prob.toFixed(0)}%` });
-  }
-  if (summary.mostVolatile) {
-    stats.push({ label: 'Most volatile', value: `±${summary.mostVolatile.range.toFixed(0)}%` });
-  }
-
   return (
-    <div className="flex flex-wrap gap-6 bg-white border border-border rounded-lg px-5 py-3 flex-1">
-      {stats.map((s) => (
-        <div key={s.label}>
-          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{s.label}</p>
-          <p className="text-sm font-semibold">{s.value}</p>
+    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      {cards.map((c) => (
+        <div key={c.label} className="bg-white border border-border rounded-lg px-4 py-3">
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+            {c.label}
+          </p>
+          <p className="text-xl font-bold mt-1 tabular-nums">{c.value}</p>
         </div>
       ))}
     </div>
+  );
+}
+
+// ============================================================
+// Row 2: Trade activity by coach
+// ============================================================
+
+interface CoachActivityRow {
+  coach: string;
+  count: number;
+}
+
+function computeCoachActivity(items: ListItem[]): CoachActivityRow[] {
+  const countByTeamId = new Map<number, number>();
+  for (const it of items) {
+    countByTeamId.set(it.trade.team_a_id, (countByTeamId.get(it.trade.team_a_id) ?? 0) + 1);
+    countByTeamId.set(it.trade.team_b_id, (countByTeamId.get(it.trade.team_b_id) ?? 0) + 1);
+  }
+  const rows: CoachActivityRow[] = [];
+  for (const team of TEAMS) {
+    const count = countByTeamId.get(team.team_id) ?? 0;
+    if (count > 0) rows.push({ coach: team.coach, count });
+  }
+  rows.sort((a, b) => b.count - a.count);
+  return rows;
+}
+
+function CoachActivity({ rows }: { rows: CoachActivityRow[] }) {
+  const max = Math.max(...rows.map((r) => r.count), 1);
+  return (
+    <div className="bg-white border border-border rounded-lg p-5">
+      <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-4">
+        Trade Activity
+      </h3>
+      <div className="space-y-2">
+        {rows.map((r) => (
+          <div key={r.coach} className="grid grid-cols-[140px_1fr_auto] gap-3 items-center">
+            <span className="text-sm font-medium truncate">{r.coach}</span>
+            <div className="h-5 bg-muted rounded overflow-hidden">
+              <div
+                className="h-full bg-primary rounded transition-all"
+                style={{ width: `${(r.count / max) * 100}%` }}
+              />
+            </div>
+            <span className="text-xs text-muted-foreground tabular-nums w-16 text-right">
+              {r.count} {r.count === 1 ? 'trade' : 'trades'}
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// Sort pills
+// ============================================================
+
+function SortPill({ label, active, onClick }: { label: string; active: boolean; onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      className={`px-3 py-1.5 text-xs font-medium rounded-full border transition-colors ${
+        active
+          ? 'bg-primary text-primary-foreground border-primary'
+          : 'bg-white text-muted-foreground border-border hover:border-primary/40 hover:text-foreground'
+      }`}
+    >
+      {label}
+    </button>
   );
 }
