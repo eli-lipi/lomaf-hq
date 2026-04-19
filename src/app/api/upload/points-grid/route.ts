@@ -33,21 +33,23 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'No round columns (R0, R1, ...) found in data' }, { status: 400 });
     }
 
-    // Fetch ALL existing player_rounds (with the fields we need to echo back in upsert).
-    // Keyed by (round_number, player_id). Paginate to get all.
+    // Fetch ALL existing player_rounds. We include `club` and `points` so we
+    // can skip no-op updates (huge speedup when re-uploading the same grid).
     interface ExistingRow {
       id: string;
       round_number: number;
       player_id: number;
       team_id: number;
       player_name: string;
+      club: string | null;
+      points: number | null;
     }
     const existingRows: ExistingRow[] = [];
     let offset = 0;
     while (true) {
       const { data: batch, error } = await supabase
         .from('player_rounds')
-        .select('id, round_number, player_id, team_id, player_name')
+        .select('id, round_number, player_id, team_id, player_name, club, points')
         .range(offset, offset + 999);
       if (error) throw error;
       if (!batch || batch.length === 0) break;
@@ -92,10 +94,16 @@ export async function POST(request: Request) {
         const existing = existingMap.get(`${roundNum}-${playerId}`);
         if (!existing) continue;
 
+        const club = playerClubMap.get(playerId) || null;
+        // Skip if both points and club already match existing (no-op).
+        const pointsMatch = existing.points === points;
+        const clubMatch = club == null || existing.club === club;
+        if (pointsMatch && clubMatch) continue;
+
         updateRows.push({
           id: existing.id,
           points,
-          club: playerClubMap.get(playerId) || null,
+          club,
         });
       }
     }
@@ -129,12 +137,14 @@ export async function POST(request: Request) {
     }
 
     // ─── Backfill club across every round for each player (rows w/ no score this grid) ──
+    // Skip rows where the existing club already matches (no-op).
     const alreadyUpdated = new Set(updateRows.map((r) => r.id));
     const clubBackfillRows: { id: string; club: string }[] = [];
     for (const er of existingRows) {
       if (alreadyUpdated.has(er.id)) continue;
       const club = playerClubMap.get(er.player_id);
       if (!club) continue;
+      if (er.club === club) continue; // already correct, skip
       clubBackfillRows.push({ id: er.id, club });
     }
 
@@ -166,14 +176,14 @@ export async function POST(request: Request) {
       },
     });
 
-    // Recalculate trade probabilities (fire-and-forget)
+    // Recalculate trade probabilities ONLY for the latest round we have data for.
+    // Running this for every round column (0..28) was causing 10+ minute timeouts;
+    // the only snapshot the UI cares about is the current round.
     try {
       const { recalculateAllTradesForRound } = await import('@/lib/trades/recalculate');
-      for (const { roundNum } of roundColumns) {
-        await recalculateAllTradesForRound(supabase, roundNum).catch((e) =>
-          console.error('[points-grid] Trade recalc failed for R' + roundNum, e)
-        );
-      }
+      await recalculateAllTradesForRound(supabase, maxRound).catch((e) =>
+        console.error('[points-grid] Trade recalc failed for R' + maxRound, e)
+      );
     } catch (e) {
       console.error('[points-grid] Could not load trade recalc module', e);
     }
