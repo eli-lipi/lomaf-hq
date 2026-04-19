@@ -293,14 +293,16 @@ export default function SlidePreview({ data }: { data: SlidePreviewData }) {
           {/* Spacer pushes trend chart to bottom */}
           <div style={{ flex: 1 }} />
 
-          {/* PWRNKGs Trend Chart — pinned to bottom */}
+          {/* PWRNKGs Trend Chart — pinned to bottom. marginRight: -14 extends the box
+              to the vertical divider (cancels the panel's paddingRight: 14). */}
           <div style={{
             background: 'rgba(255,255,255,0.025)', borderRadius: 8, padding: '6px 6px 2px',
             border: '1px solid rgba(255,255,255,0.05)',
             display: 'flex', flexDirection: 'column',
+            width: 'calc(100% + 14px)', marginRight: -14,
           }}>
             <span style={{ fontSize: 6, fontWeight: 700, letterSpacing: 1, color: '#6B7588', textTransform: 'uppercase' as const, marginBottom: 2 }}>PWRNKGS TREND</span>
-            <TrendChart history={d.pwrnkgsHistory} width={176} height={80} theme={theme} />
+            <TrendChart history={d.pwrnkgsHistory} width={164} height={80} theme={theme} />
           </div>
         </div>
 

@@ -399,8 +399,10 @@ export async function GET(
 
     const sparklineData = allRankings?.map((r: { round_number: number; ranking: number }) => ({ round: `R${r.round_number}`, ranking: r.ranking })) || [];
 
-    // Trend chart SVG (350×130 at 1080px)
-    const trendSvg = buildTrendChartSvg(sparklineData, 350, 130, theme.primary);
+    // Trend chart SVG — sized to fit inside the trend box (left panel full width, minus
+    // the box's 12+12 horizontal padding). Trend box extends to the vertical divider
+    // (see marginRight: -28 + width: 'calc(100% + 28px)' on the wrapper below).
+    const trendSvg = buildTrendChartSvg(sparklineData, 328, 130, theme.primary);
 
     // Coach photos
     const photoMap = await getCoachPhotoMap();
@@ -486,11 +488,13 @@ export async function GET(
             {/* Spacer pushes trend chart to bottom */}
             <div style={{ display: 'flex', flex: 1 }} />
 
-            {/* Trend chart — pinned to bottom */}
+            {/* Trend chart — pinned to bottom. marginRight: -28 extends the box to the
+                vertical divider between left and right panels (cancels the panel's paddingRight). */}
             <div style={{
               display: 'flex', flexDirection: 'column',
               background: 'rgba(255,255,255,0.025)', borderRadius: 16, padding: '12px 12px 8px',
               border: '1px solid rgba(255,255,255,0.05)',
+              width: 'calc(100% + 28px)', marginRight: -28,
             }}>
               <div style={{ display: 'flex', fontSize: 12, fontWeight: 700, letterSpacing: 3, color: '#6B7588', marginBottom: 4 }}>PWRNKGS TREND</div>
               <div style={{ display: 'flex', alignItems: 'center' }}>
@@ -498,7 +502,7 @@ export async function GET(
                 <img
                   src={`data:image/svg+xml,${encodeURIComponent(trendSvg)}`}
                   alt=""
-                  width={350}
+                  width={328}
                   height={130}
                 />
               </div>
