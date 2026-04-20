@@ -46,6 +46,7 @@ interface DraftPickEnriched {
   team_name: string; team_id: number; player_name: string; player_id: number;
   position: string | null; posGroup: string;
   avg_score: number | null; total_score: number | null; rounds_played: number;
+  max_rounds: number; availability: number;
   rating: Rating; posAvgDiff: number | null;
 }
 
@@ -89,13 +90,14 @@ export default function DraftTab() {
         }
       }
 
-      // Get player stats from player_rounds
-      const allPlayerRounds: { player_id: number; points: number | null; is_scoring: boolean; pos: string }[] = [];
+      // Get player stats from player_rounds — include round_number so we can dedupe
+      // per (player_id, round_number) and count actual AFL games played.
+      const allPlayerRounds: { player_id: number; points: number | null; round_number: number }[] = [];
       let offset = 0;
       while (true) {
         const { data } = await supabase
           .from('player_rounds')
-          .select('player_id, points, is_scoring, pos')
+          .select('player_id, points, round_number')
           .range(offset, offset + 999);
         if (!data || data.length === 0) break;
         allPlayerRounds.push(...data);
@@ -103,20 +105,35 @@ export default function DraftTab() {
         offset += 1000;
       }
 
-      const playerStats: Record<number, { totalPts: number; count: number }> = {};
+      // A player can appear in multiple teams' rosters per round (trades/waivers).
+      // Dedupe to one (player_id, round) entry so we don't double-count an AFL game.
+      // Drop the is_scoring filter — bench-only players (e.g. Zeke Uwland) still played
+      // AFL games and should have an avg on the draft board.
+      const playerRoundMap: Record<number, Map<number, number>> = {};
+      let maxRound = 0;
       allPlayerRounds.forEach(pr => {
-        if (pr.points != null && pr.is_scoring && Number(pr.points) > 0) {
-          if (!playerStats[pr.player_id]) playerStats[pr.player_id] = { totalPts: 0, count: 0 };
-          playerStats[pr.player_id].totalPts += Number(pr.points);
-          playerStats[pr.player_id].count++;
-        }
+        if (pr.round_number > maxRound) maxRound = pr.round_number;
+        if (pr.points == null || Number(pr.points) <= 0) return;
+        if (!playerRoundMap[pr.player_id]) playerRoundMap[pr.player_id] = new Map();
+        const bucket = playerRoundMap[pr.player_id];
+        const existing = bucket.get(pr.round_number);
+        const pts = Number(pr.points);
+        if (existing == null || pts > existing) bucket.set(pr.round_number, pts);
       });
+
+      const playerStats: Record<number, { totalPts: number; count: number }> = {};
+      for (const [pid, rounds] of Object.entries(playerRoundMap)) {
+        let total = 0;
+        rounds.forEach(pts => { total += pts; });
+        playerStats[Number(pid)] = { totalPts: total, count: rounds.size };
+      }
 
       const enriched: DraftPickEnriched[] = draftPicks.map(pick => {
         const stats = playerStats[pick.player_id];
         const avg = stats && stats.count >= 1 ? Math.round(stats.totalPts / stats.count) : null;
         const total = stats ? Math.round(stats.totalPts) : null;
         const rounds = stats?.count || 0;
+        const availability = maxRound > 0 ? rounds / maxRound : 0;
         const posGroup = getPosGroup(pick.position);
         const benchmark = POS_BENCHMARKS[posGroup] || POS_BENCHMARKS.MID;
         const posAvgDiff = avg !== null ? avg - benchmark.avg : null;
@@ -130,19 +147,29 @@ export default function DraftTab() {
           const eliteThresh = isTop10 ? benchmark.elite + 15 : isTopPick ? benchmark.elite + 10 : benchmark.elite;
           const goodThresh = isTop10 ? benchmark.good + 15 : isTopPick ? benchmark.good + 10 : benchmark.good;
 
+          let baseRating: Rating;
           if (avg >= eliteThresh) {
-            rating = 'steal';
+            baseRating = 'steal';
           } else if (avg >= goodThresh) {
-            rating = 'value';
+            baseRating = 'value';
           } else if (avg >= benchmark.avg) {
-            rating = 'fair';
+            baseRating = 'fair';
           } else {
             const deficit = benchmark.avg - avg;
-            if (deficit > 20 || (isTop10 && deficit > 10) || (isTopPick && deficit > 15)) {
-              rating = 'bust';
-            } else {
-              rating = 'fair';
-            }
+            baseRating = (deficit > 20 || (isTop10 && deficit > 10) || (isTopPick && deficit > 15)) ? 'bust' : 'fair';
+          }
+
+          // Availability penalty — missed games hurt the rating even if per-game avg is strong.
+          if (availability < 0.3) {
+            rating = 'bust';
+          } else if (availability < 0.5) {
+            rating = (baseRating === 'steal' || baseRating === 'value') ? 'fair' : baseRating;
+          } else if (availability < 0.75) {
+            if (baseRating === 'steal') rating = 'value';
+            else if (baseRating === 'value') rating = 'fair';
+            else rating = baseRating;
+          } else {
+            rating = baseRating;
           }
         }
 
@@ -150,7 +177,9 @@ export default function DraftTab() {
           id: pick.id, round: pick.round, round_pick: pick.round_pick, overall_pick: pick.overall_pick,
           team_name: pick.team_name, team_id: pick.team_id, player_name: pick.player_name,
           player_id: pick.player_id, position: pick.position, posGroup,
-          avg_score: avg, total_score: total, rounds_played: rounds, rating, posAvgDiff,
+          avg_score: avg, total_score: total, rounds_played: rounds,
+          max_rounds: maxRound, availability,
+          rating, posAvgDiff,
         };
       });
 
@@ -223,6 +252,7 @@ export default function DraftTab() {
           </span>
         ))}
         <span className="block mt-1">Top-10 picks need +15 above benchmarks, top-20 need +10 to rate as steal/value.</span>
+        <span className="block mt-0.5">Availability penalty: &lt;75% of games demotes one tier, &lt;50% caps at fair, &lt;30% rates as bust.</span>
       </div>
 
       {/* === DRAFT BOARD === */}
@@ -254,9 +284,9 @@ export default function DraftTab() {
                             <p className="text-[9px] opacity-80 leading-tight">
                               {pick.avg_score !== null ? `${pick.avg_score}` : '—'}
                               <span className={posColors[pick.posGroup] || ''}> {pick.posGroup}</span>
-                              {pick.posAvgDiff !== null && (
-                                <span className={pick.posAvgDiff > 0 ? 'text-green-700' : 'text-red-700'}>
-                                  {' '}{pick.posAvgDiff > 0 ? '+' : ''}{pick.posAvgDiff}
+                              {pick.max_rounds > 0 && (
+                                <span className={pick.availability < 0.5 ? 'text-red-700' : pick.availability < 0.75 ? 'text-amber-700' : 'text-gray-600'}>
+                                  {' '}·{' '}{pick.rounds_played}/{pick.max_rounds}
                                 </span>
                               )}
                             </p>
