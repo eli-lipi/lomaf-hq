@@ -22,13 +22,22 @@ const TEAM_COLOR_MAP: Record<number, string> = {
   3194004: '#4F46E5', 3194007: '#059669',
 };
 
-// Position benchmarks — forwards/rucks more scarce
+// Position benchmarks — forwards more scarce, mids/rucks more demanding
 const POS_BENCHMARKS: Record<string, { elite: number; good: number; avg: number }> = {
-  MID: { elite: 110, good: 95, avg: 80 },
-  DEF: { elite: 100, good: 85, avg: 70 },
-  FWD: { elite: 90, good: 75, avg: 60 },
-  RUC: { elite: 95, good: 80, avg: 65 },
+  MID: { elite: 100, good: 85, avg: 75 },
+  DEF: { elite: 95, good: 80, avg: 70 },
+  FWD: { elite: 85, good: 75, avg: 65 },
+  RUC: { elite: 95, good: 80, avg: 70 },
 };
+
+// Round-based scaling — earlier rounds face tougher benchmarks, later rounds easier.
+function getRoundScale(round: number): number {
+  if (round <= 2) return 1.06;
+  if (round <= 4) return 1.03;
+  if (round <= 10) return 1.0;
+  if (round <= 15) return 0.95;
+  return 0.9;
+}
 
 function getPosGroup(pos: string | null): string {
   if (!pos) return 'MID';
@@ -140,23 +149,22 @@ export default function DraftTab() {
 
         let rating: Rating = 'unknown';
         if (avg !== null && rounds >= 1) {
-          const isTopPick = pick.overall_pick <= 20;
-          const isTop10 = pick.overall_pick <= 10;
-
-          // Tiered benchmarks: top-10 picks need higher scores, top-20 slightly higher
-          const eliteThresh = isTop10 ? benchmark.elite + 15 : isTopPick ? benchmark.elite + 10 : benchmark.elite;
-          const goodThresh = isTop10 ? benchmark.good + 15 : isTopPick ? benchmark.good + 10 : benchmark.good;
+          const scale = getRoundScale(pick.round);
+          const eliteThresh = Math.round(benchmark.elite * scale);
+          const goodThresh = Math.round(benchmark.good * scale);
+          const avgThresh = Math.round(benchmark.avg * scale);
+          // Earlier rounds go bust on shallower shortfalls.
+          const bustDeficit = pick.round <= 2 ? 10 : pick.round <= 4 ? 15 : 20;
 
           let baseRating: Rating;
           if (avg >= eliteThresh) {
             baseRating = 'steal';
           } else if (avg >= goodThresh) {
             baseRating = 'value';
-          } else if (avg >= benchmark.avg) {
+          } else if (avg >= avgThresh) {
             baseRating = 'fair';
           } else {
-            const deficit = benchmark.avg - avg;
-            baseRating = (deficit > 20 || (isTop10 && deficit > 10) || (isTopPick && deficit > 15)) ? 'bust' : 'fair';
+            baseRating = (avgThresh - avg > bustDeficit) ? 'bust' : 'fair';
           }
 
           // Availability penalty — missed games hurt the rating even if per-game avg is strong.
@@ -251,7 +259,7 @@ export default function DraftTab() {
             <strong className={posColors[pos]}>{pos}</strong> Elite {b.elite}+ / Good {b.good}+ / Avg {b.avg}+
           </span>
         ))}
-        <span className="block mt-1">Top-10 picks need +15 above benchmarks, top-20 need +10 to rate as steal/value.</span>
+        <span className="block mt-1">Round scaling: R1-2 +6%, R3-4 +3%, R5-10 unchanged, R11-15 −5%, R16+ −10%.</span>
         <span className="block mt-0.5">Availability penalty: &lt;75% of games demotes one tier, &lt;50% caps at fair, &lt;30% rates as bust.</span>
       </div>
 
