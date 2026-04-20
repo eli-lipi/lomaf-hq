@@ -408,47 +408,100 @@ function BenchmarksPanel({
   // Keep draft in sync with latest config when not editing.
   useEffect(() => { if (!editing) setDraft(config); }, [config, editing]);
 
-  const formatScale = (pct: number) => (pct > 0 ? `+${pct}%` : pct < 0 ? `${pct}%` : 'unchanged');
-  const formatBracket = (b: RoundBracket) => {
-    const range = b.to >= 999 ? `R${b.from}+` : b.from === b.to ? `R${b.from}` : `R${b.from}-${b.to}`;
-    return `${range} ${formatScale(b.scale_pct)}`;
-  };
-
   if (!editing) {
+    const bracketPillStyle = (pct: number) =>
+      pct > 0 ? 'bg-red-50 text-red-700 border-red-200'
+        : pct < 0 ? 'bg-green-50 text-green-700 border-green-200'
+        : 'bg-gray-50 text-gray-600 border-gray-200';
+    const bracketRange = (b: RoundBracket) =>
+      b.to >= 999 ? `R${b.from}+` : b.from === b.to ? `R${b.from}` : `R${b.from}–${b.to}`;
+
     return (
-      <div className="bg-muted/30 rounded-lg p-3 text-xs text-muted-foreground">
-        <div className="flex items-start gap-2">
-          <div className="flex-1">
-            <div>
-              <span className="font-medium text-foreground">Position benchmarks: </span>
-              {POS_KEYS.map(pos => {
-                const b = config.benchmarks[pos];
-                return (
-                  <span key={pos} className="mr-3">
-                    <strong className={posColors[pos]}>{pos}</strong> Elite {b.elite}+ / Good {b.good}+ / Avg {b.avg}+
-                  </span>
-                );
-              })}
-            </div>
-            <div className="mt-1">
-              <span className="font-medium text-foreground">Round scaling: </span>
-              {config.round_brackets.map((b, i) => (
-                <span key={i} className="mr-3">{formatBracket(b)}</span>
-              ))}
-            </div>
-            <div className="mt-1">
-              <span className="font-medium text-foreground">Availability penalty: </span>
-              &lt;{config.availability.demote_below_pct}% of games demotes one tier, &lt;{config.availability.cap_fair_below_pct}% caps at fair, &lt;{config.availability.bust_below_pct}% rates as bust.
-            </div>
-          </div>
+      <div className="bg-card border border-border rounded-lg shadow-sm overflow-hidden">
+        <div className="flex items-center justify-between px-4 py-2.5 border-b border-border bg-muted/20">
+          <h3 className="text-sm font-semibold">Rating Reference</h3>
           {isAdmin && (
             <button
               onClick={() => { setDraft(config); setEditing(true); }}
-              className="shrink-0 px-3 py-1 text-xs font-medium rounded-md bg-card border border-border hover:bg-muted/50 text-foreground"
+              className="px-3 py-1 text-xs font-medium rounded-md bg-card border border-border hover:bg-muted/50 text-foreground"
             >
               Edit
             </button>
           )}
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-[auto_1fr_auto] divide-y md:divide-y-0 md:divide-x divide-border">
+          {/* Benchmarks table */}
+          <div className="p-4">
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-2">Benchmarks (per-game avg)</p>
+            <table className="text-xs">
+              <thead>
+                <tr className="text-muted-foreground">
+                  <th className="text-left font-medium pr-4 pb-1"></th>
+                  <th className="text-right font-medium px-2 pb-1">Elite</th>
+                  <th className="text-right font-medium px-2 pb-1">Good</th>
+                  <th className="text-right font-medium pl-2 pb-1">Avg</th>
+                </tr>
+              </thead>
+              <tbody>
+                {POS_KEYS.map(pos => {
+                  const b = config.benchmarks[pos];
+                  return (
+                    <tr key={pos}>
+                      <td className={cn('font-bold pr-4 py-0.5', posColors[pos])}>{pos}</td>
+                      <td className="text-right tabular-nums px-2 py-0.5">{b.elite}+</td>
+                      <td className="text-right tabular-nums px-2 py-0.5">{b.good}+</td>
+                      <td className="text-right tabular-nums pl-2 py-0.5">{b.avg}+</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Round scaling */}
+          <div className="p-4">
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-2">Round scaling</p>
+            <div className="flex flex-wrap gap-1.5">
+              {config.round_brackets.map((b, i) => (
+                <span
+                  key={i}
+                  className={cn(
+                    'inline-flex items-baseline gap-1 px-2 py-1 rounded-md border text-xs',
+                    bracketPillStyle(b.scale_pct)
+                  )}
+                >
+                  <span className="font-semibold tabular-nums">{bracketRange(b)}</span>
+                  <span className="tabular-nums text-[11px]">
+                    {b.scale_pct > 0 ? `+${b.scale_pct}%` : b.scale_pct < 0 ? `${b.scale_pct}%` : '—'}
+                  </span>
+                </span>
+              ))}
+            </div>
+            <p className="text-[11px] text-muted-foreground mt-2">Positive = tougher to rate well. Negative = easier.</p>
+          </div>
+
+          {/* Availability */}
+          <div className="p-4 md:min-w-[200px]">
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-2">Availability penalty</p>
+            <ul className="space-y-1 text-xs">
+              <li className="flex items-center gap-2">
+                <span className="w-2 h-2 rounded-sm bg-red-400 shrink-0" />
+                <span className="tabular-nums font-semibold">&lt;{config.availability.bust_below_pct}%</span>
+                <span className="text-muted-foreground">→ Bust</span>
+              </li>
+              <li className="flex items-center gap-2">
+                <span className="w-2 h-2 rounded-sm bg-gray-400 shrink-0" />
+                <span className="tabular-nums font-semibold">&lt;{config.availability.cap_fair_below_pct}%</span>
+                <span className="text-muted-foreground">→ Cap at Fair</span>
+              </li>
+              <li className="flex items-center gap-2">
+                <span className="w-2 h-2 rounded-sm bg-amber-400 shrink-0" />
+                <span className="tabular-nums font-semibold">&lt;{config.availability.demote_below_pct}%</span>
+                <span className="text-muted-foreground">→ Demote one tier</span>
+              </li>
+            </ul>
+          </div>
         </div>
       </div>
     );
