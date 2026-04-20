@@ -3,11 +3,15 @@
 import { useState, useEffect, useMemo } from 'react';
 import { supabase } from '@/lib/supabase';
 import { TEAMS } from '@/lib/constants';
-import { cn, formatScore } from '@/lib/utils';
+import { cn } from '@/lib/utils';
 import type { DraftPick } from '@/lib/types';
 import {
   ScatterChart, Scatter, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, ReferenceLine,
 } from 'recharts';
+import {
+  DEFAULT_CONFIG, getRoundScale, loadDraftBoardConfig, saveDraftBoardConfig,
+  type DraftBoardConfig, type RoundBracket, type Tier,
+} from '@/lib/draft-board-config';
 
 // Team abbreviations for compact draft board
 const TEAM_ABBREV: Record<number, string> = {
@@ -22,24 +26,7 @@ const TEAM_COLOR_MAP: Record<number, string> = {
   3194004: '#4F46E5', 3194007: '#059669',
 };
 
-// Position benchmarks — forwards more scarce, mids/rucks more demanding
-const POS_BENCHMARKS: Record<string, { elite: number; good: number; avg: number }> = {
-  MID: { elite: 100, good: 85, avg: 75 },
-  DEF: { elite: 95, good: 80, avg: 70 },
-  FWD: { elite: 85, good: 75, avg: 65 },
-  RUC: { elite: 95, good: 80, avg: 70 },
-};
-
-// Round-based scaling — earlier rounds face tougher benchmarks, later rounds easier.
-function getRoundScale(round: number): number {
-  if (round <= 2) return 1.06;
-  if (round <= 4) return 1.03;
-  if (round <= 10) return 1.0;
-  if (round <= 15) return 0.95;
-  return 0.9;
-}
-
-function getPosGroup(pos: string | null): string {
+function getPosGroup(pos: string | null): 'MID' | 'DEF' | 'FWD' | 'RUC' {
   if (!pos) return 'MID';
   const p = pos.toUpperCase();
   if (p.includes('DEF')) return 'DEF';
@@ -48,14 +35,18 @@ function getPosGroup(pos: string | null): string {
   return 'MID';
 }
 
+type PosKey = 'MID' | 'DEF' | 'FWD' | 'RUC';
 type Rating = 'steal' | 'value' | 'fair' | 'bust' | 'unknown';
 
-interface DraftPickEnriched {
+interface DraftPickRaw {
   id: string; round: number; round_pick: number; overall_pick: number;
   team_name: string; team_id: number; player_name: string; player_id: number;
-  position: string | null; posGroup: string;
+  position: string | null; posGroup: PosKey;
   avg_score: number | null; total_score: number | null; rounds_played: number;
   max_rounds: number; availability: number;
+}
+
+interface DraftPickEnriched extends DraftPickRaw {
   rating: Rating; posAvgDiff: number | null;
 }
 
@@ -71,36 +62,72 @@ const RATING_DOT_COLORS: Record<Rating, string> = {
   steal: '#16A34A', value: '#2563EB', fair: '#6B7280', bust: '#DC2626', unknown: '#D1D5DB',
 };
 
-export default function DraftTab() {
-  const [picks, setPicks] = useState<DraftPickEnriched[]>([]);
+const POS_KEYS: PosKey[] = ['MID', 'DEF', 'FWD', 'RUC'];
+const TIER_KEYS: (keyof Tier)[] = ['elite', 'good', 'avg'];
+
+function applyRating(raw: DraftPickRaw, config: DraftBoardConfig): DraftPickEnriched {
+  const benchmark = config.benchmarks[raw.posGroup];
+  const avg = raw.avg_score;
+  const posAvgDiff = avg !== null ? avg - benchmark.avg : null;
+
+  let rating: Rating = 'unknown';
+  if (avg !== null && raw.rounds_played >= 1) {
+    const scale = getRoundScale(raw.round, config.round_brackets);
+    const eliteThresh = Math.round(benchmark.elite * scale);
+    const goodThresh = Math.round(benchmark.good * scale);
+    const avgThresh = Math.round(benchmark.avg * scale);
+    const bustDeficit = raw.round <= 2 ? 10 : raw.round <= 4 ? 15 : 20;
+
+    let baseRating: Rating;
+    if (avg >= eliteThresh) baseRating = 'steal';
+    else if (avg >= goodThresh) baseRating = 'value';
+    else if (avg >= avgThresh) baseRating = 'fair';
+    else baseRating = (avgThresh - avg > bustDeficit) ? 'bust' : 'fair';
+
+    const { bust_below_pct, cap_fair_below_pct, demote_below_pct } = config.availability;
+    const availPct = raw.availability * 100;
+    if (availPct < bust_below_pct) {
+      rating = 'bust';
+    } else if (availPct < cap_fair_below_pct) {
+      rating = (baseRating === 'steal' || baseRating === 'value') ? 'fair' : baseRating;
+    } else if (availPct < demote_below_pct) {
+      if (baseRating === 'steal') rating = 'value';
+      else if (baseRating === 'value') rating = 'fair';
+      else rating = baseRating;
+    } else {
+      rating = baseRating;
+    }
+  }
+
+  return { ...raw, rating, posAvgDiff };
+}
+
+export default function DraftTab({ isAdmin }: { isAdmin: boolean }) {
+  const [rawPicks, setRawPicks] = useState<DraftPickRaw[]>([]);
   const [loading, setLoading] = useState(true);
   const [viewMode, setViewMode] = useState<'board' | 'chart' | 'value'>('board');
   const [filterTeam, setFilterTeam] = useState<number | null>(null);
+  const [config, setConfig] = useState<DraftBoardConfig>(DEFAULT_CONFIG);
 
   useEffect(() => { loadDraftData(); }, []);
+  useEffect(() => { loadDraftBoardConfig().then(setConfig); }, []);
 
   const loadDraftData = async () => {
     try {
-      const { data: rawPicks } = await supabase
+      const { data: rawPicksData } = await supabase
         .from('draft_picks')
         .select('*')
         .order('overall_pick', { ascending: true });
 
-      if (!rawPicks || rawPicks.length === 0) { setLoading(false); return; }
+      if (!rawPicksData || rawPicksData.length === 0) { setLoading(false); return; }
 
-      // Deduplicate: keep one per player_id+team_id
       const seen = new Set<string>();
       const draftPicks: DraftPick[] = [];
-      for (const p of rawPicks) {
+      for (const p of rawPicksData) {
         const key = `${p.player_id}-${p.team_id}`;
-        if (!seen.has(key)) {
-          seen.add(key);
-          draftPicks.push(p);
-        }
+        if (!seen.has(key)) { seen.add(key); draftPicks.push(p); }
       }
 
-      // Get player stats from player_rounds — include round_number so we can dedupe
-      // per (player_id, round_number) and count actual AFL games played.
       const allPlayerRounds: { player_id: number; points: number | null; round_number: number }[] = [];
       let offset = 0;
       while (true) {
@@ -114,10 +141,6 @@ export default function DraftTab() {
         offset += 1000;
       }
 
-      // A player can appear in multiple teams' rosters per round (trades/waivers).
-      // Dedupe to one (player_id, round) entry so we don't double-count an AFL game.
-      // Drop the is_scoring filter — bench-only players (e.g. Zeke Uwland) still played
-      // AFL games and should have an avg on the draft board.
       const playerRoundMap: Record<number, Map<number, number>> = {};
       let maxRound = 0;
       allPlayerRounds.forEach(pr => {
@@ -137,61 +160,21 @@ export default function DraftTab() {
         playerStats[Number(pid)] = { totalPts: total, count: rounds.size };
       }
 
-      const enriched: DraftPickEnriched[] = draftPicks.map(pick => {
+      const raw: DraftPickRaw[] = draftPicks.map(pick => {
         const stats = playerStats[pick.player_id];
         const avg = stats && stats.count >= 1 ? Math.round(stats.totalPts / stats.count) : null;
         const total = stats ? Math.round(stats.totalPts) : null;
         const rounds = stats?.count || 0;
-        const availability = maxRound > 0 ? rounds / maxRound : 0;
-        const posGroup = getPosGroup(pick.position);
-        const benchmark = POS_BENCHMARKS[posGroup] || POS_BENCHMARKS.MID;
-        const posAvgDiff = avg !== null ? avg - benchmark.avg : null;
-
-        let rating: Rating = 'unknown';
-        if (avg !== null && rounds >= 1) {
-          const scale = getRoundScale(pick.round);
-          const eliteThresh = Math.round(benchmark.elite * scale);
-          const goodThresh = Math.round(benchmark.good * scale);
-          const avgThresh = Math.round(benchmark.avg * scale);
-          // Earlier rounds go bust on shallower shortfalls.
-          const bustDeficit = pick.round <= 2 ? 10 : pick.round <= 4 ? 15 : 20;
-
-          let baseRating: Rating;
-          if (avg >= eliteThresh) {
-            baseRating = 'steal';
-          } else if (avg >= goodThresh) {
-            baseRating = 'value';
-          } else if (avg >= avgThresh) {
-            baseRating = 'fair';
-          } else {
-            baseRating = (avgThresh - avg > bustDeficit) ? 'bust' : 'fair';
-          }
-
-          // Availability penalty — missed games hurt the rating even if per-game avg is strong.
-          if (availability < 0.3) {
-            rating = 'bust';
-          } else if (availability < 0.5) {
-            rating = (baseRating === 'steal' || baseRating === 'value') ? 'fair' : baseRating;
-          } else if (availability < 0.75) {
-            if (baseRating === 'steal') rating = 'value';
-            else if (baseRating === 'value') rating = 'fair';
-            else rating = baseRating;
-          } else {
-            rating = baseRating;
-          }
-        }
-
         return {
           id: pick.id, round: pick.round, round_pick: pick.round_pick, overall_pick: pick.overall_pick,
           team_name: pick.team_name, team_id: pick.team_id, player_name: pick.player_name,
-          player_id: pick.player_id, position: pick.position, posGroup,
+          player_id: pick.player_id, position: pick.position, posGroup: getPosGroup(pick.position),
           avg_score: avg, total_score: total, rounds_played: rounds,
-          max_rounds: maxRound, availability,
-          rating, posAvgDiff,
+          max_rounds: maxRound, availability: maxRound > 0 ? rounds / maxRound : 0,
         };
       });
 
-      setPicks(enriched);
+      setRawPicks(raw);
     } catch (err) {
       console.error('Failed to load draft data:', err);
     } finally {
@@ -199,20 +182,23 @@ export default function DraftTab() {
     }
   };
 
-  // Draft order: determined by Round 1 pick order
+  // Re-apply rating whenever raw picks or config change — no re-fetch needed.
+  const picks = useMemo(
+    () => rawPicks.map(p => applyRating(p, config)),
+    [rawPicks, config]
+  );
+
   const draftOrder = useMemo(() => {
     const r1Picks = picks.filter(p => p.round === 1).sort((a, b) => a.round_pick - b.round_pick);
     return r1Picks.map(p => p.team_id);
   }, [picks]);
 
-  // Value list (combined steals + busts, sorted by posAvgDiff)
   const valueList = useMemo(() => {
     return picks
       .filter(p => p.rating !== 'unknown' && p.rating !== 'fair' && p.posAvgDiff !== null)
       .sort((a, b) => (b.posAvgDiff || 0) - (a.posAvgDiff || 0));
   }, [picks]);
 
-  // Scatter data
   const scatterData = useMemo(() => {
     let data = picks.filter(p => p.avg_score !== null && p.posAvgDiff !== null);
     if (filterTeam) data = data.filter(p => p.team_id === filterTeam);
@@ -226,8 +212,8 @@ export default function DraftTab() {
   if (loading) return <div className="text-center py-12 bg-card border border-border rounded-lg shadow-sm"><p className="text-muted-foreground">Loading draft data...</p></div>;
   if (picks.length === 0) return <div className="text-center py-12 bg-card border border-border rounded-lg shadow-sm"><p className="text-muted-foreground">Upload draft data to see draft vs reality analysis.</p></div>;
 
-  const maxRound = Math.max(...picks.map(p => p.round));
-  const draftRounds = Array.from({ length: maxRound }, (_, i) => i + 1);
+  const maxDraftRound = Math.max(...picks.map(p => p.round));
+  const draftRounds = Array.from({ length: maxDraftRound }, (_, i) => i + 1);
   const posColors: Record<string, string> = { DEF: 'text-blue-600', MID: 'text-green-600', FWD: 'text-red-600', RUC: 'text-purple-600' };
 
   return (
@@ -251,17 +237,16 @@ export default function DraftTab() {
         </div>
       </div>
 
-      {/* Position benchmarks */}
-      <div className="bg-muted/30 rounded-lg p-3 text-xs text-muted-foreground">
-        <span className="font-medium text-foreground">Position-adjusted ratings: </span>
-        {Object.entries(POS_BENCHMARKS).map(([pos, b]) => (
-          <span key={pos} className="mr-3">
-            <strong className={posColors[pos]}>{pos}</strong> Elite {b.elite}+ / Good {b.good}+ / Avg {b.avg}+
-          </span>
-        ))}
-        <span className="block mt-1">Round scaling: R1-2 +6%, R3-4 +3%, R5-10 unchanged, R11-15 −5%, R16+ −10%.</span>
-        <span className="block mt-0.5">Availability penalty: &lt;75% of games demotes one tier, &lt;50% caps at fair, &lt;30% rates as bust.</span>
-      </div>
+      {/* Benchmarks panel (admin-editable) */}
+      <BenchmarksPanel
+        config={config}
+        onSave={async (next) => {
+          setConfig(next);
+          await saveDraftBoardConfig(next);
+        }}
+        isAdmin={isAdmin}
+        posColors={posColors}
+      />
 
       {/* === DRAFT BOARD === */}
       {viewMode === 'board' && (
@@ -313,7 +298,6 @@ export default function DraftTab() {
       {/* === VALUE CHART === */}
       {viewMode === 'chart' && (
         <div className="space-y-4">
-          {/* Team filter for chart */}
           <div className="flex flex-wrap gap-2">
             <button onClick={() => setFilterTeam(null)}
               className={cn('px-3 py-1.5 text-xs rounded-lg transition-colors',
@@ -405,4 +389,189 @@ export default function DraftTab() {
       )}
     </div>
   );
+}
+
+// ===== Benchmarks Panel =====
+
+function BenchmarksPanel({
+  config, onSave, isAdmin, posColors,
+}: {
+  config: DraftBoardConfig;
+  onSave: (next: DraftBoardConfig) => Promise<void>;
+  isAdmin: boolean;
+  posColors: Record<string, string>;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState<DraftBoardConfig>(config);
+  const [saving, setSaving] = useState(false);
+
+  // Keep draft in sync with latest config when not editing.
+  useEffect(() => { if (!editing) setDraft(config); }, [config, editing]);
+
+  const formatScale = (pct: number) => (pct > 0 ? `+${pct}%` : pct < 0 ? `${pct}%` : 'unchanged');
+  const formatBracket = (b: RoundBracket) => {
+    const range = b.to >= 999 ? `R${b.from}+` : b.from === b.to ? `R${b.from}` : `R${b.from}-${b.to}`;
+    return `${range} ${formatScale(b.scale_pct)}`;
+  };
+
+  if (!editing) {
+    return (
+      <div className="bg-muted/30 rounded-lg p-3 text-xs text-muted-foreground">
+        <div className="flex items-start gap-2">
+          <div className="flex-1">
+            <div>
+              <span className="font-medium text-foreground">Position benchmarks: </span>
+              {POS_KEYS.map(pos => {
+                const b = config.benchmarks[pos];
+                return (
+                  <span key={pos} className="mr-3">
+                    <strong className={posColors[pos]}>{pos}</strong> Elite {b.elite}+ / Good {b.good}+ / Avg {b.avg}+
+                  </span>
+                );
+              })}
+            </div>
+            <div className="mt-1">
+              <span className="font-medium text-foreground">Round scaling: </span>
+              {config.round_brackets.map((b, i) => (
+                <span key={i} className="mr-3">{formatBracket(b)}</span>
+              ))}
+            </div>
+            <div className="mt-1">
+              <span className="font-medium text-foreground">Availability penalty: </span>
+              &lt;{config.availability.demote_below_pct}% of games demotes one tier, &lt;{config.availability.cap_fair_below_pct}% caps at fair, &lt;{config.availability.bust_below_pct}% rates as bust.
+            </div>
+          </div>
+          {isAdmin && (
+            <button
+              onClick={() => { setDraft(config); setEditing(true); }}
+              className="shrink-0 px-3 py-1 text-xs font-medium rounded-md bg-card border border-border hover:bg-muted/50 text-foreground"
+            >
+              Edit
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // --- Edit mode ---
+  const setBenchmark = (pos: PosKey, tier: keyof Tier, value: number) => {
+    setDraft(d => ({ ...d, benchmarks: { ...d.benchmarks, [pos]: { ...d.benchmarks[pos], [tier]: value } } }));
+  };
+  const setBracket = (idx: number, patch: Partial<RoundBracket>) => {
+    setDraft(d => ({
+      ...d,
+      round_brackets: d.round_brackets.map((b, i) => i === idx ? { ...b, ...patch } : b),
+    }));
+  };
+  const setAvail = (key: keyof DraftBoardConfig['availability'], value: number) => {
+    setDraft(d => ({ ...d, availability: { ...d.availability, [key]: value } }));
+  };
+
+  return (
+    <div className="bg-muted/30 rounded-lg p-4 text-xs space-y-4">
+      {/* Position benchmarks */}
+      <div>
+        <div className="font-medium text-foreground mb-2">Position benchmarks</div>
+        <div className="grid grid-cols-[auto_1fr_1fr_1fr] gap-2 items-center max-w-xl">
+          <div></div>
+          {TIER_KEYS.map(t => <div key={t} className="text-center text-muted-foreground capitalize">{t}</div>)}
+          {POS_KEYS.map(pos => (
+            <FragmentRow key={pos}>
+              <div className={cn('font-bold', posColors[pos])}>{pos}</div>
+              {TIER_KEYS.map(tier => (
+                <input
+                  key={tier}
+                  type="number"
+                  value={draft.benchmarks[pos][tier]}
+                  onChange={e => setBenchmark(pos, tier, Number(e.target.value))}
+                  className="px-2 py-1 rounded border border-border bg-card text-sm text-center"
+                />
+              ))}
+            </FragmentRow>
+          ))}
+        </div>
+      </div>
+
+      {/* Round brackets */}
+      <div>
+        <div className="font-medium text-foreground mb-2">Round-based scaling (% adjustment to benchmarks)</div>
+        <div className="space-y-2 max-w-xl">
+          <div className="grid grid-cols-[1fr_1fr_1fr] gap-2 text-muted-foreground">
+            <div>From round</div><div>To round</div><div>Scale %</div>
+          </div>
+          {draft.round_brackets.map((b, i) => (
+            <div key={i} className="grid grid-cols-[1fr_1fr_1fr] gap-2">
+              <input type="number" value={b.from} onChange={e => setBracket(i, { from: Number(e.target.value) })}
+                className="px-2 py-1 rounded border border-border bg-card text-sm" />
+              <input type="number" value={b.to} onChange={e => setBracket(i, { to: Number(e.target.value) })}
+                className="px-2 py-1 rounded border border-border bg-card text-sm" />
+              <input type="number" value={b.scale_pct} onChange={e => setBracket(i, { scale_pct: Number(e.target.value) })}
+                className="px-2 py-1 rounded border border-border bg-card text-sm" />
+            </div>
+          ))}
+          <p className="text-muted-foreground">Tip: use a large value (e.g. 999) for &quot;and later&quot;. Brackets must not overlap.</p>
+        </div>
+      </div>
+
+      {/* Availability */}
+      <div>
+        <div className="font-medium text-foreground mb-2">Availability penalty thresholds (% of games played)</div>
+        <div className="grid grid-cols-3 gap-3 max-w-xl">
+          <label className="block">
+            <span className="block text-muted-foreground mb-1">Bust below</span>
+            <input type="number" value={draft.availability.bust_below_pct}
+              onChange={e => setAvail('bust_below_pct', Number(e.target.value))}
+              className="w-full px-2 py-1 rounded border border-border bg-card text-sm" />
+          </label>
+          <label className="block">
+            <span className="block text-muted-foreground mb-1">Cap at fair below</span>
+            <input type="number" value={draft.availability.cap_fair_below_pct}
+              onChange={e => setAvail('cap_fair_below_pct', Number(e.target.value))}
+              className="w-full px-2 py-1 rounded border border-border bg-card text-sm" />
+          </label>
+          <label className="block">
+            <span className="block text-muted-foreground mb-1">Demote one tier below</span>
+            <input type="number" value={draft.availability.demote_below_pct}
+              onChange={e => setAvail('demote_below_pct', Number(e.target.value))}
+              className="w-full px-2 py-1 rounded border border-border bg-card text-sm" />
+          </label>
+        </div>
+      </div>
+
+      {/* Actions */}
+      <div className="flex items-center gap-2 pt-2 border-t border-border">
+        <button
+          disabled={saving}
+          onClick={async () => {
+            setSaving(true);
+            try { await onSave(draft); setEditing(false); }
+            finally { setSaving(false); }
+          }}
+          className="px-3 py-1.5 text-xs font-medium rounded-md bg-primary text-primary-foreground hover:opacity-90 disabled:opacity-50"
+        >
+          {saving ? 'Saving…' : 'Save'}
+        </button>
+        <button
+          disabled={saving}
+          onClick={() => { setDraft(config); setEditing(false); }}
+          className="px-3 py-1.5 text-xs font-medium rounded-md bg-card border border-border hover:bg-muted/50"
+        >
+          Cancel
+        </button>
+        <button
+          disabled={saving}
+          onClick={() => setDraft(DEFAULT_CONFIG)}
+          className="px-3 py-1.5 text-xs font-medium rounded-md text-muted-foreground hover:text-foreground ml-auto"
+        >
+          Reset to defaults
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// Small helper so the benchmarks grid can render rows of 4 cells (pos label + 3 tiers).
+function FragmentRow({ children }: { children: React.ReactNode }) {
+  return <>{children}</>;
 }
