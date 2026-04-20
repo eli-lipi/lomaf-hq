@@ -53,6 +53,8 @@ const NAV_ITEMS: NavItem[] = [
       { href: '/analytics?tab=luck', label: 'Luck & Form' },
       { href: '/analytics?tab=draft', label: 'Draft vs Reality' },
       { href: '/analytics?tab=players', label: 'Player Rankings' },
+      { href: '/analytics?tab=concentration', label: 'AFL Concentration' },
+      { href: '/analytics?tab=stability', label: 'Team Stability' },
     ],
   },
   {
