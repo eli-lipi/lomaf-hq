@@ -55,6 +55,87 @@ function ClubBadge({ code, size = 24 }: { code: string; size?: number }) {
   );
 }
 
+/**
+ * Clean drill-down grid for an expanded AFL club row in the heatmap. Lists
+ * every LOMAF team that owns a player from this club as its own card —
+ * spaced, scannable, color-keyed by team. Teams that own none are omitted.
+ */
+function ExpandedClubBreakdown({
+  clubName,
+  clubCode,
+  ownersByTeam,
+  totalOwned,
+}: {
+  clubName: string;
+  clubCode: string;
+  ownersByTeam: Map<number, { player_id: number; player_name: string }[]>;
+  totalOwned: number;
+}) {
+  const owners = TEAMS
+    .map((team) => ({
+      team,
+      players: ownersByTeam.get(team.team_id) ?? [],
+    }))
+    .filter((o) => o.players.length > 0)
+    // Most owned first
+    .sort((a, b) => b.players.length - a.players.length);
+
+  return (
+    <div className="px-5 py-5 bg-muted/10 border-t border-border">
+      {/* Header summarizing the breakdown */}
+      <div className="flex items-baseline justify-between mb-3 flex-wrap gap-2">
+        <p className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground">
+          <ClubBadge code={clubCode} size={16} /> <span className="ml-1.5">{clubName}</span>{' '}
+          <span className="text-muted-foreground/70 font-normal normal-case tracking-normal">
+            — owned by {owners.length} of {TEAMS.length} LOMAF team{owners.length === 1 ? '' : 's'} ({totalOwned} player{totalOwned === 1 ? '' : 's'} total)
+          </span>
+        </p>
+      </div>
+
+      {owners.length === 0 ? (
+        <p className="text-xs italic text-muted-foreground py-2">
+          No LOMAF team currently owns a player from {clubName}.
+        </p>
+      ) : (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
+          {owners.map(({ team, players }) => {
+            const teamColor = TEAM_COLOR_MAP[team.team_id] ?? '#6B7280';
+            return (
+              <div
+                key={team.team_id}
+                className="bg-card border border-border rounded-lg p-3 hover:shadow-sm transition-shadow"
+                style={{ borderLeft: `3px solid ${teamColor}` }}
+              >
+                <div className="flex items-center justify-between gap-2 mb-2">
+                  <span className="text-xs font-bold truncate" style={{ color: teamColor }}>
+                    {TEAM_SHORT_NAMES[team.team_id]}
+                  </span>
+                  <span
+                    className="text-[10px] font-bold tabular-nums px-2 py-0.5 rounded-full"
+                    style={{
+                      background: `${teamColor}1A`,
+                      color: teamColor,
+                    }}
+                  >
+                    × {players.length}
+                  </span>
+                </div>
+                <ul className="space-y-1">
+                  {players.map((p) => (
+                    <li key={p.player_id} className="text-xs text-foreground leading-snug truncate">
+                      {p.player_name}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function TeamDot({ teamId, size = 10 }: { teamId: number; size?: number }) {
   return (
     <span
@@ -506,17 +587,17 @@ export default function ConcentrationTab() {
           <span className="inline-block w-2.5 h-2.5 rounded-sm align-middle ml-2 mr-0.5" style={{ background: 'rgba(59,130,246,0.78)' }} /> dark blue = 3
           <span className="inline-block w-2.5 h-2.5 rounded-sm align-middle ml-2 mr-0.5" style={{ background: '#FF7B3A' }} /> orange = 4
           <span className="inline-block w-2.5 h-2.5 rounded-sm align-middle ml-2 mr-0.5" style={{ background: '#FF4757' }} /> red = 5+.
-          Click a row to see player names.
+          Click any row or cell to see player names.
         </p>
         <table className="w-full text-xs border-collapse">
           <thead>
             <tr>
-              <th className="py-2 pr-3 text-left font-medium text-muted-foreground sticky left-0 bg-card z-10 min-w-[180px]">
+              <th className="py-3 pr-4 text-left font-medium text-muted-foreground sticky left-0 bg-card z-10 min-w-[200px]">
                 AFL Club
               </th>
-              <th className="py-2 px-2 text-center font-medium text-muted-foreground w-14">Total</th>
+              <th className="py-3 px-3 text-center font-medium text-muted-foreground w-16">Total</th>
               <th
-                className="py-2 px-2 text-center font-medium text-muted-foreground cursor-help w-14"
+                className="py-3 px-3 text-center font-medium text-muted-foreground cursor-help w-16"
                 title="How concentrated this AFL club is in one LOMAF roster"
               >
                 HHI
@@ -527,13 +608,13 @@ export default function ConcentrationTab() {
                   <th
                     key={team.team_id}
                     className={cn(
-                      'py-2 px-1.5 text-center font-medium transition-colors',
+                      'py-3 px-2 text-center font-medium transition-colors',
                       isColHot && 'bg-muted/40'
                     )}
-                    style={{ minWidth: 68 }}
+                    style={{ minWidth: 80 }}
                   >
-                    <div className="flex flex-col items-center gap-1">
-                      <TeamDot teamId={team.team_id} size={10} />
+                    <div className="flex flex-col items-center gap-1.5">
+                      <TeamDot teamId={team.team_id} size={11} />
                       <span
                         className="text-[10px] whitespace-nowrap font-semibold"
                         style={{ color: TEAM_COLOR_MAP[team.team_id] }}
@@ -564,14 +645,14 @@ export default function ConcentrationTab() {
                     )}
                     onClick={() => setExpandedClub(isExpanded ? null : code)}
                   >
-                    <td className={cn('py-1.5 pr-3 sticky left-0 z-10', isRowHot ? 'bg-muted/40' : 'bg-card')}>
-                      <div className="flex items-center gap-2">
-                        <ClubBadge code={code} size={22} />
-                        <span className="font-medium">{AFL_CLUBS[code].name}</span>
+                    <td className={cn('py-3 pr-4 sticky left-0 z-10', isRowHot ? 'bg-muted/40' : 'bg-card')}>
+                      <div className="flex items-center gap-2.5">
+                        <ClubBadge code={code} size={26} />
+                        <span className="font-medium text-sm">{AFL_CLUBS[code].name}</span>
                       </div>
                     </td>
-                    <td className="py-1.5 px-2 text-center font-semibold tabular-nums">{total}</td>
-                    <td className="py-1.5 px-2 text-center font-mono text-muted-foreground tabular-nums">{hhi}%</td>
+                    <td className="py-3 px-3 text-center font-semibold text-sm tabular-nums">{total}</td>
+                    <td className="py-3 px-3 text-center font-mono text-muted-foreground tabular-nums">{hhi}%</td>
                     {TEAMS.map((team, colIdx) => {
                       const count = stats.countMap.get(`${team.team_id}-${code}`) || 0;
                       const s = heatStyle(count);
@@ -581,20 +662,26 @@ export default function ConcentrationTab() {
                           key={team.team_id}
                           onMouseEnter={() => setHover({ row: code, col: colIdx })}
                           onMouseLeave={() => setHover({})}
-                          className="px-0.5 py-0.5 transition-colors"
+                          onClick={(e) => {
+                            // Cell click also expands — same drill-down. Stop the
+                            // event so the row click handler doesn't fire twice.
+                            e.stopPropagation();
+                            setExpandedClub(isExpanded ? null : code);
+                          }}
+                          className="px-1 py-1 transition-colors cursor-pointer"
                           style={{
                             outline: (isRowHot || isColHot) ? '1px solid rgba(0,0,0,0.08)' : 'none',
                           }}
                           title={`${AFL_CLUBS[code].name} × ${team.team_name}: ${count}`}
                         >
                           <div
-                            className="text-center rounded-sm flex items-center justify-center"
+                            className="text-center rounded-md flex items-center justify-center transition-transform hover:scale-[1.05]"
                             style={{
                               background: s.bg,
                               color: s.color,
                               fontWeight: s.fontWeight,
-                              height: 28,
-                              fontSize: 12,
+                              height: 36,
+                              fontSize: 13,
                             }}
                           >
                             {count > 0 ? count : ''}
@@ -605,24 +692,13 @@ export default function ConcentrationTab() {
                   </tr>
                   {isExpanded && (
                     <tr key={`${code}-detail`} className="bg-muted/10">
-                      <td colSpan={TEAMS.length + 3} className="py-3 px-4">
-                        <div className="flex flex-wrap gap-x-5 gap-y-2">
-                          {TEAMS.map((team) => {
-                            const players = stats.clubTeamPlayers.get(code)?.get(team.team_id) || [];
-                            if (players.length === 0) return null;
-                            return (
-                              <div key={team.team_id} className="text-xs flex items-center gap-2">
-                                <TeamDot teamId={team.team_id} size={9} />
-                                <span className="font-semibold" style={{ color: TEAM_COLOR_MAP[team.team_id] }}>
-                                  {TEAM_SHORT_NAMES[team.team_id]}
-                                </span>
-                                <span className="text-muted-foreground">
-                                  ({players.length}): {players.map((p) => p.player_name).join(', ')}
-                                </span>
-                              </div>
-                            );
-                          })}
-                        </div>
+                      <td colSpan={TEAMS.length + 3} className="p-0">
+                        <ExpandedClubBreakdown
+                          clubName={AFL_CLUBS[code].name}
+                          clubCode={code}
+                          ownersByTeam={stats.clubTeamPlayers.get(code) ?? new Map()}
+                          totalOwned={total}
+                        />
                       </td>
                     </tr>
                   )}
