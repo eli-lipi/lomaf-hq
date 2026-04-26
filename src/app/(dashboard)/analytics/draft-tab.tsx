@@ -50,16 +50,19 @@ interface DraftPickEnriched extends DraftPickRaw {
   rating: Rating; posAvgDiff: number | null;
 }
 
+// Steal (emerald) and Value (indigo) use distinct hue families and different
+// luminance levels so they read as separate categories under deuteranopia /
+// blue-yellow color vision and at a glance.
 const RATING_COLORS: Record<Rating, string> = {
-  steal: 'bg-green-100 text-green-800 border-green-300',
-  value: 'bg-blue-100 text-blue-700 border-blue-300',
+  steal: 'bg-emerald-200 text-emerald-900 border-emerald-500',
+  value: 'bg-indigo-100 text-indigo-800 border-indigo-400',
   fair: 'bg-gray-100 text-gray-600 border-gray-300',
   bust: 'bg-red-100 text-red-700 border-red-300',
   unknown: 'bg-gray-50 text-gray-400 border-gray-200',
 };
 
 const RATING_DOT_COLORS: Record<Rating, string> = {
-  steal: '#16A34A', value: '#2563EB', fair: '#6B7280', bust: '#DC2626', unknown: '#D1D5DB',
+  steal: '#059669', value: '#4F46E5', fair: '#6B7280', bust: '#DC2626', unknown: '#D1D5DB',
 };
 
 const POS_KEYS: PosKey[] = ['MID', 'DEF', 'FWD', 'RUC'];
@@ -362,8 +365,8 @@ export default function DraftTab({ isAdmin }: { isAdmin: boolean }) {
           <div className="divide-y divide-border">
             {valueList.map((p, i) => (
               <div key={p.id} className={cn('flex items-center gap-3 px-4 py-2.5',
-                p.rating === 'steal' ? 'bg-green-50/50' :
-                p.rating === 'value' ? 'bg-blue-50/50' :
+                p.rating === 'steal' ? 'bg-emerald-50/50' :
+                p.rating === 'value' ? 'bg-indigo-50/50' :
                 p.rating === 'bust' ? 'bg-red-50/50' : '')}>
                 <span className="text-xs font-mono text-muted-foreground w-6">{i + 1}</span>
                 <span className={cn('text-xs px-1.5 py-0.5 rounded border font-semibold capitalize shrink-0', RATING_COLORS[p.rating])}>
