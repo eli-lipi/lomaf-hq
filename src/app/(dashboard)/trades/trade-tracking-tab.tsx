@@ -6,6 +6,7 @@ import TradeCard from './trade-card';
 import TradeDetail from './trade-detail';
 import LogTradeModal from './log-trade-modal';
 import { TEAMS } from '@/lib/constants';
+import { snap5, colorForTeam, COLOR_POSITIVE } from '@/lib/trades/scale';
 import type { Trade, TradePlayer, TradeProbability } from '@/lib/trades/types';
 
 // ── Design tokens (kept in sync with detail page + cards) ─────────
@@ -27,9 +28,7 @@ interface ListItem {
 
 type SortKey = 'recent' | 'largest' | 'oldest' | 'closest';
 
-/** Snap a percentage to nearest 5% — kept consistent with the storage-side
- *  snap in compute-probability.ts and the trade-detail / trade-card display. */
-const snap5 = (pct: number): number => Math.round(pct / 5) * 5;
+// snap5 imported from @/lib/trades/scale (single source of truth).
 
 export default function TradeTrackingTab() {
   const [items, setItems] = useState<ListItem[]>([]);
@@ -214,16 +213,23 @@ function GroupedByRound({
 }
 
 function RoundDivider({ round }: { round: number }) {
+  // v3 — quieter than v1. Thin green line at very low opacity, label as a
+  // muted-grey plate that breaks the line. Cards are content; dividers are
+  // organisation.
   return (
-    <div className="flex items-center gap-3 py-1">
-      <div className="h-px flex-1" style={{ background: 'rgba(163,255,18,0.18)' }} />
+    <div className="relative flex items-center py-1">
+      <div className="h-px flex-1" style={{ background: 'rgba(163,255,18,0.15)' }} />
       <span
-        className="text-[11px] font-bold uppercase"
-        style={{ color: ACCENT, letterSpacing: '0.18em' }}
+        className="text-[11px] uppercase px-3 py-0.5 rounded"
+        style={{
+          color: TEXT_MUTED,
+          background: BG,
+          letterSpacing: '0.15em',
+        }}
       >
         Round {round}
       </span>
-      <div className="h-px flex-1" style={{ background: 'rgba(163,255,18,0.18)' }} />
+      <div className="h-px flex-1" style={{ background: 'rgba(163,255,18,0.15)' }} />
     </div>
   );
 }
@@ -293,30 +299,52 @@ function NarrativeStats({
   }
   const mostActiveTeam = TEAMS.find((t) => t.team_id === mostActiveTeamId);
 
-  // 3. Most lopsided trade
+  // Helper to convert a TradeProbability row into a signed advantage on the
+  // ±100 scale, polarity-aware. Falls back to deriving from team_a_probability
+  // for legacy rows.
+  const advantageOfRow = (it: ListItem, p: TradeProbability): number => {
+    if (p.advantage != null) return snap5(Number(p.advantage));
+    const positiveIsA =
+      it.trade.positive_team_id == null
+        ? true
+        : it.trade.positive_team_id === it.trade.team_a_id;
+    const aEdge = (snap5(Number(p.team_a_probability)) - 50) * 2;
+    return positiveIsA ? aEdge : -aEdge;
+  };
+
+  // 3. Most lopsided trade — biggest |advantage| on the new ±100 scale
   const lopsided = items
     .filter((it) => it.latestProbability)
     .map((it) => {
-      const pa = snap5(Number(it.latestProbability!.team_a_probability));
-      const pb = 100 - pa;
-      const max = Math.max(pa, pb);
-      return { item: it, max, winName: pa >= pb ? it.trade.team_a_name : it.trade.team_b_name };
+      const adv = advantageOfRow(it, it.latestProbability!);
+      const winningTeamId =
+        adv >= 0
+          ? it.trade.positive_team_id ?? it.trade.team_a_id
+          : it.trade.negative_team_id ?? it.trade.team_b_id;
+      return { item: it, adv, winningTeamId };
     })
-    .sort((a, b) => b.max - a.max)[0];
+    .sort((a, b) => Math.abs(b.adv) - Math.abs(a.adv))[0];
 
-  // 4. Biggest swing this week (largest delta on the latest round of any trade)
-  const swings: { item: ListItem; delta: number; teamName: string }[] = [];
+  // 4. Biggest swing this week — largest signed delta between snapped advantages
+  const swings: { item: ListItem; signed: number; winningTeamId: number }[] = [];
   for (const it of items) {
     const sorted = [...it.probabilityHistory].sort((a, b) => a.round_number - b.round_number);
     if (sorted.length < 2) continue;
     const last = sorted[sorted.length - 1];
     const prev = sorted[sorted.length - 2];
-    const dA = snap5(Number(last.team_a_probability)) - snap5(Number(prev.team_a_probability));
-    const aWins = snap5(Number(last.team_a_probability)) >= 50;
-    const teamName = aWins ? it.trade.team_a_name : it.trade.team_b_name;
-    swings.push({ item: it, delta: Math.abs(dA), teamName });
+    const lastAdv = advantageOfRow(it, last);
+    const prevAdv = advantageOfRow(it, prev);
+    const signed = lastAdv - prevAdv;
+    const winningTeamId =
+      signed >= 0
+        ? it.trade.positive_team_id ?? it.trade.team_a_id
+        : it.trade.negative_team_id ?? it.trade.team_b_id;
+    swings.push({ item: it, signed, winningTeamId });
   }
-  const biggestSwing = swings.sort((a, b) => b.delta - a.delta)[0];
+  const biggestSwing = swings.sort((a, b) => Math.abs(b.signed) - Math.abs(a.signed))[0];
+
+  // Format helpers — reused for lopsided/swing
+  const formatSignedPct = (n: number) => `${n > 0 ? '+' : ''}${n}%`;
 
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
@@ -328,10 +356,11 @@ function NarrativeStats({
       />
       <StatCard
         label="Most Lopsided Trade"
-        value={
+        value={lopsided ? formatSignedPct(lopsided.adv) : '—'}
+        valueColor={
           lopsided
-            ? `${Math.round(lopsided.max)}/${100 - Math.round(lopsided.max)}`
-            : '—'
+            ? colorForTeam(lopsided.winningTeamId, lopsided.item.trade.positive_team_id)
+            : undefined
         }
         sub={
           lopsided
@@ -339,18 +368,23 @@ function NarrativeStats({
             : undefined
         }
         onClick={lopsided ? () => onOpen(lopsided.item.trade.id) : undefined}
-        accent={!!lopsided && lopsided.max >= 65}
+        accent={!!lopsided && Math.abs(lopsided.adv) >= 30}
       />
       <StatCard
         label="Biggest Swing This Week"
-        value={biggestSwing ? `±${biggestSwing.delta.toFixed(1)}%` : '—'}
+        value={biggestSwing ? formatSignedPct(biggestSwing.signed) : '—'}
+        valueColor={
+          biggestSwing
+            ? colorForTeam(biggestSwing.winningTeamId, biggestSwing.item.trade.positive_team_id)
+            : undefined
+        }
         sub={
           biggestSwing
             ? `${biggestSwing.item.trade.team_a_name} ⇄ ${biggestSwing.item.trade.team_b_name}`
             : 'Need 2+ rounds'
         }
         onClick={biggestSwing ? () => onOpen(biggestSwing.item.trade.id) : undefined}
-        accent={!!biggestSwing && biggestSwing.delta >= 5}
+        accent={!!biggestSwing && Math.abs(biggestSwing.signed) >= 5}
       />
     </div>
   );
@@ -362,12 +396,14 @@ function StatCard({
   sub,
   onClick,
   accent,
+  valueColor,
 }: {
   label: string;
   value: string;
   sub?: string;
   onClick?: () => void;
   accent?: boolean;
+  valueColor?: string;
 }) {
   const isClickable = !!onClick;
   const Tag = (isClickable ? 'button' : 'div') as 'button' | 'div';
@@ -400,7 +436,7 @@ function StatCard({
       </p>
       <p
         className="text-xl font-semibold mt-1.5 tabular-nums truncate"
-        style={{ color: accent ? ACCENT : TEXT }}
+        style={{ color: valueColor ?? (accent ? ACCENT : TEXT) }}
       >
         {value}
       </p>
@@ -571,14 +607,16 @@ function SortPill({
   active: boolean;
   onClick: () => void;
 }) {
+  // v3 — consistent fill-based selection. Selected = green-tinted fill,
+  // green text, green border. Unselected = transparent w/ faint border.
   return (
     <button
       onClick={onClick}
       className="px-3 py-1.5 text-xs font-medium rounded-full transition-colors"
       style={{
-        background: active ? 'rgba(163,255,18,0.10)' : 'transparent',
-        color: active ? ACCENT : TEXT_BODY,
-        border: `1px solid ${active ? 'rgba(163,255,18,0.40)' : BORDER}`,
+        background: active ? 'rgba(163,255,18,0.15)' : 'transparent',
+        color: active ? COLOR_POSITIVE : TEXT_MUTED,
+        border: `1px solid ${active ? COLOR_POSITIVE : BORDER}`,
       }}
     >
       {label}

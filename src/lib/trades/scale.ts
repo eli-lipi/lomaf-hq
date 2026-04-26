@@ -10,6 +10,104 @@ export function snap5(pct: number): number {
   return Math.round(pct / 5) * 5;
 }
 
+// ──────────────────────────────────────────────────────────────────
+// v3 — Two-colour system per trade (positive vs negative side)
+// ──────────────────────────────────────────────────────────────────
+/** LOMAF green — assigned to the positive (higher-ladder) side of a trade. */
+export const COLOR_POSITIVE = '#A3FF12';
+/** Electric cyan — the other side. Reads "different" without competing for emotional weight. */
+export const COLOR_NEGATIVE = '#22D3EE';
+
+/** Pick the per-trade colour for a given team based on the trade's frozen polarity.
+ *  Falls back to positive-green if polarity isn't set (legacy trades). */
+export function colorForTeam(
+  teamId: number,
+  positiveTeamId: number | null | undefined
+): string {
+  if (positiveTeamId == null) return COLOR_POSITIVE;
+  return teamId === positiveTeamId ? COLOR_POSITIVE : COLOR_NEGATIVE;
+}
+
+// ──────────────────────────────────────────────────────────────────
+// Surname display + collision handling
+// ──────────────────────────────────────────────────────────────────
+
+/** Return the last token of a player name (typically the surname). */
+export function surnameOf(fullName: string): string {
+  const parts = fullName.trim().split(/\s+/);
+  return parts.length > 1 ? parts[parts.length - 1] : fullName;
+}
+
+/** Return the first character of the player's first name (or '' if single-name). */
+export function firstInitialOf(fullName: string): string {
+  const parts = fullName.trim().split(/\s+/);
+  return parts.length > 1 ? parts[0].charAt(0).toUpperCase() : '';
+}
+
+function levenshtein(a: string, b: string): number {
+  const m = a.length, n = b.length;
+  if (m === 0) return n;
+  if (n === 0) return m;
+  const prev = new Array<number>(n + 1);
+  const curr = new Array<number>(n + 1);
+  for (let j = 0; j <= n; j++) prev[j] = j;
+  for (let i = 1; i <= m; i++) {
+    curr[0] = i;
+    for (let j = 1; j <= n; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      curr[j] = Math.min(curr[j - 1] + 1, prev[j] + 1, prev[j - 1] + cost);
+    }
+    for (let j = 0; j <= n; j++) prev[j] = curr[j];
+  }
+  return prev[n];
+}
+
+/**
+ * Build a per-trade map of player_id → display label, applying first-initial
+ * disambiguation when surnames are too similar (Humphries / Humphrey).
+ */
+export function buildDisplayLabels(
+  players: { player_id: number; player_name: string }[]
+): Map<number, string> {
+  const surnames = players.map((p) => ({ pid: p.player_id, full: p.player_name, last: surnameOf(p.player_name) }));
+  // Detect collisions — Levenshtein ≤ 2 between any two surnames
+  let collide = false;
+  for (let i = 0; i < surnames.length; i++) {
+    for (let j = i + 1; j < surnames.length; j++) {
+      const a = surnames[i].last.toLowerCase();
+      const b = surnames[j].last.toLowerCase();
+      if (a === b) { collide = true; break; }
+      if (levenshtein(a, b) <= 2) { collide = true; break; }
+    }
+    if (collide) break;
+  }
+  const out = new Map<number, string>();
+  if (!collide) {
+    for (const s of surnames) out.set(s.pid, s.last);
+    return out;
+  }
+  // Apply initials. If the first-initial+surname is still ambiguous, use full first name.
+  const initialed = surnames.map((s) => ({
+    ...s,
+    label: `${firstInitialOf(s.full)}. ${s.last}`,
+  }));
+  // If two players share both initial and surname, fall back to full first name
+  const seen = new Map<string, number>();
+  for (const i of initialed) {
+    seen.set(i.label.toLowerCase(), (seen.get(i.label.toLowerCase()) ?? 0) + 1);
+  }
+  for (const s of surnames) {
+    const initialLabel = `${firstInitialOf(s.full)}. ${s.last}`;
+    if ((seen.get(initialLabel.toLowerCase()) ?? 0) > 1) {
+      const firstName = s.full.trim().split(/\s+/)[0];
+      out.set(s.pid, `${firstName} ${s.last}`);
+    } else {
+      out.set(s.pid, initialLabel);
+    }
+  }
+  return out;
+}
+
 /**
  * Convert a 0..100 probability for team A into the signed ±100 advantage
  * relative to a chosen "positive" team. 50 → 0; 75 → +50 if A is positive,

@@ -24,7 +24,15 @@ import {
   ReferenceArea,
 } from 'recharts';
 import { cleanPositionDisplay } from '@/lib/trades/positions';
-import { snap5, verdictFor, playerVerdictFor } from '@/lib/trades/scale';
+import {
+  snap5,
+  verdictFor,
+  playerVerdictFor,
+  colorForTeam,
+  buildDisplayLabels,
+  COLOR_POSITIVE,
+  COLOR_NEGATIVE,
+} from '@/lib/trades/scale';
 import type {
   PlayerPerformance,
   Trade,
@@ -168,6 +176,12 @@ export default function TradeDetail({ tradeId, onBack, onDeleted }: Props) {
   const teamBPlayers = players.filter((p) => p.receiving_team_id === trade.team_b_id);
   const perfById = new Map(playerPerformance.map((p) => [p.player_id, p]));
 
+  // Per-trade display labels — surnames, with first-initial disambiguation
+  // when surnames collide (Humphries vs Humphrey).
+  const displayLabels = buildDisplayLabels(
+    players.map((p) => ({ player_id: p.player_id, player_name: p.player_name }))
+  );
+
   // v2 — work in signed ±100 advantage. Polarity is locked at trade time on
   // `trade.positive_team_id`. Legacy rows fall back to assuming team A is
   // positive.
@@ -241,59 +255,21 @@ export default function TradeDetail({ tradeId, onBack, onDeleted }: Props) {
         </div>
       </div>
 
-      {/* ── Strip 1: Trade header ─────────────────────────────── */}
-      <div
-        className="rounded-xl px-6 py-5 flex items-center justify-between gap-6 flex-wrap"
-        style={{ background: SURFACE, border: `1px solid ${BORDER}` }}
-      >
-        <div className="min-w-0">
-          <div className="flex items-baseline gap-3 flex-wrap">
-            <span
-              className="text-[10px] font-bold tracking-[0.15em] uppercase px-2 py-0.5 rounded"
-              style={{ background: 'rgba(163,255,18,0.10)', color: ACCENT }}
-            >
-              Trade Executed After R{trade.round_executed}
-            </span>
-            {latestProbability?.round_number != null && (
-              <span className="text-[11px]" style={{ color: TEXT_MUTED }}>
-                Updated R{latestProbability.round_number}
-              </span>
-            )}
-          </div>
-          <h1 className="text-2xl md:text-3xl font-semibold mt-2 leading-tight">
-            {trade.team_a_name}
-            {trade.team_a_ladder_at_trade != null && (
-              <span className="text-base ml-1.5 font-normal" style={{ color: TEXT_MUTED }}>
-                ({ordinal(trade.team_a_ladder_at_trade)})
-              </span>
-            )}
-            <span style={{ color: TEXT_MUTED, fontWeight: 400 }} className="mx-2">⇄</span>
-            {trade.team_b_name}
-            {trade.team_b_ladder_at_trade != null && (
-              <span className="text-base ml-1.5 font-normal" style={{ color: TEXT_MUTED }}>
-                ({ordinal(trade.team_b_ladder_at_trade)})
-              </span>
-            )}
-          </h1>
-          <p className="text-sm mt-1" style={{ color: TEXT_MUTED }}>
-            {coachByTeamId(trade.team_a_id, trade.team_a_name)}
-            <span className="mx-2" style={{ color: 'rgba(255,255,255,0.15)' }}>·</span>
-            {coachByTeamId(trade.team_b_id, trade.team_b_name)}
-            {trade.team_a_ladder_at_trade != null && trade.team_b_ladder_at_trade != null && (
-              <span className="ml-2 text-[11px] italic" style={{ color: 'rgba(255,255,255,0.30)' }}>
-                — ladder positions at time of trade
-              </span>
-            )}
-          </p>
-        </div>
-        <VerdictPill verdict={verdict} />
-      </div>
+      {/* ── Tier-0: thin metadata strip ───────────────────────── */}
+      <MetadataStrip trade={trade} latestProbability={latestProbability} />
 
-      {/* ── Strip 2: The chart (the hero) ─────────────────────── */}
-      <div
-        className="rounded-xl p-5"
-        style={{ background: SURFACE, border: `1px solid ${BORDER}` }}
-      >
+      {/* ── PLAYER HEADLINE — surnames front and centre ───────── */}
+      <PlayerHeadline
+        trade={trade}
+        teamAPlayers={teamAPlayers}
+        teamBPlayers={teamBPlayers}
+        verdict={verdict}
+        winningTeamName={winningTeamName}
+        advantage={advantage}
+      />
+
+      {/* ── Tier-1: the chart, FULL BLEED, no card ────────────── */}
+      <div className="px-1">
         {chartData.length < 2 ? (
           <p className="text-sm py-16 text-center" style={{ color: TEXT_MUTED }}>
             No round data yet — probabilities will appear after the next round&apos;s scores are uploaded.
@@ -307,132 +283,135 @@ export default function TradeDetail({ tradeId, onBack, onDeleted }: Props) {
                   Performance vs. each player&apos;s expected average (~70%) blended with availability vs. expected games (~30%). Snapped to nearest 5%. Polarity locked at trade execution to whichever team had the better ladder position.
                 </InfoTip>
               </h2>
-              <span className="text-[10px]" style={{ color: TEXT_MUTED }}>
-                {positiveTeamName} positive · {negativeTeamName} negative
-              </span>
             </div>
             <div className="relative">
-            <ResponsiveContainer width="100%" height={420}>
-              <ComposedChart data={chartData} margin={{ top: 16, right: 24, bottom: 6, left: 90 }}>
-                <defs>
-                  <linearGradient id="winFill" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor={ACCENT} stopOpacity={0.20} />
-                    <stop offset="100%" stopColor={ACCENT} stopOpacity={0} />
-                  </linearGradient>
-                </defs>
-                {/* Zone shading: top half green, bottom half neutral white */}
-                <ReferenceArea y1={0} y2={100} fill={ACCENT} fillOpacity={0.06} ifOverflow="visible" />
-                <ReferenceArea y1={-100} y2={0} fill="rgba(255,255,255,0.03)" ifOverflow="visible" />
-                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false} />
-                <XAxis
-                  dataKey="round"
-                  tick={{ fontSize: 11, fill: TEXT_MUTED }}
-                  axisLine={{ stroke: BORDER }}
-                  tickLine={false}
-                />
-                <YAxis
-                  domain={[-100, 100]}
-                  ticks={[-100, -50, 0, 50, 100]}
-                  tickFormatter={(v) => verdictAxisLabel(v as number, positiveTeamName, negativeTeamName)}
-                  tick={{ fontSize: 10, fill: TEXT_MUTED }}
-                  axisLine={false}
-                  tickLine={false}
-                  width={86}
-                />
-                <Tooltip
-                  cursor={{ stroke: 'rgba(255,255,255,0.20)', strokeWidth: 1, strokeDasharray: '3 3' }}
-                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                  content={(props: any) => (
-                    <ChartTooltip
-                      {...props}
-                      positiveTeamName={positiveTeamName}
-                      negativeTeamName={negativeTeamName}
-                    />
-                  )}
-                />
-                {/* Wash baseline — solid not dashed, this is the most important reference */}
-                <ReferenceLine y={0} stroke="rgba(255,255,255,0.45)" strokeWidth={1.5} />
-                {/* Edge markers */}
-                <ReferenceLine y={50} stroke="rgba(255,255,255,0.15)" strokeDasharray="4 4" strokeWidth={1} />
-                <ReferenceLine y={-50} stroke="rgba(255,255,255,0.15)" strokeDasharray="4 4" strokeWidth={1} />
-                {/* Trade-executed vertical anchor */}
-                <ReferenceLine
-                  x={`R${trade.round_executed}`}
-                  stroke={ACCENT}
-                  strokeOpacity={0.55}
-                  strokeDasharray="2 4"
-                  label={{
-                    value: 'Trade Executed',
-                    position: 'top',
-                    fill: ACCENT,
-                    fontSize: 10,
-                    offset: 14,
-                  }}
-                />
-                {/* Area fill (signed — Recharts will fill from baseline 0 if we set baseValue) */}
-                <Area
-                  type="monotone"
-                  dataKey="advantage"
-                  stroke="none"
-                  fill={ACCENT}
-                  fillOpacity={0.10}
-                  baseValue={0}
-                  isAnimationActive={false}
-                  legendType="none"
-                  activeDot={false}
-                />
-                {/* The advantage line */}
-                <Line
-                  type="monotone"
-                  dataKey="advantage"
-                  stroke={ACCENT}
-                  strokeWidth={2.5}
-                  dot={((dotProps: Record<string, unknown>) => {
-                    const cx = dotProps.cx as number | undefined;
-                    const cy = dotProps.cy as number | undefined;
-                    const index = dotProps.index as number | undefined;
-                    const k = String(dotProps.key ?? index ?? '');
-                    if (cx == null || cy == null) return <g key={k} />;
-                    const isLast = index === chartData.length - 1;
-                    if (isLast) {
-                      return (
-                        <g key={k}>
-                          <circle cx={cx} cy={cy} r={9} fill={ACCENT} opacity={0.25} />
-                          <circle
-                            cx={cx}
-                            cy={cy}
-                            r={5.5}
-                            fill={ACCENT}
-                            stroke={BG}
-                            strokeWidth={2}
-                          />
-                        </g>
-                      );
-                    }
-                    return <circle key={k} cx={cx} cy={cy} r={3.5} fill={ACCENT} stroke={BG} strokeWidth={1.5} />;
+              {/* Trade Executed flag — sits ABOVE the chart on the dashed line */}
+              <TradeExecutedFlag chartData={chartData} executedRound={trade.round_executed} />
+              <ResponsiveContainer width="100%" height={400}>
+                <ComposedChart data={chartData} margin={{ top: 30, right: 16, bottom: 6, left: 8 }}>
+                  <defs>
+                    {/* Vertical gradient — green above 0%, cyan below. Hard stop at y=0 (50% of −100..+100 axis). */}
+                    <linearGradient id="lineColorSplit" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor={COLOR_POSITIVE} />
+                      <stop offset="50%" stopColor={COLOR_POSITIVE} />
+                      <stop offset="50%" stopColor={COLOR_NEGATIVE} />
+                      <stop offset="100%" stopColor={COLOR_NEGATIVE} />
+                    </linearGradient>
+                    <linearGradient id="areaFillSplit" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor={COLOR_POSITIVE} stopOpacity={0.18} />
+                      <stop offset="50%" stopColor={COLOR_POSITIVE} stopOpacity={0.04} />
+                      <stop offset="50%" stopColor={COLOR_NEGATIVE} stopOpacity={0.04} />
+                      <stop offset="100%" stopColor={COLOR_NEGATIVE} stopOpacity={0.18} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false} />
+                  <XAxis
+                    dataKey="round"
+                    tick={{ fontSize: 11, fill: TEXT_MUTED }}
+                    axisLine={{ stroke: BORDER }}
+                    tickLine={false}
+                  />
+                  <YAxis
+                    domain={[-100, 100]}
+                    ticks={[-100, -50, 0, 50, 100]}
+                    tickFormatter={(v) => `${v > 0 ? '+' : ''}${v}%`}
+                    tick={{ fontSize: 11, fill: TEXT_MUTED }}
+                    axisLine={false}
+                    tickLine={false}
+                    width={50}
+                  />
+                  <Tooltip
+                    cursor={{ stroke: 'rgba(255,255,255,0.20)', strokeWidth: 1, strokeDasharray: '3 3' }}
                     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                  }) as any}
-                  activeDot={{ r: 7, fill: ACCENT, stroke: BG, strokeWidth: 3 }}
-                  isAnimationActive={false}
+                    content={(props: any) => (
+                      <ChartTooltip
+                        {...props}
+                        positiveTeamName={positiveTeamName}
+                        negativeTeamName={negativeTeamName}
+                      />
+                    )}
+                  />
+                  {/* Vertical anchor — no label here, the flag above handles it */}
+                  <ReferenceLine
+                    x={`R${trade.round_executed}`}
+                    stroke="rgba(255,255,255,0.30)"
+                    strokeDasharray="2 4"
+                  />
+                  {/* Wash baseline — solid */}
+                  <ReferenceLine y={0} stroke="rgba(255,255,255,0.45)" strokeWidth={1.5} />
+                  {/* Area fill — gradient handles the green-above / cyan-below split */}
+                  <Area
+                    type="monotone"
+                    dataKey="advantage"
+                    stroke="none"
+                    fill="url(#areaFillSplit)"
+                    baseValue={0}
+                    isAnimationActive={false}
+                    legendType="none"
+                    activeDot={false}
+                  />
+                  {/* The advantage line — gradient stroke = green above 0, cyan below */}
+                  <Line
+                    type="monotone"
+                    dataKey="advantage"
+                    stroke="url(#lineColorSplit)"
+                    strokeWidth={2.5}
+                    dot={((dotProps: Record<string, unknown>) => {
+                      const cx = dotProps.cx as number | undefined;
+                      const cy = dotProps.cy as number | undefined;
+                      const index = dotProps.index as number | undefined;
+                      const payload = dotProps.payload as { advantage?: number } | undefined;
+                      const k = String(dotProps.key ?? index ?? '');
+                      if (cx == null || cy == null) return <g key={k} />;
+                      const dotColor = (payload?.advantage ?? 0) >= 0 ? COLOR_POSITIVE : COLOR_NEGATIVE;
+                      const isLast = index === chartData.length - 1;
+                      if (isLast) {
+                        return (
+                          <g key={k}>
+                            <circle cx={cx} cy={cy} r={9} fill={dotColor} opacity={0.25} />
+                            <circle cx={cx} cy={cy} r={5.5} fill={dotColor} stroke={BG} strokeWidth={2} />
+                          </g>
+                        );
+                      }
+                      return <circle key={k} cx={cx} cy={cy} r={3.5} fill={dotColor} stroke={BG} strokeWidth={1.5} />;
+                      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    }) as any}
+                    activeDot={{ r: 7, fill: ACCENT, stroke: BG, strokeWidth: 3 }}
+                    isAnimationActive={false}
+                  />
+                </ComposedChart>
+              </ResponsiveContainer>
+
+              {/* Team labels — once at the extremes, not at every tick */}
+              <div
+                className="absolute pointer-events-none text-[11px] font-medium uppercase tracking-wider"
+                style={{ top: 36, right: 24, color: COLOR_POSITIVE }}
+              >
+                ↑ {positiveTeamName}
+              </div>
+              <div
+                className="absolute pointer-events-none text-[11px] font-medium uppercase tracking-wider"
+                style={{ bottom: 32, right: 24, color: COLOR_NEGATIVE }}
+              >
+                ↓ {negativeTeamName}
+              </div>
+
+              {/* Price tag — top-right of chart, coloured by current side */}
+              <div className="absolute top-8 right-3 pointer-events-none">
+                <PriceTag
+                  advantage={advantage}
+                  winningTeamName={winningTeamName}
+                  delta={heroDelta}
                 />
-              </ComposedChart>
-            </ResponsiveContainer>
-            {/* Price tag — anchored to the top-right of the chart panel.
-                Polymarket-style "current price in the corner". */}
-            <div className="absolute top-2 right-3 pointer-events-none">
-              <PriceTag advantage={advantage} winningTeamName={winningTeamName} delta={heroDelta} />
-            </div>
+              </div>
             </div>
           </>
         )}
       </div>
 
-      {/* ── Strip 3: Trade analysis ───────────────────────────── */}
+      {/* ── Tier-2: Trade analysis — no card, no border, nested under chart ──── */}
       {(latestProbability?.ai_assessment || trade.context_notes) && (
-        <div
-          className="rounded-xl p-6"
-          style={{ background: SURFACE, border: `1px solid ${BORDER}` }}
-        >
+        <div className="px-6 pt-2">
           <div className="flex items-baseline justify-between gap-3 mb-3">
             <h2 className="text-[10px] font-bold uppercase tracking-[0.15em]" style={{ color: TEXT_MUTED }}>
               Trade Analysis
@@ -461,25 +440,47 @@ export default function TradeDetail({ tradeId, onBack, onDeleted }: Props) {
         </div>
       )}
 
-      {/* ── Strip 4: Resolution criteria — the bet being judged ───── */}
-      <div
-        className="rounded-xl p-5"
-        style={{ background: SURFACE, border: `1px solid ${BORDER}` }}
-      >
-        <h2 className="text-[10px] font-bold uppercase tracking-[0.15em] mb-3" style={{ color: TEXT_MUTED }}>
-          Players in the Trade — the bet being judged
-        </h2>
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-x-6 gap-y-4">
-          <PlayerVerdictTable
-            heading={`${trade.team_a_name} received`}
-            tradePlayers={teamAPlayers}
-            perfById={perfById}
-          />
-          <PlayerVerdictTable
-            heading={`${trade.team_b_name} received`}
-            tradePlayers={teamBPlayers}
-            perfById={perfById}
-          />
+      {/* ── Tier-3: Player verdict tables (small bordered cards) ─────────────
+          Headings sit OUTSIDE the cards in their team colour so the pair reads
+          as "X received | Y received" at a glance. */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-x-4 gap-y-4 mt-4">
+        <div>
+          <p
+            className="text-[11px] font-bold uppercase tracking-[0.15em] mb-2 px-1"
+            style={{ color: colorForTeam(trade.team_a_id, trade.positive_team_id) }}
+          >
+            {trade.team_a_name} received
+          </p>
+          <div
+            className="rounded-lg p-4"
+            style={{ background: SURFACE, border: `1px solid ${BORDER}` }}
+          >
+            <PlayerVerdictTable
+              tradePlayers={teamAPlayers}
+              perfById={perfById}
+              teamColor={colorForTeam(trade.team_a_id, trade.positive_team_id)}
+              displayLabels={displayLabels}
+            />
+          </div>
+        </div>
+        <div>
+          <p
+            className="text-[11px] font-bold uppercase tracking-[0.15em] mb-2 px-1"
+            style={{ color: colorForTeam(trade.team_b_id, trade.positive_team_id) }}
+          >
+            {trade.team_b_name} received
+          </p>
+          <div
+            className="rounded-lg p-4"
+            style={{ background: SURFACE, border: `1px solid ${BORDER}` }}
+          >
+            <PlayerVerdictTable
+              tradePlayers={teamBPlayers}
+              perfById={perfById}
+              teamColor={colorForTeam(trade.team_b_id, trade.positive_team_id)}
+              displayLabels={displayLabels}
+            />
+          </div>
         </div>
       </div>
 
@@ -533,7 +534,289 @@ export default function TradeDetail({ tradeId, onBack, onDeleted }: Props) {
 }
 
 // ============================================================
-// Header verdict pill
+// Tier-0 — thin metadata strip at the very top
+// ============================================================
+function MetadataStrip({
+  trade,
+  latestProbability,
+}: {
+  trade: Trade;
+  latestProbability: TradeProbability | null;
+}) {
+  const coachA = coachByTeamId(trade.team_a_id, '');
+  const coachB = coachByTeamId(trade.team_b_id, '');
+  return (
+    <div
+      className="text-[11px] uppercase tracking-[0.12em] flex items-center gap-x-3 gap-y-1 flex-wrap pt-1"
+      style={{ color: TEXT_MUTED }}
+    >
+      <span>Trade Executed After R{trade.round_executed}</span>
+      {latestProbability?.round_number != null && (
+        <>
+          <span style={{ color: 'rgba(255,255,255,0.18)' }}>·</span>
+          <span>Updated R{latestProbability.round_number}</span>
+        </>
+      )}
+      <span style={{ color: 'rgba(255,255,255,0.18)' }}>·</span>
+      <span>
+        {trade.team_a_name}
+        {trade.team_a_ladder_at_trade != null && (
+          <span className="normal-case ml-1" style={{ color: 'rgba(255,255,255,0.45)' }}>
+            ({ordinal(trade.team_a_ladder_at_trade)})
+          </span>
+        )}
+        {coachA && <span className="normal-case ml-1.5" style={{ color: 'rgba(255,255,255,0.40)' }}>· {coachA}</span>}
+      </span>
+      <span style={{ color: 'rgba(255,255,255,0.18)' }}>⇄</span>
+      <span>
+        {trade.team_b_name}
+        {trade.team_b_ladder_at_trade != null && (
+          <span className="normal-case ml-1" style={{ color: 'rgba(255,255,255,0.45)' }}>
+            ({ordinal(trade.team_b_ladder_at_trade)})
+          </span>
+        )}
+        {coachB && <span className="normal-case ml-1.5" style={{ color: 'rgba(255,255,255,0.40)' }}>· {coachB}</span>}
+      </span>
+    </div>
+  );
+}
+
+// ============================================================
+// Player headline — surnames front and centre
+// ============================================================
+function PlayerHeadline({
+  trade,
+  teamAPlayers,
+  teamBPlayers,
+  verdict,
+  winningTeamName,
+  advantage,
+}: {
+  trade: Trade;
+  teamAPlayers: TradePlayer[];
+  teamBPlayers: TradePlayer[];
+  verdict: { level: string; text: string; isFlip: boolean };
+  winningTeamName: string;
+  advantage: number;
+}) {
+  const allPlayers = [...teamAPlayers, ...teamBPlayers];
+  const labels = buildDisplayLabels(
+    allPlayers.map((p) => ({ player_id: p.player_id, player_name: p.player_name }))
+  );
+  const colorA = colorForTeam(trade.team_a_id, trade.positive_team_id);
+  const colorB = colorForTeam(trade.team_b_id, trade.positive_team_id);
+
+  // Type sizing — scales down as we add players
+  const totalPlayers = allPlayers.length;
+  const isOneForOne = teamAPlayers.length === 1 && teamBPlayers.length === 1;
+  // Pick a font size class based on player count
+  const surnameSize = isOneForOne
+    ? 'text-[44px] md:text-[60px]'
+    : totalPlayers <= 4
+      ? 'text-[28px] md:text-[36px]'
+      : 'text-[22px] md:text-[28px]';
+  const arrowSize = isOneForOne ? 'text-[28px] md:text-[36px]' : 'text-[20px] md:text-[26px]';
+
+  return (
+    <div className="mt-2 mb-2">
+      <div className="flex items-center justify-between gap-4 flex-wrap">
+        {/* Names — for 1-for-1 we render side-by-side with arrow.
+            For multi-player we stack rows top/bottom with arrow between. */}
+        {isOneForOne ? (
+          <div className="flex items-baseline gap-4 flex-wrap">
+            <SinglePlayerCluster player={teamAPlayers[0]} color={colorA} labels={labels} size={surnameSize} />
+            <span className={`${arrowSize}`} style={{ color: 'rgba(255,255,255,0.55)', fontWeight: 300 }}>⇄</span>
+            <SinglePlayerCluster player={teamBPlayers[0]} color={colorB} labels={labels} size={surnameSize} />
+          </div>
+        ) : (
+          <div className="flex flex-col gap-1">
+            <PlayerRowHeadline
+              players={teamAPlayers}
+              color={colorA}
+              receivingTeam={trade.team_a_name}
+              labels={labels}
+              size={surnameSize}
+            />
+            <span className={`${arrowSize} my-1`} style={{ color: 'rgba(255,255,255,0.45)', fontWeight: 300 }}>⇅</span>
+            <PlayerRowHeadline
+              players={teamBPlayers}
+              color={colorB}
+              receivingTeam={trade.team_b_name}
+              labels={labels}
+              size={surnameSize}
+            />
+          </div>
+        )}
+        {/* Verdict pill — coloured by the winning side */}
+        <VerdictPillV3
+          verdict={verdict}
+          winnerColor={
+            verdict.isFlip
+              ? null
+              : advantage >= 0
+                ? colorForTeam(trade.positive_team_id ?? trade.team_a_id, trade.positive_team_id)
+                : colorForTeam(trade.negative_team_id ?? trade.team_b_id, trade.positive_team_id)
+          }
+        />
+      </div>
+      {/* Subtitle row showing receiving teams (for 1-for-1) */}
+      {isOneForOne && (
+        <p className="text-[12px] mt-2" style={{ color: TEXT_MUTED }}>
+          <span style={{ color: colorA }}>{trade.team_a_name} received</span>
+          <span className="mx-3" style={{ color: 'rgba(255,255,255,0.18)' }}>|</span>
+          <span style={{ color: colorB }}>{trade.team_b_name} received</span>
+        </p>
+      )}
+      {/* Optional helper line for multi-player shows the winner cleanly */}
+      {!isOneForOne && (
+        <p className="text-[12px] mt-2" style={{ color: TEXT_MUTED }}>
+          {winningTeamName !== '' ? `Currently: ${verdict.text}` : ''}
+        </p>
+      )}
+    </div>
+  );
+}
+
+function SinglePlayerCluster({
+  player,
+  color,
+  labels,
+  size,
+}: {
+  player: TradePlayer;
+  color: string;
+  labels: Map<number, string>;
+  size: string;
+}) {
+  const pos = cleanPositionDisplay(player.raw_position) ?? '—';
+  const label = labels.get(player.player_id) ?? player.player_name;
+  return (
+    <div className="flex flex-col items-start">
+      <span className={`${size} font-medium leading-none`} style={{ color }}>
+        {label}
+      </span>
+      <span className="text-[11px] uppercase tracking-[0.15em] mt-1.5" style={{ color: TEXT_MUTED }}>
+        {pos}
+      </span>
+    </div>
+  );
+}
+
+function PlayerRowHeadline({
+  players,
+  color,
+  receivingTeam,
+  labels,
+  size,
+}: {
+  players: TradePlayer[];
+  color: string;
+  receivingTeam: string;
+  labels: Map<number, string>;
+  size: string;
+}) {
+  return (
+    <div className="flex flex-col">
+      <div className="flex items-baseline gap-x-2.5 flex-wrap">
+        {players.map((p, i) => {
+          const label = labels.get(p.player_id) ?? p.player_name;
+          const pos = cleanPositionDisplay(p.raw_position);
+          return (
+            <span key={p.id} className={`${size} font-medium leading-tight`} style={{ color }}>
+              {label}
+              {pos && (
+                <span className="text-[11px] ml-1 uppercase tracking-wider" style={{ color: TEXT_MUTED }}>
+                  ({pos})
+                </span>
+              )}
+              {i < players.length - 1 && (
+                <span style={{ color: 'rgba(255,255,255,0.18)', marginLeft: 8, marginRight: 0 }}>·</span>
+              )}
+            </span>
+          );
+        })}
+      </div>
+      <p className="text-[10px] uppercase tracking-[0.18em] mt-0.5" style={{ color }}>
+        ↑ {receivingTeam} received
+      </p>
+    </div>
+  );
+}
+
+/** v3 verdict pill — filled by winner colour, dark text on accent, white on flip. */
+function VerdictPillV3({
+  verdict,
+  winnerColor,
+}: {
+  verdict: { level: string; text: string; isFlip: boolean };
+  winnerColor: string | null;
+}) {
+  if (verdict.isFlip || winnerColor == null) {
+    return (
+      <div
+        className="px-4 py-2 rounded-full whitespace-nowrap text-sm font-semibold"
+        style={{
+          background: 'rgba(255,255,255,0.08)',
+          border: `1px solid ${BORDER}`,
+          color: TEXT,
+        }}
+      >
+        {verdict.text}
+      </div>
+    );
+  }
+  return (
+    <div
+      className="px-4 py-2 rounded-full whitespace-nowrap text-sm font-bold"
+      style={{
+        background: winnerColor,
+        color: BG,
+      }}
+    >
+      {verdict.text}
+    </div>
+  );
+}
+
+// ============================================================
+// Trade Executed flag — sits ABOVE the chart's top edge on the dashed line
+// ============================================================
+function TradeExecutedFlag({
+  chartData,
+  executedRound,
+}: {
+  chartData: { round: string; roundNum: number }[];
+  executedRound: number;
+}) {
+  // Find the index of the executed round in the chart data
+  const idx = chartData.findIndex((d) => d.roundNum === executedRound);
+  if (idx < 0 || chartData.length < 2) return null;
+  // Approximate horizontal position. The chart has left margin 8 + Y-axis ~50px,
+  // total render width is responsive. We approximate using percentage of inner data width.
+  const innerLeft = 58; // px — left margin + y-axis width
+  const innerRight = 24;
+  const fraction = (idx) / Math.max(chartData.length - 1, 1);
+  return (
+    <div
+      className="absolute top-0 pointer-events-none flex flex-col items-center"
+      style={{
+        left: `calc(${innerLeft}px + (100% - ${innerLeft + innerRight}px) * ${fraction})`,
+        transform: 'translateX(-50%)',
+        zIndex: 5,
+      }}
+    >
+      <span
+        className="text-[10px] font-bold uppercase tracking-[0.10em] px-1.5 py-0.5 rounded"
+        style={{ background: BG, color: TEXT, border: `1px solid ${BORDER}` }}
+      >
+        Trade Executed
+      </span>
+    </div>
+  );
+}
+
+// ============================================================
+// Header verdict pill (legacy — kept in case anything still imports it)
 // ============================================================
 function VerdictPill({ verdict }: { verdict: { level: string; text: string; isFlip: boolean } }) {
   const isFlip = verdict.isFlip;
@@ -560,7 +843,7 @@ function VerdictPill({ verdict }: { verdict: { level: string; text: string; isFl
 }
 
 // ============================================================
-// Right-edge price tag — signed ±100 advantage
+// Right-edge price tag — signed ±100 advantage with team colour
 // ============================================================
 function PriceTag({
   advantage,
@@ -571,7 +854,36 @@ function PriceTag({
   winningTeamName: string;
   delta: number | null;
 }) {
-  const sign = advantage >= 0 ? '+' : '';
+  // Wash state — neither side leading
+  if (advantage === 0) {
+    return (
+      <div
+        className="rounded-lg px-3 py-2 text-right"
+        style={{
+          background: 'rgba(10,15,28,0.85)',
+          border: `1px solid ${BORDER}`,
+          backdropFilter: 'blur(4px)',
+          minWidth: 110,
+        }}
+      >
+        <div className="text-xl font-bold leading-none tracking-wider" style={{ color: TEXT }}>
+          WASH
+        </div>
+        <div className="text-[10px] mt-1.5" style={{ color: TEXT_MUTED }}>
+          neither side leading
+        </div>
+      </div>
+    );
+  }
+
+  const winnerColor = advantage > 0 ? COLOR_POSITIVE : COLOR_NEGATIVE;
+  const sign = advantage > 0 ? '+' : '';
+  // Delta only shown if it's non-zero AFTER snapping (per spec — suppress fake noise)
+  const showDelta = delta != null && delta !== 0;
+  // Delta colour: green if movement towards positive, cyan if towards negative.
+  // Never red — that was the contradictory-pill bug.
+  const deltaColor = showDelta && delta! > 0 ? COLOR_POSITIVE : COLOR_NEGATIVE;
+
   return (
     <div
       className="rounded-lg px-3 py-2 text-right"
@@ -579,24 +891,30 @@ function PriceTag({
         background: 'rgba(10,15,28,0.85)',
         border: `1px solid ${BORDER}`,
         backdropFilter: 'blur(4px)',
-        minWidth: 110,
+        minWidth: 120,
       }}
     >
-      <div className="text-2xl font-bold leading-none tabular-nums" style={{ color: ACCENT }}>
+      <div className="text-2xl font-bold leading-none tabular-nums" style={{ color: winnerColor }}>
         {sign}
         {advantage}%
       </div>
-      <div className="text-[10px] mt-1 font-medium truncate" style={{ color: TEXT_BODY }}>
-        {winningTeamName} winning
+      <div
+        className="text-[11px] mt-1 font-semibold leading-tight truncate"
+        style={{ color: winnerColor }}
+      >
+        {winningTeamName}
       </div>
-      {delta != null && Math.abs(delta) >= 5 && (
+      <div className="text-[10px]" style={{ color: TEXT_MUTED }}>
+        winning
+      </div>
+      {showDelta && (
         <div
-          className="text-[10px] mt-1 flex items-center justify-end gap-0.5 font-semibold tabular-nums"
-          style={{ color: delta >= 0 ? ACCENT : STATUS_INJURED }}
+          className="text-[10px] mt-1.5 flex items-center justify-end gap-0.5 font-medium tabular-nums"
+          style={{ color: deltaColor }}
         >
-          {delta >= 0 ? <TrendingUp size={10} /> : <TrendingDown size={10} />}
-          {delta >= 0 ? '+' : ''}
-          {delta}% since prev
+          {delta! > 0 ? <TrendingUp size={10} /> : <TrendingDown size={10} />}
+          {delta! > 0 ? '+' : ''}
+          {delta}% from prev
         </div>
       )}
     </div>
@@ -819,56 +1137,66 @@ function MiniTrajectory({
 //  inline mini-trajectory rendering, just no longer the headline.)
 // ============================================================
 function PlayerVerdictTable({
-  heading,
   tradePlayers,
   perfById,
+  teamColor,
+  displayLabels,
 }: {
-  heading: string;
   tradePlayers: TradePlayer[];
   perfById: Map<number, PlayerPerformance>;
+  teamColor: string;
+  displayLabels: Map<number, string>;
 }) {
   return (
-    <div>
-      <p className="text-[10px] font-bold uppercase tracking-[0.15em] mb-2" style={{ color: TEXT_MUTED }}>
-        {heading}
-      </p>
-      <div className="overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="text-[10px] uppercase tracking-wider" style={{ color: TEXT_MUTED }}>
-              <th className="text-left font-medium pr-3 pb-2">Player</th>
-              <th className="text-right font-medium px-2 pb-2 whitespace-nowrap">Avg Since</th>
-              <th className="text-right font-medium px-2 pb-2 whitespace-nowrap">Avg Before</th>
-              <th className="text-right font-medium px-2 pb-2 whitespace-nowrap">
-                <span className="inline-flex items-center gap-1 justify-end">
-                  Expected
-                  <InfoTip>
-                    <strong style={{ color: TEXT }}>Expected average:</strong> the bar this player needed to clear for the trade to make sense. Locked at trade execution. Auto-derived from a position-tier baseline blended 60/40 with last-3-rounds form, or set manually at trade-logging time.
-                  </InfoTip>
-                </span>
-              </th>
-              <th className="text-right font-medium pl-2 pb-2 whitespace-nowrap">
-                <span className="inline-flex items-center gap-1 justify-end">
-                  Verdict
-                  <InfoTip>
-                    <strong style={{ color: TEXT }}>Per-player verdict:</strong> compares Avg Since Trade against Expected Avg. Beat by &gt;10 = Crushing. Within ±5 = Tracking. Behind by &gt;10 = Bet broken. Availability drag overrides if &lt;50% of expected games played.
-                  </InfoTip>
-                </span>
-              </th>
+    <div className="overflow-x-auto">
+      <table className="w-full text-sm">
+        <thead>
+          <tr className="text-[10px] uppercase tracking-wider" style={{ color: TEXT_MUTED }}>
+            <th className="text-left font-medium pr-2 pb-2">Player</th>
+            <th className="text-left font-medium px-2 pb-2 whitespace-nowrap">
+              <span className="inline-flex items-center gap-1">
+                Verdict
+                <InfoTip>
+                  <strong style={{ color: TEXT }}>Per-player verdict:</strong> compares Avg Since Trade against Expected Avg. Beat by &gt;10 = Crushing. Within ±5 = Tracking. Behind by &gt;10 = Bet broken. Availability drag overrides if &lt;50% of expected games played.
+                </InfoTip>
+              </span>
+            </th>
+            <th className="text-right font-medium px-2 pb-2 whitespace-nowrap">Avg Since</th>
+            <th className="text-right font-medium px-2 pb-2 whitespace-nowrap">
+              <span className="inline-flex items-center gap-1 justify-end">
+                Avg Before
+                <InfoTip>
+                  Pre-trade season average. The number in parentheses is the delta vs Expected Avg.
+                </InfoTip>
+              </span>
+            </th>
+            <th className="text-right font-medium pl-2 pb-2 whitespace-nowrap">
+              <span className="inline-flex items-center gap-1 justify-end">
+                Expected
+                <InfoTip>
+                  <strong style={{ color: TEXT }}>Expected average:</strong> the bar this player needed to clear for the trade to make sense. Locked at trade execution. Auto-derived from a position-tier baseline blended 60/40 with last-3-rounds form, or set manually at trade-logging time.
+                </InfoTip>
+              </span>
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          {tradePlayers.length === 0 && (
+            <tr>
+              <td colSpan={5} className="text-xs italic py-2" style={{ color: TEXT_MUTED }}>—</td>
             </tr>
-          </thead>
-          <tbody>
-            {tradePlayers.length === 0 && (
-              <tr>
-                <td colSpan={5} className="text-xs italic py-2" style={{ color: TEXT_MUTED }}>—</td>
-              </tr>
-            )}
-            {tradePlayers.map((tp) => (
-              <PlayerVerdictRow key={tp.id} tradePlayer={tp} performance={perfById.get(tp.player_id)} />
-            ))}
-          </tbody>
-        </table>
-      </div>
+          )}
+          {tradePlayers.map((tp) => (
+            <PlayerVerdictRow
+              key={tp.id}
+              tradePlayer={tp}
+              performance={perfById.get(tp.player_id)}
+              teamColor={teamColor}
+              displayLabel={displayLabels.get(tp.player_id) ?? tp.player_name}
+            />
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }
@@ -876,9 +1204,13 @@ function PlayerVerdictTable({
 function PlayerVerdictRow({
   tradePlayer,
   performance,
+  teamColor,
+  displayLabel,
 }: {
   tradePlayer: TradePlayer;
   performance: PlayerPerformance | undefined;
+  teamColor: string;
+  displayLabel: string;
 }) {
   const [expanded, setExpanded] = useState(false);
   const injured = performance?.injured ?? false;
@@ -904,34 +1236,52 @@ function PlayerVerdictRow({
     return all.sort((a, b) => a.round - b.round);
   }, [performance]);
 
+  // v3 — verdict colour bands per spec
   const verdictColor =
     verdict.level === 'crushing' || verdict.level === 'outperforming'
-      ? ACCENT
+      ? COLOR_POSITIVE
       : verdict.level === 'tracking' || verdict.level === 'pending'
-        ? TEXT_BODY
-        : STATUS_INJURED;
+        ? TEXT
+        : verdict.level === 'slight-under'
+          ? '#EF9F27' // soft amber
+          : verdict.level === 'broken'
+            ? STATUS_INJURED
+            : verdict.level === 'avail-drag'
+              ? COLOR_NEGATIVE
+              : TEXT_BODY;
+
+  // Status dot — injured red overrides team colour
+  const dotColor = injured ? STATUS_INJURED : teamColor;
 
   return (
     <>
       <tr
         onClick={() => setExpanded((v) => !v)}
         className="cursor-pointer"
-        style={{ borderTop: `1px solid ${BORDER}` }}
+        style={{
+          borderTop: `1px solid ${BORDER}`,
+          // 3px team-coloured left edge — the row's team identity at a glance
+          boxShadow: `inset 3px 0 0 ${teamColor}`,
+        }}
       >
-        <td className="py-2 pr-3 text-sm">
+        <td className="py-2 pl-3 pr-2 text-sm">
           <div className="flex items-center gap-2">
             <span
               className="w-1.5 h-1.5 rounded-full shrink-0"
-              style={{ background: injured ? STATUS_INJURED : ACCENT }}
+              style={{ background: dotColor }}
               title={injured ? 'Injured' : 'Active'}
             />
             <span className="font-medium" style={{ color: TEXT }}>
-              {tradePlayer.player_name}
+              {displayLabel}
             </span>
             <span className="text-[10px]" style={{ color: TEXT_MUTED }}>
               ({pos})
             </span>
           </div>
+        </td>
+        {/* Verdict column — promoted to position 2 per v3 */}
+        <td className="px-2 text-left text-[11px] font-semibold" style={{ color: verdictColor }}>
+          {verdict.text}
         </td>
         <td className="px-2 text-right text-sm tabular-nums" style={{ color: TEXT }}>
           {avgSince != null ? Math.round(avgSince) : '—'}
@@ -944,14 +1294,22 @@ function PlayerVerdictRow({
           {preDelta != null && (
             <span
               className="ml-1 text-[10px]"
-              style={{ color: preDelta >= 0 ? ACCENT : STATUS_INJURED }}
+              style={{
+                // Muted when delta is 0; team colours otherwise
+                color:
+                  preDelta === 0
+                    ? TEXT_MUTED
+                    : preDelta > 0
+                      ? COLOR_POSITIVE
+                      : STATUS_INJURED,
+              }}
             >
               ({preDelta >= 0 ? '+' : ''}
               {Math.round(preDelta)})
             </span>
           )}
         </td>
-        <td className="px-2 text-right text-sm tabular-nums" style={{ color: TEXT }}>
+        <td className="pl-2 text-right text-sm tabular-nums" style={{ color: TEXT }}>
           <span className="inline-flex items-center gap-1 justify-end">
             {expectedAvg != null ? Math.round(expectedAvg) : '—'}
             {expectedAvg != null && (
@@ -960,13 +1318,10 @@ function PlayerVerdictRow({
                 <br />
                 Source: {tradePlayer.expected_avg_source === 'manual' ? 'Manual override' : 'Auto-derived'}
                 <br />
-                Locked at R{performance ? '' : ''} — cannot be edited.
+                Locked at trade execution — cannot be edited.
               </InfoTip>
             )}
           </span>
-        </td>
-        <td className="pl-2 text-right text-[11px] font-semibold" style={{ color: verdictColor }}>
-          {verdict.text}
         </td>
       </tr>
       {expanded && traj.length > 0 && performance && (
@@ -1227,19 +1582,23 @@ function DarkScoresGrid({
             </td>
           );
         })}
-        {/* Trade-executed divider band — Pre-avg label lives INSIDE the band */}
+        {/* Trade-executed divider band — pre-trade avg rendered LARGE inside */}
         <td
-          className="px-2 py-2 text-right text-xs tabular-nums"
+          className="px-2 py-2 text-center tabular-nums"
           style={{
-            color: TEXT_MUTED,
-            background: 'rgba(163,255,18,0.10)',
-            borderLeft: `1px solid rgba(163,255,18,0.35)`,
-            borderRight: `1px solid rgba(163,255,18,0.35)`,
-            minWidth: 42,
+            background: 'rgba(255,255,255,0.06)',
+            borderLeft: `1px solid rgba(255,255,255,0.20)`,
+            borderRight: `1px solid rgba(255,255,255,0.20)`,
+            minWidth: 52,
           }}
           title="Pre-trade average"
         >
-          {preAvg != null ? preAvg.toFixed(0) : '—'}
+          <div className="text-[14px] font-semibold leading-none" style={{ color: TEXT }}>
+            {preAvg != null ? preAvg.toFixed(0) : '—'}
+          </div>
+          <div className="text-[9px] uppercase tracking-wider mt-1" style={{ color: TEXT_MUTED }}>
+            pre
+          </div>
         </td>
         {postRounds.map((r) => {
           const pts = postMap.get(r);
@@ -1274,14 +1633,15 @@ function DarkScoresGrid({
                 Before
               </th>
             )}
-            {/* Divider header carries the TRADE EXECUTED label */}
+            {/* Divider header carries the TRADE EXECUTED label — neutral white,
+                the band is a temporal marker not a team marker. */}
             <th
               className="py-1 px-1 text-center font-bold whitespace-nowrap"
               style={{
-                color: ACCENT,
-                background: 'rgba(163,255,18,0.10)',
-                borderLeft: `1px solid rgba(163,255,18,0.35)`,
-                borderRight: `1px solid rgba(163,255,18,0.35)`,
+                color: TEXT,
+                background: 'rgba(255,255,255,0.06)',
+                borderLeft: `1px solid rgba(255,255,255,0.20)`,
+                borderRight: `1px solid rgba(255,255,255,0.20)`,
                 fontSize: 9,
                 letterSpacing: '0.10em',
               }}
@@ -1311,19 +1671,16 @@ function DarkScoresGrid({
                 R{r}
               </th>
             ))}
-            {/* Divider sub-header: PRE label */}
+            {/* Divider sub-header — visually empty, the band carries its own label */}
             <th
-              className="py-1 px-2 text-center font-semibold tabular-nums"
+              className="py-1 px-2 text-center"
               style={{
-                color: ACCENT,
-                background: 'rgba(163,255,18,0.10)',
-                borderLeft: `1px solid rgba(163,255,18,0.35)`,
-                borderRight: `1px solid rgba(163,255,18,0.35)`,
-                fontSize: 9,
+                background: 'rgba(255,255,255,0.06)',
+                borderLeft: `1px solid rgba(255,255,255,0.20)`,
+                borderRight: `1px solid rgba(255,255,255,0.20)`,
               }}
-            >
-              Pre
-            </th>
+            />
+
             {postRounds.map((r) => (
               <th
                 key={`hpost-${r}`}
