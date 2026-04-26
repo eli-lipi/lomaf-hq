@@ -11,22 +11,36 @@ export function snap5(pct: number): number {
 }
 
 // ──────────────────────────────────────────────────────────────────
-// v3 — Two-colour system per trade (positive vs negative side)
+// v5 — Per-team colour palette (10 permanent team identities)
 // ──────────────────────────────────────────────────────────────────
-/** LOMAF green — assigned to the positive (higher-ladder) side of a trade. */
-export const COLOR_POSITIVE = '#A3FF12';
-/** Electric cyan — the other side. Reads "different" without competing for emotional weight. */
-export const COLOR_NEGATIVE = '#22D3EE';
+// LOMAF portal green is reserved for global UI affordances. Inside any
+// trade context, every team-anchored element pulls from the team-colors
+// module — never abstract green/cyan.
 
-/** Pick the per-trade colour for a given team based on the trade's frozen polarity.
- *  Falls back to positive-green if polarity isn't set (legacy trades). */
+import { getTeamColor as _getTeamColor, FALLBACK_POSITIVE, FALLBACK_NEGATIVE } from '@/lib/team-colors';
+
+/** Backwards-compat exports — used by non-trade UI surfaces (homepage filter
+ *  pills, etc.) that explicitly want the LOMAF portal palette, NOT a team. */
+export const COLOR_POSITIVE = '#A3FF12';   // portal green — sidebar / global selection
+export const COLOR_NEGATIVE = '#22D3EE';   // legacy cyan — kept for back-compat callers
+
+/**
+ * Pick the per-trade colour for a given team. v5 returns the team's permanent
+ * identity colour from the team-colors module (NOT an abstract green/cyan).
+ *
+ * The `positiveTeamId` arg is kept for API compatibility with v3/v4 callers
+ * but is now unused — colour is anchored to the team itself, not the role.
+ */
 export function colorForTeam(
   teamId: number,
   positiveTeamId: number | null | undefined
 ): string {
-  if (positiveTeamId == null) return COLOR_POSITIVE;
-  return teamId === positiveTeamId ? COLOR_POSITIVE : COLOR_NEGATIVE;
+  void positiveTeamId; // accepted for back-compat; team identity is now stable
+  return _getTeamColor(teamId);
 }
+
+/** Re-export so call sites can grab fallbacks without a second import. */
+export { FALLBACK_POSITIVE, FALLBACK_NEGATIVE };
 
 // ──────────────────────────────────────────────────────────────────
 // Surname display + collision handling

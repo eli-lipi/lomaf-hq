@@ -5,9 +5,8 @@ import {
   snap5,
   buildDisplayLabels,
   colorForTeam,
-  COLOR_POSITIVE,
-  COLOR_NEGATIVE,
 } from '@/lib/trades/scale';
+import { getTradeColorPair } from '@/lib/team-colors';
 import { cleanPositionDisplay } from '@/lib/trades/positions';
 import type { Trade, TradePlayer, TradeProbability } from '@/lib/trades/types';
 
@@ -60,6 +59,10 @@ export default function TradeCard({
   // Per-trade colours — green for positive side, cyan for negative
   const colorA = colorForTeam(trade.team_a_id, trade.positive_team_id);
   const colorB = colorForTeam(trade.team_b_id, trade.positive_team_id);
+
+  // Per-trade colour pair (positive team, negative team) used for sparkline
+  // gradient — green-above / cyan-below logic from v3 is now per-team.
+  const pair = getTradeColorPair(trade.positive_team_id, trade.negative_team_id);
 
   const labels = buildDisplayLabels(
     players.map((p) => ({ player_id: p.player_id, player_name: p.player_name }))
@@ -149,7 +152,7 @@ export default function TradeCard({
         {/* RIGHT — sparkline + price + verdict */}
         {showProb && advantage != null ? (
           <div className="flex flex-col items-end gap-1 shrink-0 min-w-[140px]">
-            <Sparkline points={sparkPoints} colorA={colorA} colorB={colorB} />
+            <Sparkline points={sparkPoints} colorPositive={pair.positive} colorNegative={pair.negative} />
             <div
               className="text-2xl font-bold leading-none tabular-nums"
               style={{ color: winningColor }}
@@ -267,23 +270,21 @@ function CardPlayerRow({
   );
 }
 
-/** Compact SVG sparkline — green above 0, cyan below, using gradient stroke. */
+/** Compact SVG sparkline — positive team colour above 0, negative below.
+ *  Colours are pulled from the trade's two teams so each card carries its
+ *  own team identity. */
 function Sparkline({
   points,
-  colorA: _colorA,
-  colorB: _colorB,
+  colorPositive,
+  colorNegative,
 }: {
   points: { x: number; y: number }[];
-  colorA: string;
-  colorB: string;
+  colorPositive: string;
+  colorNegative: string;
 }) {
   if (points.length < 2) {
     return <div className="text-[10px] italic" style={{ color: TEXT_MUTED }}>tracking…</div>;
   }
-  // Suppress unused-warning since we keep the team colours available for future
-  // per-side fills if needed.
-  void _colorA;
-  void _colorB;
 
   const width = 110;
   const height = 30;
@@ -308,7 +309,7 @@ function Sparkline({
 
   const baselineY = toY(0);
   const last = points[points.length - 1];
-  const lastColor = last.y > 0 ? COLOR_POSITIVE : last.y < 0 ? COLOR_NEGATIVE : TEXT;
+  const lastColor = last.y > 0 ? colorPositive : last.y < 0 ? colorNegative : TEXT;
   const gradientId = `spark-${Math.random().toString(36).slice(2, 8)}`;
 
   return (
@@ -320,12 +321,12 @@ function Sparkline({
       aria-hidden="true"
     >
       <defs>
-        {/* Vertical gradient — green above 0, cyan below */}
+        {/* Vertical gradient — positive team colour above 0, negative below */}
         <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor={COLOR_POSITIVE} />
-          <stop offset="50%" stopColor={COLOR_POSITIVE} />
-          <stop offset="50%" stopColor={COLOR_NEGATIVE} />
-          <stop offset="100%" stopColor={COLOR_NEGATIVE} />
+          <stop offset="0%" stopColor={colorPositive} />
+          <stop offset="50%" stopColor={colorPositive} />
+          <stop offset="50%" stopColor={colorNegative} />
+          <stop offset="100%" stopColor={colorNegative} />
         </linearGradient>
       </defs>
       {/* Faint baseline */}

@@ -30,9 +30,12 @@ import {
   playerVerdictFor,
   colorForTeam,
   buildDisplayLabels,
-  COLOR_POSITIVE,
-  COLOR_NEGATIVE,
 } from '@/lib/trades/scale';
+import {
+  getTradeColorPair,
+  getContrastingTextColor,
+  hexWithOpacity,
+} from '@/lib/team-colors';
 import type {
   PlayerPerformance,
   Trade,
@@ -182,6 +185,12 @@ export default function TradeDetail({ tradeId, onBack, onDeleted }: Props) {
     players.map((p) => ({ player_id: p.player_id, player_name: p.player_name }))
   );
 
+  // v5 — per-trade colour pair pulled from each team's permanent identity.
+  // The chart, player headlines, table spines, etc. all draw from this.
+  const colorPair = getTradeColorPair(trade.positive_team_id, trade.negative_team_id);
+  const colorPositive = colorPair.positive;
+  const colorNegative = colorPair.negative;
+
   // v2 — work in signed ±100 advantage. Polarity is locked at trade time on
   // `trade.positive_team_id`. Legacy rows fall back to assuming team A is
   // positive.
@@ -292,16 +301,16 @@ export default function TradeDetail({ tradeId, onBack, onDeleted }: Props) {
                   <defs>
                     {/* Vertical gradient — green above 0%, cyan below. Hard stop at y=0 (50% of −100..+100 axis). */}
                     <linearGradient id="lineColorSplit" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor={COLOR_POSITIVE} />
-                      <stop offset="50%" stopColor={COLOR_POSITIVE} />
-                      <stop offset="50%" stopColor={COLOR_NEGATIVE} />
-                      <stop offset="100%" stopColor={COLOR_NEGATIVE} />
+                      <stop offset="0%" stopColor={colorPositive} />
+                      <stop offset="50%" stopColor={colorPositive} />
+                      <stop offset="50%" stopColor={colorNegative} />
+                      <stop offset="100%" stopColor={colorNegative} />
                     </linearGradient>
                     <linearGradient id="areaFillSplit" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor={COLOR_POSITIVE} stopOpacity={0.18} />
-                      <stop offset="50%" stopColor={COLOR_POSITIVE} stopOpacity={0.04} />
-                      <stop offset="50%" stopColor={COLOR_NEGATIVE} stopOpacity={0.04} />
-                      <stop offset="100%" stopColor={COLOR_NEGATIVE} stopOpacity={0.18} />
+                      <stop offset="0%" stopColor={colorPositive} stopOpacity={0.18} />
+                      <stop offset="50%" stopColor={colorPositive} stopOpacity={0.04} />
+                      <stop offset="50%" stopColor={colorNegative} stopOpacity={0.04} />
+                      <stop offset="100%" stopColor={colorNegative} stopOpacity={0.18} />
                     </linearGradient>
                   </defs>
                   <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false} />
@@ -363,7 +372,7 @@ export default function TradeDetail({ tradeId, onBack, onDeleted }: Props) {
                       const payload = dotProps.payload as { advantage?: number } | undefined;
                       const k = String(dotProps.key ?? index ?? '');
                       if (cx == null || cy == null) return <g key={k} />;
-                      const dotColor = (payload?.advantage ?? 0) >= 0 ? COLOR_POSITIVE : COLOR_NEGATIVE;
+                      const dotColor = (payload?.advantage ?? 0) >= 0 ? colorPositive : colorNegative;
                       const isLast = index === chartData.length - 1;
                       if (isLast) {
                         return (
@@ -385,13 +394,13 @@ export default function TradeDetail({ tradeId, onBack, onDeleted }: Props) {
               {/* Team labels — once at the extremes, not at every tick */}
               <div
                 className="absolute pointer-events-none text-[11px] font-medium uppercase tracking-wider"
-                style={{ top: 36, right: 24, color: COLOR_POSITIVE }}
+                style={{ top: 36, right: 24, color: colorPositive }}
               >
                 ↑ {positiveTeamName}
               </div>
               <div
                 className="absolute pointer-events-none text-[11px] font-medium uppercase tracking-wider"
-                style={{ bottom: 32, right: 24, color: COLOR_NEGATIVE }}
+                style={{ bottom: 32, right: 24, color: colorNegative }}
               >
                 ↓ {negativeTeamName}
               </div>
@@ -402,6 +411,8 @@ export default function TradeDetail({ tradeId, onBack, onDeleted }: Props) {
                   advantage={advantage}
                   winningTeamName={winningTeamName}
                   delta={heroDelta}
+                  colorPositive={colorPositive}
+                  colorNegative={colorNegative}
                 />
               </div>
             </div>
@@ -409,9 +420,45 @@ export default function TradeDetail({ tradeId, onBack, onDeleted }: Props) {
         )}
       </div>
 
-      {/* ── Tier-2: Trade analysis — no card, no border, nested under chart ──── */}
+      {/* ── Tier-2: Player tables — vertical stacked, team-colour spines ─────
+          v5: positive-side team's table sits on top, negative below. Each
+          gets a 6px team-colour spine on the left edge (inset box-shadow so
+          content stays flush). The "RECEIVED" header sits inside the card. */}
+      {(() => {
+        const positiveIsA =
+          trade.positive_team_id == null ? true : trade.positive_team_id === trade.team_a_id;
+        const positivePlayers = positiveIsA ? teamAPlayers : teamBPlayers;
+        const negativePlayers = positiveIsA ? teamBPlayers : teamAPlayers;
+        const positiveTeamId = positiveIsA ? trade.team_a_id : trade.team_b_id;
+        const negativeTeamId = positiveIsA ? trade.team_b_id : trade.team_a_id;
+        const positiveTN = positiveIsA ? trade.team_a_name : trade.team_b_name;
+        const negativeTN = positiveIsA ? trade.team_b_name : trade.team_a_name;
+        return (
+          <div className="flex flex-col gap-4 mt-6">
+            <PlayerTableSection
+              title={`${positiveTN} received`}
+              tradePlayers={positivePlayers}
+              perfById={perfById}
+              teamColor={colorPositive}
+              teamId={positiveTeamId}
+              displayLabels={displayLabels}
+            />
+            <PlayerTableSection
+              title={`${negativeTN} received`}
+              tradePlayers={negativePlayers}
+              perfById={perfById}
+              teamColor={colorNegative}
+              teamId={negativeTeamId}
+              displayLabels={displayLabels}
+            />
+          </div>
+        );
+      })()}
+
+      {/* ── Tier-3: Trade analysis — moved BELOW the tables in v5.
+          Reads as a synthesis of the data above it, not a teaser. */}
       {(latestProbability?.ai_assessment || trade.context_notes) && (
-        <div className="px-6 pt-2">
+        <div className="px-6 pt-4 mt-2">
           <div className="flex items-baseline justify-between gap-3 mb-3">
             <h2 className="text-[10px] font-bold uppercase tracking-[0.15em]" style={{ color: TEXT_MUTED }}>
               Trade Analysis
@@ -430,7 +477,9 @@ export default function TradeDetail({ tradeId, onBack, onDeleted }: Props) {
               className="text-sm italic mt-4 pl-4 leading-relaxed"
               style={{
                 color: TEXT_BODY,
-                borderLeft: `2px solid ${ACCENT}`,
+                // Pull-quote left border in the trade-logger's team colour.
+                // Lipi logs every LOMAF trade — anchor to LIPI's identity.
+                borderLeft: `2px solid ${colorForTeam(3194003, trade.positive_team_id)}`,
                 fontFamily: 'Georgia, "Times New Roman", serif',
               }}
             >
@@ -439,50 +488,6 @@ export default function TradeDetail({ tradeId, onBack, onDeleted }: Props) {
           )}
         </div>
       )}
-
-      {/* ── Tier-3: Player verdict tables (small bordered cards) ─────────────
-          Headings sit OUTSIDE the cards in their team colour so the pair reads
-          as "X received | Y received" at a glance. */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-x-4 gap-y-4 mt-4">
-        <div>
-          <p
-            className="text-[11px] font-bold uppercase tracking-[0.15em] mb-2 px-1"
-            style={{ color: colorForTeam(trade.team_a_id, trade.positive_team_id) }}
-          >
-            {trade.team_a_name} received
-          </p>
-          <div
-            className="rounded-lg p-4"
-            style={{ background: SURFACE, border: `1px solid ${BORDER}` }}
-          >
-            <PlayerVerdictTable
-              tradePlayers={teamAPlayers}
-              perfById={perfById}
-              teamColor={colorForTeam(trade.team_a_id, trade.positive_team_id)}
-              displayLabels={displayLabels}
-            />
-          </div>
-        </div>
-        <div>
-          <p
-            className="text-[11px] font-bold uppercase tracking-[0.15em] mb-2 px-1"
-            style={{ color: colorForTeam(trade.team_b_id, trade.positive_team_id) }}
-          >
-            {trade.team_b_name} received
-          </p>
-          <div
-            className="rounded-lg p-4"
-            style={{ background: SURFACE, border: `1px solid ${BORDER}` }}
-          >
-            <PlayerVerdictTable
-              tradePlayers={teamBPlayers}
-              perfById={perfById}
-              teamColor={colorForTeam(trade.team_b_id, trade.positive_team_id)}
-              displayLabels={displayLabels}
-            />
-          </div>
-        </div>
-      </div>
 
       {/* ── Strip 5: Round-by-round breakdown (collapsed) ─────── */}
       <div
@@ -695,7 +700,10 @@ function SinglePlayerCluster({
       <span className={`${size} font-medium leading-none`} style={{ color }}>
         {label}
       </span>
-      <span className="text-[11px] uppercase tracking-[0.15em] mt-1.5" style={{ color: TEXT_MUTED }}>
+      <span
+        className="text-[11px] uppercase tracking-[0.15em] mt-1.5"
+        style={{ color: hexWithOpacity(color, 0.5) }}
+      >
         {pos}
       </span>
     </div>
@@ -725,7 +733,10 @@ function PlayerRowHeadline({
             <span key={p.id} className={`${size} font-medium leading-tight`} style={{ color }}>
               {label}
               {pos && (
-                <span className="text-[11px] ml-1 uppercase tracking-wider" style={{ color: TEXT_MUTED }}>
+                <span
+                  className="text-[11px] ml-1 uppercase tracking-wider"
+                  style={{ color: hexWithOpacity(color, 0.5) }}
+                >
                   ({pos})
                 </span>
               )}
@@ -765,12 +776,15 @@ function VerdictPillV3({
       </div>
     );
   }
+  // Pick readable text on the team-coloured pill background — light teams
+  // (lime, mustard, sage) get dark navy text; darker teams get white.
+  const fg = readableTextOn(winnerColor);
   return (
     <div
       className="px-4 py-2 rounded-full whitespace-nowrap text-sm font-bold"
       style={{
         background: winnerColor,
-        color: BG,
+        color: fg,
       }}
     >
       {verdict.text}
@@ -849,10 +863,14 @@ function PriceTag({
   advantage,
   winningTeamName,
   delta,
+  colorPositive,
+  colorNegative,
 }: {
   advantage: number;
   winningTeamName: string;
   delta: number | null;
+  colorPositive: string;
+  colorNegative: string;
 }) {
   // Wash state — neither side leading
   if (advantage === 0) {
@@ -876,13 +894,13 @@ function PriceTag({
     );
   }
 
-  const winnerColor = advantage > 0 ? COLOR_POSITIVE : COLOR_NEGATIVE;
+  const winnerColor = advantage > 0 ? colorPositive : colorNegative;
   const sign = advantage > 0 ? '+' : '';
   // Delta only shown if it's non-zero AFTER snapping (per spec — suppress fake noise)
   const showDelta = delta != null && delta !== 0;
-  // Delta colour: green if movement towards positive, cyan if towards negative.
-  // Never red — that was the contradictory-pill bug.
-  const deltaColor = showDelta && delta! > 0 ? COLOR_POSITIVE : COLOR_NEGATIVE;
+  // Delta colour: positive-team's colour for upward movement, negative-team's
+  // for downward. Never red — that was the contradictory-pill bug.
+  const deltaColor = showDelta && delta! > 0 ? colorPositive : colorNegative;
 
   return (
     <div
@@ -1136,6 +1154,50 @@ function MiniTrajectory({
 // (replaces the old PlayerRowGroup. Old PlayerRowGroup kept for the
 //  inline mini-trajectory rendering, just no longer the headline.)
 // ============================================================
+/** v5 — Per-team-spine card wrapper around PlayerVerdictTable. The spine is
+ *  a 6px inset box-shadow so the rest of the card sits flush; the team's
+ *  "RECEIVED" header sits inside the card at the top. */
+function PlayerTableSection({
+  title,
+  tradePlayers,
+  perfById,
+  teamColor,
+  teamId,
+  displayLabels,
+}: {
+  title: string;
+  tradePlayers: TradePlayer[];
+  perfById: Map<number, PlayerPerformance>;
+  teamColor: string;
+  teamId: number;
+  displayLabels: Map<number, string>;
+}) {
+  void teamId;
+  return (
+    <div
+      className="rounded-lg pl-5 pr-4 py-4"
+      style={{
+        background: SURFACE,
+        border: `1px solid ${BORDER}`,
+        boxShadow: `inset 6px 0 0 ${teamColor}`,
+      }}
+    >
+      <p
+        className="text-[12px] font-bold uppercase tracking-[0.15em] mb-3"
+        style={{ color: teamColor }}
+      >
+        {title}
+      </p>
+      <PlayerVerdictTable
+        tradePlayers={tradePlayers}
+        perfById={perfById}
+        teamColor={teamColor}
+        displayLabels={displayLabels}
+      />
+    </div>
+  );
+}
+
 function PlayerVerdictTable({
   tradePlayers,
   perfById,
@@ -1237,9 +1299,11 @@ function PlayerVerdictRow({
   }, [performance]);
 
   // v3 — verdict colour bands per spec
+  // v5 — positive verdicts take THIS table's team colour, reinforcing identity.
+  // Other verdicts keep their absolute meaning bands.
   const verdictColor =
     verdict.level === 'crushing' || verdict.level === 'outperforming'
-      ? COLOR_POSITIVE
+      ? teamColor
       : verdict.level === 'tracking' || verdict.level === 'pending'
         ? TEXT
         : verdict.level === 'slight-under'
@@ -1247,7 +1311,7 @@ function PlayerVerdictRow({
           : verdict.level === 'broken'
             ? STATUS_INJURED
             : verdict.level === 'avail-drag'
-              ? COLOR_NEGATIVE
+              ? TEXT_MUTED // neutral grey — availability isn't a perf verdict
               : TEXT_BODY;
 
   // Status dot — injured red overrides team colour
@@ -1258,13 +1322,9 @@ function PlayerVerdictRow({
       <tr
         onClick={() => setExpanded((v) => !v)}
         className="cursor-pointer"
-        style={{
-          borderTop: `1px solid ${BORDER}`,
-          // 3px team-coloured left edge — the row's team identity at a glance
-          boxShadow: `inset 3px 0 0 ${teamColor}`,
-        }}
+        style={{ borderTop: `1px solid ${BORDER}` }}
       >
-        <td className="py-2 pl-3 pr-2 text-sm">
+        <td className="py-2 pr-2 text-sm">
           <div className="flex items-center gap-2">
             <span
               className="w-1.5 h-1.5 rounded-full shrink-0"
@@ -1295,12 +1355,13 @@ function PlayerVerdictRow({
             <span
               className="ml-1 text-[10px]"
               style={{
-                // Muted when delta is 0; team colours otherwise
+                // Muted when delta is 0; positive deltas take the team's colour;
+                // negative deltas in red.
                 color:
                   preDelta === 0
                     ? TEXT_MUTED
                     : preDelta > 0
-                      ? COLOR_POSITIVE
+                      ? teamColor
                       : STATUS_INJURED,
               }}
             >
@@ -1397,6 +1458,17 @@ function ActionButton({
 // ============================================================
 // Helpers
 // ============================================================
+/** Readable foreground (white or dark navy) for a hex background. YIQ luminance. */
+function readableTextOn(hex: string): string {
+  const cleaned = hex.replace('#', '');
+  if (cleaned.length !== 6) return TEXT;
+  const r = parseInt(cleaned.slice(0, 2), 16);
+  const g = parseInt(cleaned.slice(2, 4), 16);
+  const b = parseInt(cleaned.slice(4, 6), 16);
+  const yiq = (r * 299 + g * 587 + b * 114) / 1000;
+  return yiq >= 150 ? BG : TEXT;
+}
+
 /** Ordinal helper: 1 → "1st", 2 → "2nd", ... */
 function ordinal(n: number): string {
   const suffix =

@@ -541,18 +541,17 @@ function TradeMatrix({
                   const key = a < b ? `${a}-${b}` : `${b}-${a}`;
                   const count = pairCount.get(key) ?? 0;
                   const tradeIds = pairTrades.get(key) ?? [];
-                  const intensity = maxCount > 0 ? count / maxCount : 0;
-                  // LOMAF green at intensity. 0 count = barely visible.
-                  const bg =
-                    count === 0
-                      ? 'rgba(255,255,255,0.02)'
-                      : `rgba(163,255,18,${Math.max(0.10, intensity * 0.55)})`;
-                  const fg = count === 0 ? TEXT_MUTED : count >= 2 ? '#0A0F1C' : ACCENT;
+                  // v5 — diagonal-split cell carrying both teams' colours.
+                  // The split itself reinforces the team-colour map across
+                  // the whole portal: every glance at the matrix teaches
+                  // which colour belongs to which team.
+                  const rowColor = colorForTeam(rowTeam.team_id, null);
+                  const colColor = colorForTeam(colTeam.team_id, null);
                   const onClick =
                     tradeIds.length === 1
                       ? () => onOpen(tradeIds[0])
                       : tradeIds.length > 1
-                        ? () => onOpen(tradeIds[0]) // open most recent (first in array order)
+                        ? () => onOpen(tradeIds[0])
                         : undefined;
                   return (
                     <td key={colTeam.team_id} className="px-1 py-1">
@@ -564,15 +563,26 @@ function TradeMatrix({
                             ? 'No trades'
                             : `${rowTeam.team_name} ⇄ ${colTeam.team_name}: ${count} trade${count === 1 ? '' : 's'}`
                         }
-                        className="w-full rounded text-center transition-transform"
+                        className="w-full rounded text-center transition-transform relative overflow-hidden"
                         style={{
                           height: 32,
-                          background: bg,
-                          color: fg,
-                          fontWeight: count >= 2 ? 700 : 600,
+                          background:
+                            count === 0
+                              ? 'rgba(255,255,255,0.02)'
+                              : // Diagonal split — top-left = row team, bottom-right = column team.
+                                // Opacity scales with count vs. the loudest pair so big
+                                // counts pop more than singletons.
+                                `linear-gradient(135deg, ${rowColor} 50%, ${colColor} 50%)`,
+                          opacity: count === 0 ? 1 : 0.55 + Math.min(count / Math.max(maxCount, 1), 1) * 0.45,
+                          color: '#FFFFFF',
+                          fontWeight: 700,
                           fontSize: 12,
                           cursor: onClick ? 'pointer' : 'default',
-                          border: count > 0 ? '1px solid rgba(163,255,18,0.20)' : '1px solid transparent',
+                          border:
+                            count > 0
+                              ? '1px solid rgba(255,255,255,0.10)'
+                              : '1px solid transparent',
+                          textShadow: count > 0 ? '0 0 4px rgba(0,0,0,0.6)' : 'none',
                         }}
                         onMouseEnter={(e) => {
                           if (onClick) (e.currentTarget as HTMLElement).style.transform = 'scale(1.05)';
