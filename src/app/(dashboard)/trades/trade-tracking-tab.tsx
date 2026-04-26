@@ -120,6 +120,7 @@ export default function TradeTrackingTab() {
                   trade={item.trade}
                   players={item.players}
                   latestProbability={item.latestProbability}
+                  probabilityHistory={item.probabilityHistory}
                   onViewDetails={() => setActiveTradeId(item.trade.id)}
                 />
               ))}
@@ -178,6 +179,7 @@ function GroupedByRound({
                 trade={item.trade}
                 players={item.players}
                 latestProbability={item.latestProbability}
+                probabilityHistory={item.probabilityHistory}
                 onViewDetails={() => onOpen(item.trade.id)}
               />
             ))}

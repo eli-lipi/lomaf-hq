@@ -2,7 +2,6 @@
 
 import { ArrowRight } from 'lucide-react';
 import { TEAMS } from '@/lib/constants';
-import { getTeamColor } from '@/lib/team-colors';
 import type { Trade, TradePlayer, TradeProbability } from '@/lib/trades/types';
 
 // List-view API adds these computed fields onto each trade player.
@@ -15,6 +14,7 @@ interface Props {
   trade: Trade;
   players: ListPlayer[];
   latestProbability?: TradeProbability | null;
+  probabilityHistory?: TradeProbability[];
   onViewDetails: () => void;
 }
 
@@ -33,6 +33,7 @@ export default function TradeCard({
   trade,
   players,
   latestProbability,
+  probabilityHistory,
   onViewDetails,
 }: Props) {
   const teamAPlayers = players.filter((p) => p.receiving_team_id === trade.team_a_id);
@@ -52,18 +53,13 @@ export default function TradeCard({
     latestProbability.round_number > trade.round_executed;
 
   return (
-    <button
-      onClick={onViewDetails}
-      className="text-left w-full bg-white border border-border rounded-lg p-5 hover:shadow-md hover:border-primary/30 transition-all"
-    >
-      {/* Top line: team names + View → (round is rendered as a section header above) */}
-      <div className="flex items-start justify-between gap-3 mb-2">
+    <div className="bg-white border border-border rounded-lg p-5 hover:shadow-md hover:border-primary/30 transition-all">
+      {/* Top line: team names */}
+      <div className="mb-2">
         <h3 className="min-w-0 text-base font-semibold text-foreground leading-tight">
-          {trade.team_a_name} <span className="text-muted-foreground font-normal mx-1">↔</span> {trade.team_b_name}
+          {trade.team_a_name} <span className="text-muted-foreground font-normal mx-1">↔</span>{' '}
+          {trade.team_b_name}
         </h3>
-        <span className="text-xs font-medium text-primary flex items-center gap-1 shrink-0 pt-0.5">
-          View <ArrowRight size={12} />
-        </span>
       </div>
 
       {/* Coach names (muted, below team headline) */}
@@ -81,19 +77,29 @@ export default function TradeCard({
         <PlayerLine players={teamBPlayers} />
       </div>
 
-      {/* Win-probability ticker — small, clean, just enough signal to entice a click */}
+      {/* Win-probability ticker — neutral colors, sparkline trajectory */}
       {showTicker && (
         <ProbTicker
           teamAName={trade.team_a_name}
           teamBName={trade.team_b_name}
-          teamAColor={getTeamColor(trade.team_a_id)}
-          teamBColor={getTeamColor(trade.team_b_id)}
+          teamAId={trade.team_a_id}
+          teamBId={trade.team_b_id}
           probA={probA!}
           probB={probB!}
-          updatedRound={latestProbability!.round_number}
+          probabilityHistory={probabilityHistory ?? []}
+          roundExecuted={trade.round_executed}
         />
       )}
-    </button>
+
+      {/* CTA button — full-width, prominent, single click target */}
+      <button
+        onClick={onViewDetails}
+        className="mt-4 w-full flex items-center justify-center gap-2 bg-primary text-primary-foreground hover:bg-primary/90 transition-colors rounded-md px-4 py-2.5 text-sm font-semibold"
+      >
+        View Trade Analysis
+        <ArrowRight size={14} />
+      </button>
+    </div>
   );
 }
 
@@ -115,46 +121,130 @@ function PlayerLine({ players }: { players: ListPlayer[] }) {
 function ProbTicker({
   teamAName,
   teamBName,
-  teamAColor,
-  teamBColor,
+  teamAId,
+  teamBId,
   probA,
   probB,
-  updatedRound,
+  probabilityHistory,
+  roundExecuted,
 }: {
   teamAName: string;
   teamBName: string;
-  teamAColor: string;
-  teamBColor: string;
+  teamAId: number;
+  teamBId: number;
   probA: number;
   probB: number;
-  updatedRound: number;
+  probabilityHistory: TradeProbability[];
+  roundExecuted: number;
 }) {
   const winningIsA = probA >= probB;
-  const winColor = winningIsA ? teamAColor : teamBColor;
   const winName = winningIsA ? teamAName : teamBName;
   const winPct = Math.round(winningIsA ? probA : probB);
+
+  // Sparkline data: probability of the WINNING side over time. Anchor at 50%
+  // for the round of execution so the line always starts from the neutral
+  // baseline and shows the trajectory away from it.
+  const sortedHistory = [...probabilityHistory].sort(
+    (a, b) => a.round_number - b.round_number
+  );
+  const points: { x: number; y: number }[] = [];
+  // Anchor at round_executed = 50%
+  points.push({ x: roundExecuted, y: 50 });
+  for (const p of sortedHistory) {
+    if (p.round_number === roundExecuted) continue; // dedupe
+    const sideProb = winningIsA
+      ? Number(p.team_a_probability)
+      : Number(p.team_b_probability);
+    points.push({ x: p.round_number, y: sideProb });
+  }
+  // Suppress IDE complaints about unused team IDs (kept for callers / future)
+  void teamAId;
+  void teamBId;
 
   return (
     <div className="flex items-center gap-3 mt-4 pt-3 border-t border-border">
       <div className="flex-1 flex items-center gap-2 min-w-0">
-        <span
-          className="text-base font-bold tabular-nums shrink-0"
-          style={{ color: winColor }}
-        >
+        <span className="text-base font-bold tabular-nums text-foreground shrink-0">
           {winPct}%
         </span>
-        <span className="text-xs text-muted-foreground truncate">
-          {winName} winning
+        <span className="text-xs text-muted-foreground truncate">{winName} winning</span>
+      </div>
+      {points.length >= 2 ? (
+        <Sparkline points={points} />
+      ) : (
+        <span className="text-[10px] text-muted-foreground italic shrink-0">
+          tracking...
         </span>
-      </div>
-      {/* Slim two-segment bar for visual weight without dominating the card */}
-      <div className="hidden sm:flex h-1.5 w-24 rounded-full overflow-hidden shrink-0">
-        <div style={{ width: `${probA}%`, backgroundColor: teamAColor }} />
-        <div style={{ width: `${probB}%`, backgroundColor: teamBColor }} />
-      </div>
-      <span className="text-[10px] text-muted-foreground tabular-nums shrink-0">
-        R{updatedRound}
-      </span>
+      )}
     </div>
+  );
+}
+
+/**
+ * Tiny SVG sparkline showing probability trajectory. Neutral muted color —
+ * the homepage shouldn't shout team colors at every card. The 50% baseline
+ * is faintly drawn so trajectory direction is readable at a glance.
+ */
+function Sparkline({ points }: { points: { x: number; y: number }[] }) {
+  const width = 96;
+  const height = 28;
+  const padding = 2;
+
+  const xs = points.map((p) => p.x);
+  const minX = Math.min(...xs);
+  const maxX = Math.max(...xs);
+  const xRange = Math.max(1, maxX - minX);
+
+  // Y is fixed 0..100 so trajectory is comparable across cards
+  const toX = (x: number) =>
+    padding + ((x - minX) / xRange) * (width - padding * 2);
+  const toY = (y: number) =>
+    padding + ((100 - y) / 100) * (height - padding * 2);
+
+  const path = points
+    .map((p, i) => `${i === 0 ? 'M' : 'L'} ${toX(p.x).toFixed(1)} ${toY(p.y).toFixed(1)}`)
+    .join(' ');
+
+  const baselineY = toY(50);
+  const last = points[points.length - 1];
+
+  return (
+    <svg
+      width={width}
+      height={height}
+      viewBox={`0 0 ${width} ${height}`}
+      className="shrink-0"
+      aria-hidden="true"
+    >
+      {/* Faint 50% baseline so direction reads */}
+      <line
+        x1={padding}
+        x2={width - padding}
+        y1={baselineY}
+        y2={baselineY}
+        stroke="currentColor"
+        strokeOpacity={0.15}
+        strokeDasharray="2 2"
+        strokeWidth={1}
+        className="text-muted-foreground"
+      />
+      {/* The trajectory */}
+      <path
+        d={path}
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={1.5}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        className="text-foreground/70"
+      />
+      {/* Endpoint dot (current state) */}
+      <circle
+        cx={toX(last.x)}
+        cy={toY(last.y)}
+        r={2.5}
+        className="fill-foreground"
+      />
+    </svg>
   );
 }

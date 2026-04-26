@@ -30,14 +30,27 @@ export async function GET() {
     const tradeIds = (trades ?? []).map((t) => t.id);
     if (tradeIds.length === 0) return NextResponse.json({ trades: [] });
 
-    const [playersRes, probsRes] = await Promise.all([
+    const [playersRes, probsRes, latestPlayedRes] = await Promise.all([
       supabase.from('trade_players').select('*').in('trade_id', tradeIds),
       supabase
         .from('trade_probabilities')
         .select('*')
         .in('trade_id', tradeIds)
         .order('round_number', { ascending: false }),
+      // Determine the MAX round with actual played scores. Used to ignore
+      // stale future-round trade_probabilities rows (R28 ghosts from the
+      // earlier recalc bug). The DB self-heals on next CSV upload, but
+      // we filter on read so the UI never shows the bogus round labels.
+      supabase
+        .from('player_rounds')
+        .select('round_number')
+        .not('points', 'is', null)
+        .order('round_number', { ascending: false })
+        .limit(1),
     ]);
+
+    const maxPlayedRound =
+      (latestPlayedRes.data as { round_number: number }[] | null)?.[0]?.round_number ?? null;
 
     const players = (playersRes.data ?? []) as TradePlayerRow[];
 
@@ -50,6 +63,8 @@ export async function GET() {
     const latestProbByTrade = new Map<string, unknown>();
     const historyByTrade = new Map<string, unknown[]>();
     for (const row of probsRes.data ?? []) {
+      // Skip rows pointing at unplayed rounds (the R28 ghosts).
+      if (maxPlayedRound != null && row.round_number > maxPlayedRound) continue;
       if (!historyByTrade.has(row.trade_id)) historyByTrade.set(row.trade_id, []);
       historyByTrade.get(row.trade_id)!.push(row);
       // Since sorted desc, first one we see per trade is the latest

@@ -15,7 +15,7 @@ export async function GET(_request: Request, ctx: { params: Promise<{ id: string
   try {
     const { id } = await ctx.params;
 
-    const [tradeRes, playersRes, probsRes] = await Promise.all([
+    const [tradeRes, playersRes, probsRes, latestPlayedRes] = await Promise.all([
       supabase.from('trades').select('*').eq('id', id).single(),
       supabase.from('trade_players').select('*').eq('trade_id', id),
       supabase
@@ -23,6 +23,14 @@ export async function GET(_request: Request, ctx: { params: Promise<{ id: string
         .select('*')
         .eq('trade_id', id)
         .order('round_number', { ascending: true }),
+      // Cap probability rows at the latest round with actual played scores —
+      // ignores stale future-round rows from the earlier recalc bug.
+      supabase
+        .from('player_rounds')
+        .select('round_number')
+        .not('points', 'is', null)
+        .order('round_number', { ascending: false })
+        .limit(1),
     ]);
 
     if (tradeRes.error || !tradeRes.data) {
@@ -31,7 +39,13 @@ export async function GET(_request: Request, ctx: { params: Promise<{ id: string
 
     const trade = tradeRes.data as Trade;
     const players = (playersRes.data ?? []) as TradePlayer[];
-    const probs = probsRes.data ?? [];
+    const allProbs = probsRes.data ?? [];
+    const maxPlayedRound =
+      (latestPlayedRes.data as { round_number: number }[] | null)?.[0]?.round_number ?? null;
+    const probs =
+      maxPlayedRound != null
+        ? allProbs.filter((p) => p.round_number <= maxPlayedRound)
+        : allProbs;
     const latestRound = probs.length > 0 ? probs[probs.length - 1].round_number : trade.round_executed;
 
     // Build per-player performance — covers the full trajectory (pre-trade
