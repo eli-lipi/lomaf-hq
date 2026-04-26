@@ -21,7 +21,8 @@ export function parseAIJson<T>(raw: string): T {
 }
 
 /**
- * Log AI usage to Supabase (fire-and-forget).
+ * Log AI usage to Supabase (fire-and-forget). Pass the caller's user.id when
+ * available so the admin Usage table can attribute cost per coach.
  */
 export async function logAIUsage(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -29,7 +30,8 @@ export async function logAIUsage(
   endpoint: string,
   roundNumber: number | null,
   inputTokens: number,
-  outputTokens: number
+  outputTokens: number,
+  userId: string | null = null,
 ) {
   const costEstimate =
     (inputTokens / 1_000_000) * 3 + (outputTokens / 1_000_000) * 15;
@@ -39,6 +41,7 @@ export async function logAIUsage(
     input_tokens: inputTokens,
     output_tokens: outputTokens,
     cost_estimate: Math.round(costEstimate * 10000) / 10000,
+    user_id: userId,
   });
 }
 

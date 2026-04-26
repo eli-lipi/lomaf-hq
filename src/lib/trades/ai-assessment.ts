@@ -62,7 +62,8 @@ export async function parseTradeScreenshot(
   mediaType: 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp',
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   supabase: any,
-  currentRound: number | null
+  currentRound: number | null,
+  userId: string | null = null,
 ): Promise<ParsedTradeScreenshot> {
   const client = getAnthropicClient();
   if (!client) throw new Error('ANTHROPIC_API_KEY not configured');
@@ -88,7 +89,7 @@ export async function parseTradeScreenshot(
     ],
   });
 
-  logAIUsage(supabase, 'trades.parse_screenshot', currentRound, response.usage.input_tokens, response.usage.output_tokens).catch(() => {});
+  logAIUsage(supabase, 'trades.parse_screenshot', currentRound, response.usage.input_tokens, response.usage.output_tokens, userId).catch(() => {});
 
   const text = response.content.find((c) => c.type === 'text');
   if (!text || text.type !== 'text') throw new Error('No text response from Claude');

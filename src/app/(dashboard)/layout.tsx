@@ -1,5 +1,6 @@
 import { redirect } from 'next/navigation';
 import Sidebar from '@/components/layout/Sidebar';
+import ActivityHeartbeat from '@/components/ActivityHeartbeat';
 import { getCurrentUser } from '@/lib/auth';
 
 export default async function DashboardLayout({
@@ -18,6 +19,7 @@ export default async function DashboardLayout({
           {children}
         </div>
       </main>
+      <ActivityHeartbeat />
     </div>
   );
 }

@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { getAnthropicClient, AI_MODEL, logAIUsage, COACH_PERSONALITIES } from '@/lib/ai';
+import { getCurrentUser } from '@/lib/auth';
 import { TEAMS } from '@/lib/constants';
 
 const supabase = createClient(
@@ -106,7 +107,8 @@ ${alreadyWritten && alreadyWritten.length > 0 ? `Other teams already written (av
       .map(block => block.text)
       .join('');
 
-    await logAIUsage(supabase, 'writeup_draft', roundNumber, response.usage.input_tokens, response.usage.output_tokens);
+    const user = await getCurrentUser();
+    await logAIUsage(supabase, 'writeup_draft', roundNumber, response.usage.input_tokens, response.usage.output_tokens, user?.id ?? null);
 
     return NextResponse.json({ writeup: writeup.trim() });
   } catch (err) {

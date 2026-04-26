@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { getAnthropicClient, AI_MODEL, parseAIJson, logAIUsage, getSystemPrompt } from '@/lib/ai';
+import { getCurrentUser } from '@/lib/auth';
 import { TEAMS } from '@/lib/constants';
 
 const supabase = createClient(
@@ -266,7 +267,8 @@ Based on this data, produce the intelligence brief. Be specific — reference ac
     );
 
     // Log usage
-    await logAIUsage(supabase, 'intelligence_brief', roundNumber, response.usage.input_tokens, response.usage.output_tokens);
+    const user = await getCurrentUser();
+    await logAIUsage(supabase, 'intelligence_brief', roundNumber, response.usage.input_tokens, response.usage.output_tokens, user?.id ?? null);
 
     return NextResponse.json({ data: parsed, cached: false });
   } catch (err) {

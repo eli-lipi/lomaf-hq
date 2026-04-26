@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { getAnthropicClient, AI_MODEL, parseAIJson, logAIUsage, getSystemPrompt } from '@/lib/ai';
+import { getCurrentUser } from '@/lib/auth';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -66,7 +67,8 @@ export async function POST(request: Request) {
       { onConflict: 'round_number,section_key' }
     );
 
-    await logAIUsage(supabase, 'chart_insights', roundNumber, response.usage.input_tokens, response.usage.output_tokens);
+    const user = await getCurrentUser();
+    await logAIUsage(supabase, 'chart_insights', roundNumber, response.usage.input_tokens, response.usage.output_tokens, user?.id ?? null);
 
     return NextResponse.json({ insights, cached: false });
   } catch (err) {

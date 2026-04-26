@@ -8,6 +8,7 @@ import { supabase } from '@/lib/supabase';
 import { cn } from '@/lib/utils';
 import ScoreAdjustmentsTab from './score-adjustments-tab';
 import UsersTab from './users-tab';
+import UsageTab from './usage-tab';
 import DataUploadTab from './data-upload-tab';
 import AIPromptsTab from './ai-prompts-tab';
 
@@ -17,6 +18,7 @@ const TABS = [
   { id: 'adjustments', label: 'Score Adjustments' },
   { id: 'prompts', label: 'AI Prompts' },
   { id: 'users', label: 'Users' },
+  { id: 'usage', label: 'Usage' },
   { id: 'info', label: 'League Info' },
 ] as const;
 
@@ -87,6 +89,8 @@ function SettingsPageInner() {
       {activeTab === 'prompts' && <AIPromptsTab />}
 
       {activeTab === 'users' && <UsersTab />}
+
+      {activeTab === 'usage' && <UsageTab />}
 
       {activeTab === 'info' && (
         <section>

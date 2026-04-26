@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { parseTradeScreenshot } from '@/lib/trades/ai-assessment';
+import { getCurrentUser } from '@/lib/auth';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -20,7 +21,8 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Missing image_base64 or media_type' }, { status: 400 });
     }
 
-    const parsed = await parseTradeScreenshot(image_base64, media_type, supabase, current_round ?? null);
+    const user = await getCurrentUser();
+    const parsed = await parseTradeScreenshot(image_base64, media_type, supabase, current_round ?? null, user?.id ?? null);
     return NextResponse.json(parsed);
   } catch (err) {
     console.error('[trades/parse-screenshot]', err);

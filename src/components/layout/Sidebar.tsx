@@ -77,6 +77,7 @@ const NAV_ITEMS: NavItem[] = [
       { href: '/settings?tab=photos', label: 'Coach Photos', adminOnly: true },
       { href: '/settings?tab=adjustments', label: 'Score Adjustments', adminOnly: true },
       { href: '/settings?tab=users', label: 'Users', adminOnly: true },
+      { href: '/settings?tab=usage', label: 'Usage', adminOnly: true },
       { href: '/settings?tab=info', label: 'League Info', adminOnly: true },
     ],
   },
