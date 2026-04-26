@@ -3,10 +3,16 @@ import { createClient } from '@supabase/supabase-js';
 import { getAnthropicClient, AI_MODEL, parseAIJson, logAIUsage, getSystemPrompt } from '@/lib/ai';
 import { getCurrentUser } from '@/lib/auth';
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-);
+// Lazy-init: Next.js 16's "Collecting page data" build step evaluates this
+// module without injected env vars, and @supabase/supabase-js v2's createClient
+// throws synchronously on missing supabaseUrl. Defer construction to request
+// time so the build doesn't crash.
+function getSupabase() {
+  return createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL ?? '',
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? ''
+  );
+}
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
@@ -17,6 +23,7 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: 'Missing section' }, { status: 400 });
   }
 
+  const supabase = getSupabase();
   const { data: cached } = await supabase
     .from('ai_chart_insights')
     .select('insights, generated_at')
@@ -43,6 +50,7 @@ export async function POST(request: Request) {
   }
 
   try {
+    const supabase = getSupabase();
     const systemPrompt = await getSystemPrompt(supabase, 'chart_insights');
     const response = await client.messages.create({
       model: AI_MODEL,
