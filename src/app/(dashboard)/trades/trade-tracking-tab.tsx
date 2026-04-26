@@ -27,6 +27,10 @@ interface ListItem {
 
 type SortKey = 'recent' | 'largest' | 'oldest' | 'closest';
 
+/** Snap a percentage to nearest 5% — kept consistent with the storage-side
+ *  snap in compute-probability.ts and the trade-detail / trade-card display. */
+const snap5 = (pct: number): number => Math.round(pct / 5) * 5;
+
 export default function TradeTrackingTab() {
   const [items, setItems] = useState<ListItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -68,7 +72,7 @@ export default function TradeTrackingTab() {
       arr.sort((a, b) => b.players.length - a.players.length);
     } else if (sort === 'closest') {
       const dist = (it: ListItem) => {
-        const p = it.latestProbability ? Number(it.latestProbability.team_a_probability) : 50;
+        const p = it.latestProbability ? snap5(Number(it.latestProbability.team_a_probability)) : 50;
         return Math.abs(p - 50);
       };
       arr.sort((a, b) => dist(a) - dist(b));
@@ -293,8 +297,8 @@ function NarrativeStats({
   const lopsided = items
     .filter((it) => it.latestProbability)
     .map((it) => {
-      const pa = Number(it.latestProbability!.team_a_probability);
-      const pb = Number(it.latestProbability!.team_b_probability);
+      const pa = snap5(Number(it.latestProbability!.team_a_probability));
+      const pb = 100 - pa;
       const max = Math.max(pa, pb);
       return { item: it, max, winName: pa >= pb ? it.trade.team_a_name : it.trade.team_b_name };
     })
@@ -307,8 +311,8 @@ function NarrativeStats({
     if (sorted.length < 2) continue;
     const last = sorted[sorted.length - 1];
     const prev = sorted[sorted.length - 2];
-    const dA = Number(last.team_a_probability) - Number(prev.team_a_probability);
-    const aWins = Number(last.team_a_probability) >= Number(last.team_b_probability);
+    const dA = snap5(Number(last.team_a_probability)) - snap5(Number(prev.team_a_probability));
+    const aWins = snap5(Number(last.team_a_probability)) >= 50;
     const teamName = aWins ? it.trade.team_a_name : it.trade.team_b_name;
     swings.push({ item: it, delta: Math.abs(dA), teamName });
   }

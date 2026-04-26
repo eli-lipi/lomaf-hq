@@ -26,6 +26,13 @@ interface Props {
   onViewDetails: () => void;
 }
 
+/** Snap a percentage to the nearest 5 — matches the storage-side snap in
+ *  compute-probability.ts so trades never display non-5%-aligned numbers
+ *  even while older data hasn't been recalculated yet. */
+function snap5(pct: number): number {
+  return Math.round(pct / 5) * 5;
+}
+
 function surname(fullName: string): string {
   const parts = fullName.trim().split(/\s+/);
   return parts.length > 1 ? parts[parts.length - 1] : fullName;
@@ -75,7 +82,7 @@ export default function TradeCard({
   for (const p of sortedHistory) {
     if (p.round_number === trade.round_executed) continue;
     const sideProb = aWins ? Number(p.team_a_probability) : Number(p.team_b_probability);
-    sparkPoints.push({ x: p.round_number, y: sideProb });
+    sparkPoints.push({ x: p.round_number, y: snap5(sideProb) });
   }
   const winPct = aWins ? probA : probB;
   const winName = aWins ? trade.team_a_name : trade.team_b_name;
@@ -131,7 +138,7 @@ export default function TradeCard({
               className="text-2xl font-bold leading-none tabular-nums"
               style={{ color: winPctColor(winPct) }}
             >
-              {Math.round(winPct)}%
+              {snap5(winPct)}%
             </div>
             <div className="text-[10px] truncate max-w-[140px]" style={{ color: TEXT_MUTED }}>
               {winName} winning

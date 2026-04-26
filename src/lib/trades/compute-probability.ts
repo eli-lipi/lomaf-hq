@@ -166,6 +166,9 @@ export function computeProbability(inputs: ComputeProbabilityInputs): ComputePro
 
   // Clamp
   probA = Math.max(5, Math.min(95, probA));
+  // Snap to 5% increments — 51% vs 49% reads as noise; 55% vs 45% reads as
+  // a real edge. Per LOMAF call: "don't do 51% vs 49%, it's too insignificant".
+  probA = Math.round(probA / 5) * 5;
   const probB = 100 - probA;
 
   const factors: TradeFactorsBreakdown = {

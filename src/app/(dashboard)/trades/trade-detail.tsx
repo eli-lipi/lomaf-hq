@@ -57,6 +57,11 @@ interface Props {
   onDeleted: () => void;
 }
 
+/** Snap a probability to 5% increments — keeps display in sync with the
+ *  storage-side snap in compute-probability.ts so older un-recalced trades
+ *  also render as 55/45 rather than 53/47. */
+const snap5 = (pct: number): number => Math.round(pct / 5) * 5;
+
 // League-avg baseline by position, used when a player has no pre-trade avg
 const POSITION_BASELINE: Record<string, number> = { DEF: 70, MID: 85, FWD: 70, RUC: 80 };
 
@@ -161,7 +166,9 @@ export default function TradeDetail({ tradeId, onBack, onDeleted }: Props) {
     map.set(data.trade.round_executed, 50);
     for (const p of data.probabilityHistory) {
       if (p.round_number === data.trade.round_executed) continue;
-      map.set(p.round_number, Number(p.team_a_probability));
+      // Snap on read so the chart, deltas, and tooltips never show
+      // sub-5% precision (e.g. 53% bobbing to 51% reads as noise).
+      map.set(p.round_number, snap5(Number(p.team_a_probability)));
     }
     const sorted = Array.from(map.entries()).sort(([a], [b]) => a - b);
     return sorted.map(([round, pa], idx) => ({
@@ -192,8 +199,10 @@ export default function TradeDetail({ tradeId, onBack, onDeleted }: Props) {
   const teamBPlayers = players.filter((p) => p.receiving_team_id === trade.team_b_id);
   const perfById = new Map(playerPerformance.map((p) => [p.player_id, p]));
 
-  const probA = Number(latestProbability?.team_a_probability ?? 50);
-  const probB = Number(latestProbability?.team_b_probability ?? 50);
+  // Display-snap to nearest 5%. Storage already snaps in compute-probability.ts;
+  // this guard catches older rows that were stored before the snap was added.
+  const probA = snap5(Number(latestProbability?.team_a_probability ?? 50));
+  const probB = 100 - probA;
   const verdict = computeVerdict(probA, probB, trade.team_a_name, trade.team_b_name);
   const aWins = probA >= probB;
   const heroPct = aWins ? probA : probB;
@@ -205,8 +214,8 @@ export default function TradeDetail({ tradeId, onBack, onDeleted }: Props) {
   if (sortedHistory.length >= 2) {
     const last = sortedHistory[sortedHistory.length - 1];
     const prev = sortedHistory[sortedHistory.length - 2];
-    const latestSide = aWins ? Number(last.team_a_probability) : Number(last.team_b_probability);
-    const prevSide = aWins ? Number(prev.team_a_probability) : Number(prev.team_b_probability);
+    const latestSide = snap5(aWins ? Number(last.team_a_probability) : Number(last.team_b_probability));
+    const prevSide = snap5(aWins ? Number(prev.team_a_probability) : Number(prev.team_b_probability));
     heroDelta = latestSide - prevSide;
   }
 
@@ -588,7 +597,7 @@ function PriceTag({
       }}
     >
       <div className="text-2xl font-bold leading-none tabular-nums" style={{ color: ACCENT }}>
-        {Math.round(pct)}%
+        {snap5(pct)}%
       </div>
       <div className="text-[10px] mt-1 font-medium truncate" style={{ color: TEXT_BODY }}>
         {teamName} winning
@@ -638,7 +647,7 @@ function ChartTooltip(props: {
         Round {String(p.round).replace('R', '')}
       </div>
       <div className="text-sm font-semibold" style={{ color: ACCENT }}>
-        {Math.round(winPct)}% {winName}
+        {snap5(winPct)}% {winName}
       </div>
       {p.deltaPct != null && Math.abs(p.deltaPct) >= 0.1 && (
         <div
