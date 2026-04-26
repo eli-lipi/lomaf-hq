@@ -1,7 +1,15 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { ArrowLeft, RefreshCw, Trash2, Pencil, TrendingUp, TrendingDown, ChevronDown } from 'lucide-react';
+import {
+  ArrowLeft,
+  RefreshCw,
+  Trash2,
+  Pencil,
+  TrendingUp,
+  TrendingDown,
+  ChevronDown,
+} from 'lucide-react';
 import LogTradeModal, { type InitialTradeData } from './log-trade-modal';
 import {
   ComposedChart,
@@ -14,7 +22,6 @@ import {
   ResponsiveContainer,
   ReferenceLine,
 } from 'recharts';
-import { getTeamColor } from '@/lib/team-colors';
 import { cleanPositionDisplay } from '@/lib/trades/positions';
 import type {
   PlayerPerformance,
@@ -22,6 +29,19 @@ import type {
   TradePlayer,
   TradeProbability,
 } from '@/lib/trades/types';
+
+// ============================================================
+// Design tokens — Polymarket-inspired dark theme
+// ============================================================
+const BG = '#0A0F1C';                     // page background
+const SURFACE = 'rgba(255,255,255,0.03)'; // elevated panel
+const BORDER = 'rgba(255,255,255,0.08)';
+const ACCENT = '#A3FF12';                 // LOMAF green — winner / chart line / trade marker
+const ACCENT_FILL = 'rgba(163,255,18,0.10)';
+const TEXT = '#FFFFFF';
+const TEXT_BODY = '#9AA3B5';
+const TEXT_MUTED = '#6B7589';
+const STATUS_INJURED = '#E24B4A';
 
 interface DetailData {
   trade: Trade;
@@ -44,25 +64,67 @@ function displayPosition(p: {
   draft_position: string | null;
   raw_position: string | null;
 }): string {
-  // Prefer draft position (stable, never 'BN'). Fall back to cleaned raw_position
-  // (strips UTL/BN which are lineup slots, not real positions).
-  return p.draft_position || cleanPositionDisplay(p.raw_position) || '?';
+  return p.draft_position || cleanPositionDisplay(p.raw_position) || '—';
 }
 
 function baselineForPerformance(p: PlayerPerformance): number {
   if (p.pre_trade_avg != null && p.pre_trade_avg > 0) return p.pre_trade_avg;
-  // Use cleaned position — never match on UTL/BN which are lineup slots
   const cleaned = cleanPositionDisplay(p.draft_position) ?? cleanPositionDisplay(p.raw_position);
   const pos = p.position || (cleaned?.split('/')[0] ?? '');
   return POSITION_BASELINE[pos] ?? 70;
 }
 
+// ============================================================
+// Verdict logic — converts the current win prob into a one-line take
+// ============================================================
+type VerdictLevel = 'flip' | 'slight' | 'edge' | 'robbery';
+
+interface Verdict {
+  level: VerdictLevel;
+  text: string;
+  team: 'A' | 'B' | null;
+}
+
+function computeVerdict(probA: number, probB: number, teamAName: string, teamBName: string): Verdict {
+  const aWins = probA >= probB;
+  const winPct = aWins ? probA : probB;
+  const winName = aWins ? teamAName : teamBName;
+  const team = aWins ? 'A' : 'B';
+
+  if (winPct < 55) return { level: 'flip', text: 'Coin flip', team: null };
+  if (winPct < 65) return { level: 'slight', text: `Slight edge — ${winName}`, team };
+  if (winPct < 80) return { level: 'edge', text: `Edge — ${winName}`, team };
+  return { level: 'robbery', text: `Robbery — ${winName}`, team };
+}
+
+// ============================================================
+// Auto-zoom Y-axis logic — keeps small probability moves visible
+// ============================================================
+function autoZoomDomain(values: number[]): [number, number] {
+  if (values.length === 0) return [30, 70];
+  const min = Math.min(...values, 50);
+  const max = Math.max(...values, 50);
+  // Pad 5% on each side, snap to nearest 5
+  let yMin = Math.max(0, Math.floor((min - 5) / 5) * 5);
+  let yMax = Math.min(100, Math.ceil((max + 5) / 5) * 5);
+  // Ensure at least 20pp visible — flat lines get the 30-70 default treatment
+  if (yMax - yMin < 20) {
+    yMin = Math.max(0, Math.min(yMin, 30));
+    yMax = Math.min(100, Math.max(yMax, 70));
+  }
+  return [yMin, yMax];
+}
+
+// ============================================================
+// Main detail component
+// ============================================================
 export default function TradeDetail({ tradeId, onBack, onDeleted }: Props) {
   const [data, setData] = useState<DetailData | null>(null);
   const [loading, setLoading] = useState(true);
   const [recalculating, setRecalculating] = useState(false);
   const [editing, setEditing] = useState(false);
   const [showDetails, setShowDetails] = useState(false);
+  const [fullZoom, setFullZoom] = useState(false);
 
   const load = async () => {
     setLoading(true);
@@ -93,61 +155,62 @@ export default function TradeDetail({ tradeId, onBack, onDeleted }: Props) {
     onDeleted();
   };
 
-  // Chart data must be computed before any early returns to satisfy Rules of Hooks.
-  // We derive from `data` (which may be null on first render).
   const chartData = useMemo(() => {
-    if (!data) return [] as { round: string; probA: number; probAbove: number; probBelow: number }[];
+    if (!data) return [] as { round: string; roundNum: number; probA: number; deltaPct: number | null }[];
     const map = new Map<number, number>();
     map.set(data.trade.round_executed, 50);
     for (const p of data.probabilityHistory) {
       if (p.round_number === data.trade.round_executed) continue;
       map.set(p.round_number, Number(p.team_a_probability));
     }
-    return Array.from(map.entries())
-      .sort(([a], [b]) => a - b)
-      .map(([round, pa]) => ({
-        round: `R${round}`,
-        probA: pa,
-        probAbove: Math.max(pa, 50),
-        probBelow: Math.min(pa, 50),
-      }));
+    const sorted = Array.from(map.entries()).sort(([a], [b]) => a - b);
+    return sorted.map(([round, pa], idx) => ({
+      round: `R${round}`,
+      roundNum: round,
+      probA: pa,
+      deltaPct: idx === 0 ? null : pa - sorted[idx - 1][1],
+    }));
   }, [data]);
 
-  if (loading) return <div className="py-12 text-center text-muted-foreground">Loading...</div>;
-  if (!data) return <div className="py-12 text-center text-muted-foreground">Trade not found.</div>;
+  if (loading) {
+    return (
+      <div className="min-h-[60vh] py-12 text-center" style={{ color: TEXT_MUTED }}>
+        Loading...
+      </div>
+    );
+  }
+  if (!data) {
+    return (
+      <div className="min-h-[60vh] py-12 text-center" style={{ color: TEXT_MUTED }}>
+        Trade not found.
+      </div>
+    );
+  }
 
   const { trade, players, latestProbability, probabilityHistory, playerPerformance } = data;
   const teamAPlayers = players.filter((p) => p.receiving_team_id === trade.team_a_id);
   const teamBPlayers = players.filter((p) => p.receiving_team_id === trade.team_b_id);
   const perfById = new Map(playerPerformance.map((p) => [p.player_id, p]));
 
-  const probA = latestProbability?.team_a_probability ?? 50;
-  const probB = latestProbability?.team_b_probability ?? 50;
+  const probA = Number(latestProbability?.team_a_probability ?? 50);
+  const probB = Number(latestProbability?.team_b_probability ?? 50);
+  const verdict = computeVerdict(probA, probB, trade.team_a_name, trade.team_b_name);
+  const aWins = probA >= probB;
+  const heroPct = aWins ? probA : probB;
+  const heroName = aWins ? trade.team_a_name : trade.team_b_name;
 
-  const colorA = getTeamColor(trade.team_a_id);
-  const colorB = getTeamColor(trade.team_b_id);
-
-  // Hero side — whichever team is currently winning
-  const winningIsA = probA >= probB;
-  const heroPct = winningIsA ? probA : probB;
-  const heroTeamName = winningIsA ? trade.team_a_name : trade.team_b_name;
-  const heroColor = winningIsA ? colorA : colorB;
-
-  // Change since previous round (for the hero badge) — look at same side's previous value
+  // Delta vs prior round (for the price tag)
   const sortedHistory = [...probabilityHistory].sort((a, b) => a.round_number - b.round_number);
   let heroDelta: number | null = null;
   if (sortedHistory.length >= 2) {
     const last = sortedHistory[sortedHistory.length - 1];
     const prev = sortedHistory[sortedHistory.length - 2];
-    const latestSide = winningIsA ? Number(last.team_a_probability) : Number(last.team_b_probability);
-    const prevSide = winningIsA ? Number(prev.team_a_probability) : Number(prev.team_b_probability);
+    const latestSide = aWins ? Number(last.team_a_probability) : Number(last.team_b_probability);
+    const prevSide = aWins ? Number(prev.team_a_probability) : Number(prev.team_b_probability);
     heroDelta = latestSide - prevSide;
-  } else if (sortedHistory.length === 1) {
-    // Compare against the R(executed) 50/50 starting point
-    const last = sortedHistory[0];
-    const latestSide = winningIsA ? Number(last.team_a_probability) : Number(last.team_b_probability);
-    heroDelta = latestSide - 50;
   }
+
+  const yDomain: [number, number] = fullZoom ? [0, 100] : autoZoomDomain(chartData.map((d) => d.probA));
 
   const editInitial: InitialTradeData = {
     tradeId: trade.id,
@@ -164,293 +227,302 @@ export default function TradeDetail({ tradeId, onBack, onDeleted }: Props) {
   };
 
   return (
-    <div className="space-y-4">
-      {/* Back + actions (kept on light background) */}
+    <div
+      className="-mx-6 -my-8 px-6 py-8 min-h-screen space-y-4"
+      style={{ background: BG, color: TEXT }}
+    >
+      {/* ── Page actions row ──────────────────────────────────── */}
       <div className="flex items-center justify-between">
         <button
           onClick={onBack}
-          className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground"
+          className="flex items-center gap-2 text-sm transition-colors"
+          style={{ color: TEXT_BODY }}
+          onMouseEnter={(e) => (e.currentTarget.style.color = TEXT)}
+          onMouseLeave={(e) => (e.currentTarget.style.color = TEXT_BODY)}
         >
           <ArrowLeft size={16} /> Back to all trades
         </button>
         <div className="flex items-center gap-2">
-          <button
-            onClick={() => setEditing(true)}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-muted hover:bg-muted/80 rounded transition-colors"
-          >
-            <Pencil size={12} /> Edit
-          </button>
-          <button
+          <ActionButton onClick={() => setEditing(true)} icon={<Pencil size={12} />} label="Edit" />
+          <ActionButton
             onClick={handleRecalculate}
             disabled={recalculating}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-muted hover:bg-muted/80 rounded transition-colors disabled:opacity-50"
-          >
-            <RefreshCw size={12} className={recalculating ? 'animate-spin' : ''} />
-            Recalculate
-          </button>
-          <button
+            icon={<RefreshCw size={12} className={recalculating ? 'animate-spin' : ''} />}
+            label="Recalculate"
+          />
+          <ActionButton
             onClick={handleDelete}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50 rounded transition-colors"
-          >
-            <Trash2 size={12} /> Delete
-          </button>
+            icon={<Trash2 size={12} />}
+            label="Delete"
+            danger
+          />
         </div>
       </div>
 
-      {/* The Polymarket-style dark card */}
-      <div className="bg-[#0B1120] text-white rounded-xl p-6 md:p-8 space-y-7 shadow-lg">
-        {/* Header */}
-        <div className="text-center md:text-left">
-          <p className="text-[11px] font-bold uppercase tracking-[0.15em] text-slate-400">
-            Trade executed after Round {trade.round_executed}
+      {/* ── Strip 1: Trade header ─────────────────────────────── */}
+      <div
+        className="rounded-xl px-6 py-5 flex items-center justify-between gap-6 flex-wrap"
+        style={{ background: SURFACE, border: `1px solid ${BORDER}` }}
+      >
+        <div className="min-w-0">
+          <div className="flex items-baseline gap-3 flex-wrap">
+            <span
+              className="text-[10px] font-bold tracking-[0.15em] uppercase px-2 py-0.5 rounded"
+              style={{ background: 'rgba(163,255,18,0.10)', color: ACCENT }}
+            >
+              Trade Executed After R{trade.round_executed}
+            </span>
+            {latestProbability?.round_number != null && (
+              <span className="text-[11px]" style={{ color: TEXT_MUTED }}>
+                Updated R{latestProbability.round_number}
+              </span>
+            )}
+          </div>
+          <h1 className="text-2xl md:text-3xl font-semibold mt-2 leading-tight">
+            {trade.team_a_name} <span style={{ color: TEXT_MUTED, fontWeight: 400 }} className="mx-2">⇄</span> {trade.team_b_name}
+          </h1>
+          <p className="text-sm mt-1" style={{ color: TEXT_MUTED }}>
+            {coachByTeamId(trade.team_a_id, trade.team_a_name)}
+            <span className="mx-2" style={{ color: 'rgba(255,255,255,0.15)' }}>·</span>
+            {coachByTeamId(trade.team_b_id, trade.team_b_name)}
           </p>
-          <h2 className="text-2xl md:text-3xl font-bold mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 justify-center md:justify-start">
-            <span>{trade.team_a_name}</span>
-            <span className="text-slate-500 text-xl">←→</span>
-            <span>{trade.team_b_name}</span>
-          </h2>
         </div>
-
-        {/* Player cards — grid with the two sides */}
-        <div className="grid md:grid-cols-[1fr_auto_1fr] gap-4 items-center">
-          <div className="space-y-2">
-            <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500 text-center md:text-left">
-              {trade.team_a_name} receives
-            </p>
-            {teamAPlayers.map((p) => (
-              <PlayerCard
-                key={p.id}
-                tradePlayer={p}
-                performance={perfById.get(p.player_id)}
-              />
-            ))}
-          </div>
-          <div className="text-slate-600 text-3xl font-light text-center hidden md:block">⇄</div>
-          <div className="space-y-2">
-            <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500 text-center md:text-left">
-              {trade.team_b_name} receives
-            </p>
-            {teamBPlayers.map((p) => (
-              <PlayerCard
-                key={p.id}
-                tradePlayer={p}
-                performance={perfById.get(p.player_id)}
-              />
-            ))}
-          </div>
-        </div>
-
-        {/* Probability bar */}
-        <DarkProbabilityBar
-          teamAName={trade.team_a_name}
-          teamBName={trade.team_b_name}
-          probA={probA}
-          probB={probB}
-          colorA={colorA}
-          colorB={colorB}
-        />
-
-        {/* Trade Analysis — combines the admin-recorded context with the
-            AI narrative that re-reads the trade every round (factoring in
-            scores so far). This is the headline read of how the trade is
-            playing out. */}
-        {(latestProbability?.ai_assessment || trade.context_notes) && (
-          <div className="border-t border-slate-800 pt-5">
-            <div className="flex items-start gap-3">
-              <span className="text-xl leading-none mt-0.5">🧠</span>
-              <div className="flex-1">
-                <div className="flex items-center justify-between mb-1.5">
-                  <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
-                    Trade Analysis
-                  </p>
-                  {latestProbability?.round_number != null && (
-                    <p className="text-[10px] text-slate-500">Updated R{latestProbability.round_number}</p>
-                  )}
-                </div>
-                {trade.context_notes && (
-                  <p className="text-xs italic text-slate-400 mb-2 leading-relaxed border-l-2 border-slate-700 pl-3">
-                    &ldquo;{trade.context_notes}&rdquo;
-                  </p>
-                )}
-                {latestProbability?.ai_assessment && (
-                  <p className="text-sm text-slate-200 leading-relaxed whitespace-pre-wrap">
-                    {latestProbability.ai_assessment}
-                  </p>
-                )}
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Hero % + chart */}
-        <div className="border-t border-slate-800 pt-6 space-y-5">
-          <div className="flex items-end justify-between gap-4 flex-wrap">
-            <div>
-              <div
-                className="text-[56px] md:text-[72px] font-bold leading-none tabular-nums"
-                style={{ color: heroColor }}
-              >
-                {Math.round(heroPct)}%
-              </div>
-              <p className="text-sm text-slate-400 mt-1 font-medium">{heroTeamName} winning</p>
-            </div>
-            {heroDelta !== null && Math.abs(heroDelta) >= 0.5 && (
-              <div
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-semibold ${
-                  heroDelta >= 0
-                    ? 'bg-green-500/15 text-green-400'
-                    : 'bg-red-500/15 text-red-400'
-                }`}
-              >
-                {heroDelta >= 0 ? <TrendingUp size={14} /> : <TrendingDown size={14} />}
-                {heroDelta >= 0 ? '+' : ''}
-                {heroDelta.toFixed(1)}% since last round
-              </div>
-            )}
-          </div>
-
-          <div className="rounded-lg overflow-hidden bg-[#111827] p-4 pr-6">
-            {chartData.length < 2 ? (
-              <p className="text-sm text-slate-500 py-12 text-center">
-                No round data yet — probabilities will appear after the next round&apos;s scores are uploaded.
-              </p>
-            ) : (
-              <ResponsiveContainer width="100%" height={260}>
-                <ComposedChart data={chartData} margin={{ top: 10, right: 24, bottom: 6, left: 0 }}>
-                  <defs>
-                    <linearGradient id="heroLineFill" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor={heroColor} stopOpacity={0.25} />
-                      <stop offset="100%" stopColor={heroColor} stopOpacity={0} />
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#1F2937" vertical={false} />
-                  <XAxis
-                    dataKey="round"
-                    tick={{ fontSize: 11, fill: '#9CA3AF' }}
-                    axisLine={{ stroke: '#1F2937' }}
-                    tickLine={false}
-                  />
-                  <YAxis
-                    domain={[0, 100]}
-                    ticks={[0, 25, 50, 75, 100]}
-                    tickFormatter={(v) => `${v}%`}
-                    tick={{ fontSize: 11, fill: '#9CA3AF' }}
-                    axisLine={false}
-                    tickLine={false}
-                    width={40}
-                  />
-                  <Tooltip
-                    cursor={{ stroke: '#475569', strokeWidth: 1, strokeDasharray: '3 3' }}
-                    formatter={(value, name) => {
-                      if (name !== 'probA') return [null, null] as unknown as [string, string];
-                      const v = typeof value === 'number' ? value : Number(value);
-                      const side = v >= 50 ? trade.team_a_name : trade.team_b_name;
-                      const sidePct = v >= 50 ? v : 100 - v;
-                      return [`${Math.round(sidePct)}% ${side}`, 'Winning'];
-                    }}
-                    labelFormatter={(label) => `Round ${String(label).replace('R', '')}`}
-                    contentStyle={{
-                      fontSize: 12,
-                      background: '#0B1120',
-                      border: '1px solid #1F2937',
-                      borderRadius: 6,
-                      color: '#F3F4F6',
-                    }}
-                    labelStyle={{ color: '#9CA3AF' }}
-                  />
-                  {/* Faint area fill under the curve, only where team A is winning */}
-                  <Area
-                    type="monotone"
-                    dataKey="probAbove"
-                    stroke="none"
-                    fill={`url(#heroLineFill)`}
-                    baseValue={50}
-                    isAnimationActive={false}
-                    legendType="none"
-                    activeDot={false}
-                  />
-                  {/* Area fill when team B is winning, same subtle treatment */}
-                  <Area
-                    type="monotone"
-                    dataKey="probBelow"
-                    stroke="none"
-                    fill={colorB}
-                    fillOpacity={0.12}
-                    baseValue={50}
-                    isAnimationActive={false}
-                    legendType="none"
-                    activeDot={false}
-                  />
-                  {/* Subtle dashed EVEN line */}
-                  <ReferenceLine y={50} stroke="#374151" strokeDasharray="4 4" strokeWidth={1} />
-                  {/* The hero probability line. The last point is highlighted with a glow ring
-                      to match Polymarket's "current contract price" feel. */}
-                  <Line
-                    type="monotone"
-                    dataKey="probA"
-                    stroke={heroColor}
-                    strokeWidth={2.5}
-                    dot={((dotProps: Record<string, unknown>) => {
-                      const cx = dotProps.cx as number | undefined;
-                      const cy = dotProps.cy as number | undefined;
-                      const index = dotProps.index as number | undefined;
-                      const k = String(dotProps.key ?? index ?? '');
-                      if (cx == null || cy == null) return <g key={k} />;
-                      const isLast = index === chartData.length - 1;
-                      if (isLast) {
-                        return (
-                          <g key={k}>
-                            <circle cx={cx} cy={cy} r={9} fill={heroColor} opacity={0.2} />
-                            <circle cx={cx} cy={cy} r={5.5} fill={heroColor} stroke="#0B1120" strokeWidth={2} />
-                          </g>
-                        );
-                      }
-                      return <circle key={k} cx={cx} cy={cy} r={3} fill={heroColor} />;
-                      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                    }) as any}
-                    activeDot={{ r: 6, fill: heroColor, stroke: '#0B1120', strokeWidth: 3 }}
-                    isAnimationActive={false}
-                  />
-                </ComposedChart>
-              </ResponsiveContainer>
-            )}
-          </div>
-        </div>
-
-        {/* Show details toggle */}
-        <div className="border-t border-slate-800 pt-4 text-center">
-          <button
-            onClick={() => setShowDetails((s) => !s)}
-            className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-400 hover:text-slate-200 transition-colors"
-          >
-            {showDetails ? 'Hide detailed breakdown' : 'Show detailed breakdown'}
-            <ChevronDown
-              size={14}
-              className={`transition-transform ${showDetails ? 'rotate-180' : ''}`}
-            />
-          </button>
-        </div>
+        <VerdictPill verdict={verdict} />
       </div>
 
-      {/* Deep dive — only visible when expanded. Factor breakdown is kept in the
-          database (`trade_probabilities.factors`) but hidden from the UI per Lipi's
-          request — the numbers were confusing without context. */}
-      {showDetails && (
-        <div className="space-y-4">
-          <TradeContextPanel
-            trade={trade}
-            performance={playerPerformance}
-          />
-          <PerRoundScoresGrid
-            performance={playerPerformance}
-            roundExecuted={trade.round_executed}
-            latestRound={latestProbability?.round_number ?? trade.round_executed}
-            teamA={{ id: trade.team_a_id, name: trade.team_a_name, color: colorA }}
-            teamB={{ id: trade.team_b_id, name: trade.team_b_name, color: colorB }}
-          />
-          <PerPlayerSummary performance={playerPerformance} />
+      {/* ── Strip 2: The chart (the hero) ─────────────────────── */}
+      <div
+        className="rounded-xl p-5"
+        style={{ background: SURFACE, border: `1px solid ${BORDER}` }}
+      >
+        {chartData.length < 2 ? (
+          <p className="text-sm py-16 text-center" style={{ color: TEXT_MUTED }}>
+            No round data yet — probabilities will appear after the next round&apos;s scores are uploaded.
+          </p>
+        ) : (
+          <>
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="text-[10px] font-bold uppercase tracking-[0.15em]" style={{ color: TEXT_MUTED }}>
+                Win Probability
+              </h2>
+              <button
+                onClick={() => setFullZoom((v) => !v)}
+                className="text-[11px] transition-colors"
+                style={{ color: fullZoom ? ACCENT : TEXT_MUTED }}
+              >
+                {fullZoom ? 'Auto-zoom' : 'Show 0–100%'}
+              </button>
+            </div>
+            <div className="relative">
+            <ResponsiveContainer width="100%" height={400}>
+              <ComposedChart data={chartData} margin={{ top: 16, right: 16, bottom: 6, left: 6 }}>
+                <defs>
+                  <linearGradient id="winFill" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor={ACCENT} stopOpacity={0.20} />
+                    <stop offset="100%" stopColor={ACCENT} stopOpacity={0} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false} />
+                <XAxis
+                  dataKey="round"
+                  tick={{ fontSize: 11, fill: TEXT_MUTED }}
+                  axisLine={{ stroke: BORDER }}
+                  tickLine={false}
+                />
+                <YAxis
+                  domain={yDomain}
+                  ticks={generateTicks(yDomain)}
+                  tickFormatter={(v) => `${v}%`}
+                  tick={{ fontSize: 11, fill: TEXT_MUTED }}
+                  axisLine={false}
+                  tickLine={false}
+                  width={40}
+                />
+                <Tooltip
+                  cursor={{ stroke: 'rgba(255,255,255,0.20)', strokeWidth: 1, strokeDasharray: '3 3' }}
+                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                  content={(props: any) => (
+                    <ChartTooltip
+                      {...props}
+                      teamAName={trade.team_a_name}
+                      teamBName={trade.team_b_name}
+                    />
+                  )}
+                />
+                {/* 50% coin-flip baseline */}
+                <ReferenceLine
+                  y={50}
+                  stroke="rgba(255,255,255,0.20)"
+                  strokeDasharray="4 4"
+                  strokeWidth={1}
+                  label={{
+                    value: 'Coin flip',
+                    position: 'left',
+                    fill: TEXT_MUTED,
+                    fontSize: 10,
+                    offset: 8,
+                  }}
+                />
+                {/* Trade-executed vertical anchor */}
+                <ReferenceLine
+                  x={`R${trade.round_executed}`}
+                  stroke={ACCENT}
+                  strokeOpacity={0.45}
+                  strokeDasharray="2 4"
+                  label={{
+                    value: 'Trade Executed',
+                    position: 'insideTopLeft',
+                    fill: ACCENT,
+                    fontSize: 10,
+                    offset: 6,
+                  }}
+                />
+                {/* Area fill under the WHOLE curve, not just one half */}
+                <Area
+                  type="monotone"
+                  dataKey="probA"
+                  stroke="none"
+                  fill="url(#winFill)"
+                  isAnimationActive={false}
+                  legendType="none"
+                  activeDot={false}
+                />
+                {/* The probability line */}
+                <Line
+                  type="monotone"
+                  dataKey="probA"
+                  stroke={ACCENT}
+                  strokeWidth={2.5}
+                  dot={((dotProps: Record<string, unknown>) => {
+                    const cx = dotProps.cx as number | undefined;
+                    const cy = dotProps.cy as number | undefined;
+                    const index = dotProps.index as number | undefined;
+                    const k = String(dotProps.key ?? index ?? '');
+                    if (cx == null || cy == null) return <g key={k} />;
+                    const isLast = index === chartData.length - 1;
+                    if (isLast) {
+                      return (
+                        <g key={k}>
+                          <circle cx={cx} cy={cy} r={9} fill={ACCENT} opacity={0.25} />
+                          <circle
+                            cx={cx}
+                            cy={cy}
+                            r={5.5}
+                            fill={ACCENT}
+                            stroke={BG}
+                            strokeWidth={2}
+                          />
+                        </g>
+                      );
+                    }
+                    return <circle key={k} cx={cx} cy={cy} r={3.5} fill={ACCENT} stroke={BG} strokeWidth={1.5} />;
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                  }) as any}
+                  activeDot={{ r: 7, fill: ACCENT, stroke: BG, strokeWidth: 3 }}
+                  isAnimationActive={false}
+                />
+              </ComposedChart>
+            </ResponsiveContainer>
+            {/* Price tag — anchored to the top-right of the chart panel.
+                Polymarket-style "current price in the corner". */}
+            <div className="absolute top-2 right-3 pointer-events-none">
+              <PriceTag pct={heroPct} teamName={heroName} delta={heroDelta} />
+            </div>
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* ── Strip 3: Trade analysis ───────────────────────────── */}
+      {(latestProbability?.ai_assessment || trade.context_notes) && (
+        <div
+          className="rounded-xl p-6"
+          style={{ background: SURFACE, border: `1px solid ${BORDER}` }}
+        >
+          <div className="flex items-baseline justify-between gap-3 mb-3">
+            <h2 className="text-[10px] font-bold uppercase tracking-[0.15em]" style={{ color: TEXT_MUTED }}>
+              Trade Analysis
+            </h2>
+            {latestProbability?.round_number != null && (
+              <span className="text-[10px]" style={{ color: TEXT_MUTED }}>
+                Updated R{latestProbability.round_number}
+              </span>
+            )}
+          </div>
+          {latestProbability?.ai_assessment && (
+            <AnalysisBody narrative={latestProbability.ai_assessment} />
+          )}
+          {trade.context_notes && (
+            <p
+              className="text-sm italic mt-4 pl-4 leading-relaxed"
+              style={{
+                color: TEXT_BODY,
+                borderLeft: `2px solid ${ACCENT}`,
+                fontFamily: 'Georgia, "Times New Roman", serif',
+              }}
+            >
+              &ldquo;{trade.context_notes}&rdquo;
+            </p>
+          )}
         </div>
       )}
+
+      {/* ── Strip 4: Players in the trade (compact rows) ──────── */}
+      <div
+        className="rounded-xl p-5"
+        style={{ background: SURFACE, border: `1px solid ${BORDER}` }}
+      >
+        <h2 className="text-[10px] font-bold uppercase tracking-[0.15em] mb-3" style={{ color: TEXT_MUTED }}>
+          Players in the Trade
+        </h2>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-3">
+          <PlayerRowGroup
+            heading={`${trade.team_a_name} received`}
+            tradePlayers={teamAPlayers}
+            perfById={perfById}
+          />
+          <PlayerRowGroup
+            heading={`${trade.team_b_name} received`}
+            tradePlayers={teamBPlayers}
+            perfById={perfById}
+          />
+        </div>
+      </div>
+
+      {/* ── Strip 5: Round-by-round breakdown (collapsed) ─────── */}
+      <div
+        className="rounded-xl"
+        style={{ background: SURFACE, border: `1px solid ${BORDER}` }}
+      >
+        <button
+          onClick={() => setShowDetails((v) => !v)}
+          className="w-full flex items-center justify-between px-5 py-4 text-left transition-colors"
+          style={{ color: TEXT_BODY }}
+          onMouseEnter={(e) => (e.currentTarget.style.color = TEXT)}
+          onMouseLeave={(e) => (e.currentTarget.style.color = TEXT_BODY)}
+        >
+          <span className="text-sm font-medium">
+            {showDetails ? 'Hide' : 'Show'} round-by-round breakdown
+          </span>
+          <ChevronDown
+            size={16}
+            className={`transition-transform ${showDetails ? 'rotate-180' : ''}`}
+          />
+        </button>
+        {showDetails && (
+          <div style={{ borderTop: `1px solid ${BORDER}` }} className="px-5 py-5">
+            <DarkScoresGrid
+              performance={playerPerformance}
+              roundExecuted={trade.round_executed}
+              latestRound={latestProbability?.round_number ?? trade.round_executed}
+              teamAName={trade.team_a_name}
+              teamAId={trade.team_a_id}
+              teamBName={trade.team_b_name}
+              teamBId={trade.team_b_id}
+            />
+          </div>
+        )}
+      </div>
 
       {editing && (
         <LogTradeModal
@@ -467,274 +539,398 @@ export default function TradeDetail({ tradeId, onBack, onDeleted }: Props) {
 }
 
 // ============================================================
-// Dark player card — one per player in the trade
+// Header verdict pill
 // ============================================================
+function VerdictPill({ verdict }: { verdict: Verdict }) {
+  const isFlip = verdict.level === 'flip';
+  return (
+    <div
+      className="px-4 py-2 rounded-lg flex items-center gap-2"
+      style={{
+        background: isFlip ? 'rgba(255,255,255,0.04)' : 'rgba(163,255,18,0.08)',
+        border: `1px solid ${isFlip ? BORDER : 'rgba(163,255,18,0.30)'}`,
+      }}
+    >
+      <span
+        className="w-1.5 h-1.5 rounded-full"
+        style={{ background: isFlip ? TEXT_MUTED : ACCENT }}
+      />
+      <span
+        className="text-sm font-semibold whitespace-nowrap"
+        style={{ color: isFlip ? TEXT_BODY : ACCENT }}
+      >
+        {verdict.text}
+      </span>
+    </div>
+  );
+}
 
-function PlayerCard({
+// ============================================================
+// Right-edge price tag (the one fused to the chart line)
+// ============================================================
+function PriceTag({
+  pct,
+  teamName,
+  delta,
+}: {
+  pct: number;
+  teamName: string;
+  delta: number | null;
+}) {
+  return (
+    <div
+      className="rounded-lg px-3 py-2 text-right"
+      style={{
+        background: 'rgba(10,15,28,0.85)',
+        border: `1px solid ${BORDER}`,
+        backdropFilter: 'blur(4px)',
+        minWidth: 100,
+      }}
+    >
+      <div className="text-2xl font-bold leading-none tabular-nums" style={{ color: ACCENT }}>
+        {Math.round(pct)}%
+      </div>
+      <div className="text-[10px] mt-1 font-medium truncate" style={{ color: TEXT_BODY }}>
+        {teamName} winning
+      </div>
+      {delta != null && Math.abs(delta) >= 0.5 && (
+        <div
+          className="text-[10px] mt-1 flex items-center justify-end gap-0.5 font-semibold tabular-nums"
+          style={{ color: delta >= 0 ? ACCENT : STATUS_INJURED }}
+        >
+          {delta >= 0 ? <TrendingUp size={10} /> : <TrendingDown size={10} />}
+          {delta >= 0 ? '+' : ''}
+          {delta.toFixed(1)}%
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ============================================================
+// Chart tooltip — dark, with WoW change
+// ============================================================
+function ChartTooltip(props: {
+  active?: boolean;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  payload?: any[];
+  label?: string;
+  teamAName: string;
+  teamBName: string;
+}) {
+  if (!props.active || !props.payload?.length) return null;
+  const p = props.payload[0]?.payload as { probA: number; deltaPct: number | null; round: string } | undefined;
+  if (!p) return null;
+  const winName = p.probA >= 50 ? props.teamAName : props.teamBName;
+  const winPct = p.probA >= 50 ? p.probA : 100 - p.probA;
+  return (
+    <div
+      style={{
+        background: BG,
+        border: `1px solid ${BORDER}`,
+        borderRadius: 8,
+        padding: '8px 10px',
+        minWidth: 130,
+        boxShadow: '0 4px 24px rgba(0,0,0,0.4)',
+      }}
+    >
+      <div className="text-[10px] uppercase tracking-wider mb-1" style={{ color: TEXT_MUTED }}>
+        Round {String(p.round).replace('R', '')}
+      </div>
+      <div className="text-sm font-semibold" style={{ color: ACCENT }}>
+        {Math.round(winPct)}% {winName}
+      </div>
+      {p.deltaPct != null && Math.abs(p.deltaPct) >= 0.1 && (
+        <div
+          className="text-[10px] mt-0.5 tabular-nums"
+          style={{ color: p.deltaPct >= 0 ? ACCENT : STATUS_INJURED }}
+        >
+          {p.deltaPct >= 0 ? '+' : ''}
+          {p.deltaPct.toFixed(1)}% vs prev round
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ============================================================
+// Trade analysis body — splits AI narrative into headline + body
+// ============================================================
+function AnalysisBody({ narrative }: { narrative: string }) {
+  const trimmed = narrative.trim();
+  // Treat first sentence as the headline
+  const match = trimmed.match(/^[^.!?]+[.!?]/);
+  const headline = match ? match[0].trim() : trimmed;
+  const rest = match ? trimmed.slice(match[0].length).trim() : '';
+  return (
+    <>
+      <p className="text-lg font-medium leading-snug" style={{ color: TEXT }}>
+        {headline}
+      </p>
+      {rest && (
+        <p className="text-sm mt-2 leading-relaxed" style={{ color: TEXT_BODY }}>
+          {rest}
+        </p>
+      )}
+    </>
+  );
+}
+
+// ============================================================
+// Player row group (one column — "Team X received")
+// ============================================================
+function PlayerRowGroup({
+  heading,
+  tradePlayers,
+  perfById,
+}: {
+  heading: string;
+  tradePlayers: TradePlayer[];
+  perfById: Map<number, PlayerPerformance>;
+}) {
+  return (
+    <div>
+      <p className="text-[10px] font-bold uppercase tracking-[0.15em] mb-2" style={{ color: TEXT_MUTED }}>
+        {heading}
+      </p>
+      <div className="space-y-1">
+        {tradePlayers.length === 0 && (
+          <p className="text-xs italic" style={{ color: TEXT_MUTED }}>—</p>
+        )}
+        {tradePlayers.map((tp) => {
+          const perf = perfById.get(tp.player_id);
+          return <PlayerRow key={tp.id} tradePlayer={tp} performance={perf} />;
+        })}
+      </div>
+    </div>
+  );
+}
+
+function PlayerRow({
   tradePlayer,
   performance,
 }: {
   tradePlayer: TradePlayer;
   performance: PlayerPerformance | undefined;
 }) {
+  const [expanded, setExpanded] = useState(false);
   const injured = performance?.injured ?? false;
   const pos = performance
     ? displayPosition(performance)
-    : cleanPositionDisplay(tradePlayer.raw_position) ?? '?';
-  const pre = tradePlayer.pre_trade_avg;          // Predicted average — the bar this trade was made on
+    : cleanPositionDisplay(tradePlayer.raw_position) ?? '—';
+  const pre = tradePlayer.pre_trade_avg;
   const post = performance?.post_trade_avg ?? 0;
-  const roundsPlayed = performance?.rounds_played ?? 0;
-
-  const hasPost = roundsPlayed > 0;
+  const hasPost = (performance?.rounds_played ?? 0) > 0;
   const delta = hasPost && pre != null ? post - pre : null;
 
-  return (
-    <div className="bg-slate-800/60 border border-slate-700/70 rounded-lg px-4 py-3">
-      <div className="flex items-start justify-between gap-2">
-        <div className="min-w-0 flex-1">
-          <p className="font-semibold text-white truncate">{tradePlayer.player_name}</p>
-          <p className="text-[11px] text-slate-400 mt-0.5 tabular-nums">
-            <span className="font-medium">{pos}</span>
-          </p>
+  const statusColor = injured ? STATUS_INJURED : ACCENT;
+  const statusLabel = injured ? 'Injured' : 'Active';
 
-          {/* Predicted vs Actual mini-summary. Pre-trade avg is the implicit
-              prediction — what this trade was made on. Below that bar means
-              the trade is failing on output. */}
-          <div className="mt-2 grid grid-cols-2 gap-x-3 text-[11px] tabular-nums">
-            <div>
-              <p className="text-[9px] uppercase tracking-wider text-slate-500">Predicted</p>
-              <p className="text-slate-300 font-medium">
-                {pre != null && pre > 0 ? pre.toFixed(0) : '—'}
-              </p>
-            </div>
-            <div>
-              <p className="text-[9px] uppercase tracking-wider text-slate-500">Actual</p>
-              <p className="text-slate-300 font-medium">
-                {hasPost ? post.toFixed(0) : <span className="text-slate-500">—</span>}
-                {delta != null && (
-                  <span
-                    className={`ml-1.5 text-[10px] ${delta >= 0 ? 'text-green-400' : 'text-red-400'}`}
-                  >
-                    {delta >= 0 ? '+' : ''}
-                    {delta.toFixed(0)}
-                  </span>
-                )}
-              </p>
-            </div>
-          </div>
-        </div>
+  // Inline mini-trajectory data when expanded
+  const traj = useMemo(() => {
+    if (!performance) return [] as { round: number; pts: number | null }[];
+    const all: { round: number; pts: number | null }[] = [
+      ...(performance.pre_trade_round_scores ?? []).map((s) => ({ round: s.round, pts: s.points })),
+      ...performance.round_scores.map((s) => ({ round: s.round, pts: s.points })),
+    ];
+    return all.sort((a, b) => a.round - b.round);
+  }, [performance]);
+
+  return (
+    <div
+      className="rounded-md transition-colors"
+      style={{
+        background: expanded ? 'rgba(255,255,255,0.03)' : 'transparent',
+      }}
+    >
+      <button
+        onClick={() => setExpanded((v) => !v)}
+        className="w-full flex items-center gap-3 px-2 py-2 text-left"
+      >
         <span
-          className={`text-[10px] font-semibold px-2 py-0.5 rounded-full shrink-0 ${
-            injured
-              ? 'bg-red-500/20 text-red-400'
-              : 'bg-green-500/20 text-green-400'
-          }`}
-        >
-          {injured ? '🔴 Injured' : '✅ Active'}
+          className="w-1.5 h-1.5 rounded-full shrink-0"
+          style={{ background: statusColor }}
+          title={statusLabel}
+        />
+        <span className="font-medium text-sm truncate flex-1" style={{ color: TEXT }}>
+          {tradePlayer.player_name}
         </span>
-      </div>
-    </div>
-  );
-}
-
-// ============================================================
-// Dark probability bar (inlined for the hero card)
-// ============================================================
-
-function DarkProbabilityBar({
-  teamAName,
-  teamBName,
-  probA,
-  probB,
-  colorA,
-  colorB,
-}: {
-  teamAName: string;
-  teamBName: string;
-  probA: number;
-  probB: number;
-  colorA: string;
-  colorB: string;
-}) {
-  const showAInside = probA >= 20;
-  const showBInside = probB >= 20;
-
-  return (
-    <div className="w-full">
-      {(!showAInside || !showBInside) && (
-        <div className="flex items-center justify-between mb-1.5 text-sm font-semibold">
-          {!showAInside ? (
-            <span className="flex items-center gap-1.5" style={{ color: colorA }}>
-              <span className="w-2 h-2 rounded-full" style={{ backgroundColor: colorA }} />
-              {teamAName} {Math.round(probA)}%
+        <span className="text-[10px] tabular-nums shrink-0" style={{ color: TEXT_MUTED }}>
+          {pos}
+        </span>
+        <span className="text-xs tabular-nums shrink-0" style={{ color: TEXT_BODY }}>
+          {pre != null && pre > 0 ? pre.toFixed(0) : '—'}{' '}
+          <span style={{ color: TEXT_MUTED }}>→</span>{' '}
+          <span style={{ color: TEXT }}>{hasPost ? post.toFixed(0) : '—'}</span>
+          {delta != null && (
+            <span
+              className="ml-1.5"
+              style={{ color: delta >= 0 ? ACCENT : STATUS_INJURED }}
+            >
+              ({delta >= 0 ? '+' : ''}
+              {delta.toFixed(0)})
             </span>
-          ) : (
-            <span />
           )}
-          {!showBInside ? (
-            <span className="flex items-center gap-1.5" style={{ color: colorB }}>
-              {teamBName} {Math.round(probB)}%
-              <span className="w-2 h-2 rounded-full" style={{ backgroundColor: colorB }} />
-            </span>
-          ) : (
-            <span />
-          )}
-        </div>
+        </span>
+      </button>
+      {expanded && traj.length > 0 && (
+        <MiniTrajectory traj={traj} roundExecuted={tradePlayer.player_id ? undefined : undefined} performance={performance} />
       )}
-      <div className="relative w-full rounded-lg overflow-hidden flex" style={{ height: 36 }}>
-        <div
-          className="h-full flex items-center pl-3 transition-all duration-300"
-          style={{ width: `${probA}%`, backgroundColor: colorA }}
-        >
-          {showAInside && (
-            <div className="flex items-baseline gap-2 text-white truncate">
-              <span className="text-lg font-bold tabular-nums">{Math.round(probA)}%</span>
-              <span className="text-xs font-medium opacity-90 truncate">{teamAName}</span>
-            </div>
-          )}
-        </div>
-        <div
-          className="h-full flex items-center justify-end pr-3 transition-all duration-300"
-          style={{ width: `${probB}%`, backgroundColor: colorB }}
-        >
-          {showBInside && (
-            <div className="flex items-baseline gap-2 text-white truncate">
-              <span className="text-xs font-medium opacity-90 truncate">{teamBName}</span>
-              <span className="text-lg font-bold tabular-nums">{Math.round(probB)}%</span>
-            </div>
-          )}
-        </div>
-      </div>
     </div>
   );
 }
 
-// ============================================================
-// Deep-dive: Trade Context — original notes + per-player predicted averages
-// (the bar this trade was made on; pre_trade_avg is treated as the prediction)
-// ============================================================
-
-function TradeContextPanel({
-  trade,
+function MiniTrajectory({
+  traj,
   performance,
 }: {
-  trade: Trade;
-  performance: PlayerPerformance[];
+  traj: { round: number; pts: number | null }[];
+  roundExecuted?: number;
+  performance: PlayerPerformance | undefined;
 }) {
-  const teamA = performance.filter((p) => p.receiving_team_id === trade.team_a_id);
-  const teamB = performance.filter((p) => p.receiving_team_id === trade.team_b_id);
-
+  if (!performance) return null;
+  const baseline = baselineForPerformance(performance);
   return (
-    <div className="bg-white border border-border rounded-lg p-5">
-      <h3 className="text-sm font-semibold mb-1">Trade Context</h3>
-      <p className="text-xs text-muted-foreground mb-4">
-        The bar each player needs to hit for this trade to make sense. Predicted ={' '}
-        <span className="italic">pre-trade season average</span>.
-      </p>
-
-      {trade.context_notes && (
-        <p className="text-xs italic text-muted-foreground border-l-2 border-border pl-3 mb-4 leading-relaxed">
-          &ldquo;{trade.context_notes}&rdquo;
-        </p>
-      )}
-
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-4">
-        <PredictedSide
-          heading={`${trade.team_a_name} received`}
-          players={teamA}
-        />
-        <PredictedSide
-          heading={`${trade.team_b_name} received`}
-          players={teamB}
-        />
-      </div>
+    <div className="px-2 pb-3 grid grid-flow-col auto-cols-fr gap-1">
+      {traj.map((s) => {
+        const cell = scoreCellStyle(s.pts, baseline);
+        return (
+          <div
+            key={s.round}
+            className="rounded text-center py-1.5 text-[11px] tabular-nums"
+            style={{
+              background: cell.bg,
+              color: cell.color,
+              border: `1px solid ${cell.border}`,
+            }}
+            title={`R${s.round}`}
+          >
+            <div className="text-[9px] opacity-60 leading-none mb-0.5">R{s.round}</div>
+            <div className="font-semibold leading-none">
+              {s.pts == null ? 'DNP' : s.pts}
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }
 
-function PredictedSide({
-  heading,
-  players,
+// ============================================================
+// Action button (Edit / Recalc / Delete)
+// ============================================================
+function ActionButton({
+  onClick,
+  icon,
+  label,
+  disabled,
+  danger,
 }: {
-  heading: string;
-  players: PlayerPerformance[];
+  onClick: () => void;
+  icon: React.ReactNode;
+  label: string;
+  disabled?: boolean;
+  danger?: boolean;
 }) {
   return (
-    <div>
-      <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-2">
-        {heading}
-      </p>
-      <ul className="space-y-1.5">
-        {players.length === 0 && <li className="text-xs italic text-muted-foreground">—</li>}
-        {players.map((p) => {
-          const predicted = p.pre_trade_avg;
-          const actual = p.rounds_played > 0 ? p.post_trade_avg : null;
-          const delta = actual != null && predicted != null ? actual - predicted : null;
-          return (
-            <li key={p.player_id} className="flex items-baseline justify-between gap-3 text-sm">
-              <span className="truncate font-medium">
-                {p.player_name}
-                <span className="text-muted-foreground ml-1 text-xs">({displayPosition(p)})</span>
-              </span>
-              <span className="text-xs text-muted-foreground tabular-nums shrink-0">
-                Predicted{' '}
-                <span className="font-semibold text-foreground">
-                  {predicted != null && predicted > 0 ? predicted.toFixed(0) : '—'}
-                </span>
-                {actual != null && (
-                  <>
-                    {' · '}
-                    Actual{' '}
-                    <span className="font-semibold text-foreground">{actual.toFixed(0)}</span>
-                    {delta != null && (
-                      <span
-                        className={`ml-1 ${delta >= 0 ? 'text-green-600' : 'text-red-600'}`}
-                      >
-                        ({delta >= 0 ? '+' : ''}
-                        {delta.toFixed(0)})
-                      </span>
-                    )}
-                  </>
-                )}
-              </span>
-            </li>
-          );
-        })}
-      </ul>
-    </div>
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md transition-colors disabled:opacity-50"
+      style={{
+        background: 'rgba(255,255,255,0.04)',
+        border: `1px solid ${BORDER}`,
+        color: danger ? STATUS_INJURED : TEXT_BODY,
+      }}
+      onMouseEnter={(e) => {
+        e.currentTarget.style.background = 'rgba(255,255,255,0.08)';
+        if (!danger) e.currentTarget.style.color = TEXT;
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.background = 'rgba(255,255,255,0.04)';
+        if (!danger) e.currentTarget.style.color = TEXT_BODY;
+      }}
+    >
+      {icon} {label}
+    </button>
   );
 }
 
 // ============================================================
-// Deep-dive: Per-round scores grid — pre/post timeline split
+// Helpers
 // ============================================================
+function generateTicks([min, max]: [number, number]): number[] {
+  const range = max - min;
+  // Aim for 4-6 ticks
+  const step = range <= 20 ? 5 : range <= 40 ? 10 : 25;
+  const ticks: number[] = [];
+  for (let v = Math.ceil(min / step) * step; v <= max; v += step) ticks.push(v);
+  // Always include 50 if it's in range
+  if (50 >= min && 50 <= max && !ticks.includes(50)) ticks.push(50);
+  return ticks.sort((a, b) => a - b);
+}
 
-function PerRoundScoresGrid({
+function coachByTeamId(_id: number, fallback: string): string {
+  // Use client-side lookup against TEAMS — kept in a separate import to avoid
+  // circular issues. We import inline-ish here.
+  // Lazy require pattern; defer to module-scoped constant.
+  return TEAM_COACH_LOOKUP[_id] ?? fallback;
+}
+
+// Filled at module init to avoid re-iterating TEAMS on every render
+import { TEAMS } from '@/lib/constants';
+const TEAM_COACH_LOOKUP: Record<number, string> = Object.fromEntries(
+  TEAMS.map((t) => [t.team_id, t.coach])
+);
+
+function scoreCellStyle(
+  pts: number | null,
+  baseline: number
+): { bg: string; color: string; border: string } {
+  if (pts == null) {
+    return {
+      bg: 'rgba(255,255,255,0.02)',
+      color: TEXT_MUTED,
+      border: 'rgba(255,255,255,0.04)',
+    };
+  }
+  const diff = pts - baseline;
+  if (diff >= 20) return { bg: 'rgba(163,255,18,0.18)', color: ACCENT, border: 'rgba(163,255,18,0.30)' };
+  if (diff >= 5) return { bg: 'rgba(163,255,18,0.08)', color: ACCENT, border: 'rgba(163,255,18,0.18)' };
+  if (diff <= -20) return { bg: 'rgba(226,75,74,0.15)', color: STATUS_INJURED, border: 'rgba(226,75,74,0.30)' };
+  if (diff <= -5) return { bg: 'rgba(226,75,74,0.08)', color: '#F0B0AF', border: 'rgba(226,75,74,0.18)' };
+  return { bg: 'rgba(255,255,255,0.04)', color: TEXT_BODY, border: 'rgba(255,255,255,0.06)' };
+}
+
+// ============================================================
+// Dark-themed scores grid (replaces the old white-table version)
+// ============================================================
+function DarkScoresGrid({
   performance,
   roundExecuted,
   latestRound,
-  teamA,
-  teamB,
+  teamAName,
+  teamAId,
+  teamBName,
+  teamBId,
 }: {
   performance: PlayerPerformance[];
   roundExecuted: number;
   latestRound: number;
-  teamA: { id: number; name: string; color: string };
-  teamB: { id: number; name: string; color: string };
+  teamAName: string;
+  teamAId: number;
+  teamBName: string;
+  teamBId: number;
 }) {
   if (performance.length === 0) {
     return (
-      <div className="bg-white border border-border rounded-lg p-5">
-        <h3 className="text-sm font-semibold mb-1">Scores</h3>
-        <p className="text-sm text-muted-foreground py-4 text-center">
-          No players found for this trade.
-        </p>
-      </div>
+      <p className="text-sm text-center py-4" style={{ color: TEXT_MUTED }}>
+        No players found for this trade.
+      </p>
     );
   }
 
-  // Pre-trade rounds: union of pre_trade_round_scores rounds across all players,
-  // capped at round_executed. (We don't go below R1.)
+  // Pre/post round axes
   const preRoundsSet = new Set<number>();
   for (const p of performance) {
     for (const s of p.pre_trade_round_scores ?? []) {
@@ -742,292 +938,173 @@ function PerRoundScoresGrid({
     }
   }
   const preRounds = Array.from(preRoundsSet).sort((a, b) => a - b);
-
-  // Post-trade rounds run from round_executed+1 up to latestRound. The grid
-  // skips this section entirely if no post-trade data exists.
   const postRounds: number[] = [];
   for (let r = roundExecuted + 1; r <= latestRound; r++) postRounds.push(r);
 
-  const cellClass = (
-    pts: number | null | undefined,
-    hasRound: boolean,
-    baseline: number
-  ): string => {
-    if (!hasRound) return 'bg-gray-50 text-muted-foreground';
-    if (pts == null) return 'bg-gray-100 text-gray-500 italic';
-    const diff = pts - baseline;
-    if (diff >= 20) return 'bg-green-200 text-green-900 font-bold';
-    if (diff >= 5) return 'bg-green-50 text-green-800';
-    if (diff <= -20) return 'bg-red-100 text-red-800';
-    if (diff <= -5) return 'bg-orange-50 text-orange-800';
-    return 'bg-gray-50 text-gray-700';
-  };
+  const sideA = performance.filter((p) => p.receiving_team_id === teamAId);
+  const sideB = performance.filter((p) => p.receiving_team_id === teamBId);
 
-  // Group players by which side received them
-  const sideA = performance.filter((p) => p.receiving_team_id === teamA.id);
-  const sideB = performance.filter((p) => p.receiving_team_id === teamB.id);
-
-  const renderPlayerRow = (p: PlayerPerformance) => {
+  const renderRow = (p: PlayerPerformance) => {
     const baseline = baselineForPerformance(p);
     const preMap = new Map<number, number | null>();
     for (const s of p.pre_trade_round_scores ?? []) preMap.set(s.round, s.points);
     const postMap = new Map<number, number | null>();
     for (const s of p.round_scores) postMap.set(s.round, s.points);
 
-    // Pre and post averages computed from actual played rounds (DNPs excluded
-    // from the divisor — matches how the pre_trade_avg was calculated at trade time).
     const prePlayed = (p.pre_trade_round_scores ?? []).filter((s) => s.points != null);
-    const preAvg =
-      prePlayed.length > 0
-        ? prePlayed.reduce((sum, s) => sum + (s.points ?? 0), 0) / prePlayed.length
-        : null;
+    const preAvg = prePlayed.length > 0 ? prePlayed.reduce((a, s) => a + (s.points ?? 0), 0) / prePlayed.length : null;
     const postPlayed = p.round_scores.filter((s) => s.points != null);
-    const postAvg =
-      postPlayed.length > 0
-        ? postPlayed.reduce((sum, s) => sum + (s.points ?? 0), 0) / postPlayed.length
-        : null;
+    const postAvg = postPlayed.length > 0 ? postPlayed.reduce((a, s) => a + (s.points ?? 0), 0) / postPlayed.length : null;
 
     return (
-      <tr key={p.player_id} className="border-b border-border last:border-0">
-        <td className="py-2 pr-3 font-medium whitespace-nowrap text-sm">
-          {p.player_name}
-          <span className="text-muted-foreground ml-1 text-xs">({displayPosition(p)})</span>
+      <tr key={p.player_id} style={{ borderTop: `1px solid ${BORDER}` }}>
+        <td className="py-2 pr-3 whitespace-nowrap text-sm">
+          <span className="font-medium" style={{ color: TEXT }}>
+            {p.player_name}
+          </span>{' '}
+          <span className="text-[11px] ml-1" style={{ color: TEXT_MUTED }}>
+            ({displayPosition(p)})
+          </span>
         </td>
-
-        {/* Pre-trade columns */}
         {preRounds.map((r) => {
           const pts = preMap.get(r);
-          const hasRound = preMap.has(r);
           return (
-            <td key={`pre-${r}`} className="py-1 px-1 text-center">
-              <span
-                className={`inline-block min-w-[2.25rem] px-1.5 py-0.5 rounded text-xs tabular-nums ${cellClass(pts, hasRound, baseline)}`}
-              >
-                {!hasRound ? '—' : pts == null ? 'DNP' : pts}
-              </span>
+            <td key={`pre-${r}`} className="px-1 py-1 text-center">
+              <ScoreCell pts={pts === undefined ? null : pts} hasRound={preMap.has(r)} baseline={baseline} />
             </td>
           );
         })}
-
-        {/* Pre avg */}
-        <td className="py-2 px-2 text-right text-xs tabular-nums text-muted-foreground border-l border-border">
+        <td className="px-2 py-2 text-right text-xs tabular-nums" style={{ color: TEXT_MUTED, borderLeft: `1px solid ${BORDER}` }}>
           {preAvg != null ? preAvg.toFixed(0) : '—'}
         </td>
-
-        {/* TRADE separator — heavy vertical bar */}
         <td className="px-1" style={{ width: 4 }}>
-          <div className="h-7 w-1 mx-auto bg-primary rounded-full" />
+          <div className="h-7 w-1 mx-auto rounded-full" style={{ background: ACCENT }} />
         </td>
-
-        {/* Post-trade columns */}
         {postRounds.map((r) => {
           const pts = postMap.get(r);
-          const hasRound = postMap.has(r);
           return (
-            <td key={`post-${r}`} className="py-1 px-1 text-center">
-              <span
-                className={`inline-block min-w-[2.25rem] px-1.5 py-0.5 rounded text-xs tabular-nums ${cellClass(pts, hasRound, baseline)}`}
-              >
-                {!hasRound ? '—' : pts == null ? 'DNP' : pts}
-              </span>
+            <td key={`post-${r}`} className="px-1 py-1 text-center">
+              <ScoreCell pts={pts === undefined ? null : pts} hasRound={postMap.has(r)} baseline={baseline} />
             </td>
           );
         })}
-
-        {/* Post avg */}
-        <td className="py-2 pl-3 text-right text-sm font-semibold tabular-nums">
+        <td className="pl-3 py-2 text-right text-sm font-semibold tabular-nums" style={{ color: TEXT }}>
           {postAvg != null ? postAvg.toFixed(0) : '—'}
         </td>
       </tr>
     );
   };
 
+  const colSpan = 1 + preRounds.length + 1 + 1 + postRounds.length + 1;
+
   return (
-    <div className="bg-white border border-border rounded-lg p-5">
-      <h3 className="text-sm font-semibold mb-1">Scores</h3>
-      <p className="text-xs text-muted-foreground mb-4">
-        Pre-trade scores on the left, post-trade on the right — with the trade marked. Cells colored
-        vs. the player&apos;s expected output (green = above, red = below).
-      </p>
-      <div className="overflow-x-auto">
-        <table className="w-full text-sm border-collapse">
-          <thead>
-            <tr className="text-[10px] uppercase tracking-wider text-muted-foreground">
-              <th className="py-1 pr-3 text-left font-medium">Player</th>
-              {preRounds.length > 0 && (
-                <th
-                  colSpan={preRounds.length}
-                  className="py-1 px-1 text-center font-semibold"
-                >
-                  Before trade
-                </th>
-              )}
-              {preRounds.length > 0 && (
-                <th className="py-1 px-2 text-center font-medium border-l border-border">
-                  Pre avg
-                </th>
-              )}
-              <th className="px-1" />
-              {postRounds.length > 0 && (
-                <th colSpan={postRounds.length} className="py-1 px-1 text-center font-semibold">
-                  After trade
-                </th>
-              )}
-              <th className="py-1 pl-3 text-right font-medium">Post avg</th>
-            </tr>
-            <tr className="text-[10px] text-muted-foreground border-b border-border">
-              <th className="py-1 pr-3" />
-              {preRounds.map((r) => (
-                <th key={`hpre-${r}`} className="py-1 px-1 text-center font-normal">
-                  R{r}
-                </th>
-              ))}
-              {preRounds.length > 0 && <th className="py-1 px-2 border-l border-border" />}
-              <th className="px-1" />
-              {postRounds.map((r) => (
-                <th key={`hpost-${r}`} className="py-1 px-1 text-center font-normal">
-                  R{r}
-                </th>
-              ))}
-              <th />
-            </tr>
-          </thead>
-          <tbody>
-            {/* Side A */}
+    <div className="overflow-x-auto">
+      <table className="w-full text-sm border-collapse">
+        <thead>
+          <tr className="text-[10px] uppercase tracking-wider" style={{ color: TEXT_MUTED }}>
+            <th className="py-1 pr-3 text-left font-medium">Player</th>
+            {preRounds.length > 0 && (
+              <th colSpan={preRounds.length} className="py-1 px-1 text-center font-semibold">
+                Before
+              </th>
+            )}
+            <th className="py-1 px-2 text-center font-medium" style={{ borderLeft: `1px solid ${BORDER}` }}>
+              Pre
+            </th>
+            <th className="px-1" />
+            {postRounds.length > 0 && (
+              <th colSpan={postRounds.length} className="py-1 px-1 text-center font-semibold">
+                After
+              </th>
+            )}
+            <th className="py-1 pl-3 text-right font-medium">Post</th>
+          </tr>
+          <tr className="text-[10px]" style={{ color: TEXT_MUTED, borderBottom: `1px solid ${BORDER}` }}>
+            <th className="py-1 pr-3" />
+            {preRounds.map((r) => (
+              <th key={`hpre-${r}`} className="py-1 px-1 text-center font-normal">R{r}</th>
+            ))}
+            <th className="py-1 px-2" style={{ borderLeft: `1px solid ${BORDER}` }} />
+            <th className="px-1" />
+            {postRounds.map((r) => (
+              <th key={`hpost-${r}`} className="py-1 px-1 text-center font-normal">R{r}</th>
+            ))}
+            <th />
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td colSpan={colSpan} className="pt-3 pb-1">
+              <span className="text-[10px] font-bold uppercase tracking-[0.15em]" style={{ color: ACCENT }}>
+                ◆ {teamAName} received
+              </span>
+            </td>
+          </tr>
+          {sideA.length === 0 && (
             <tr>
-              <td
-                colSpan={
-                  1 + preRounds.length + (preRounds.length > 0 ? 1 : 0) + 1 + postRounds.length + 1
-                }
-                className="pt-3 pb-1"
-              >
-                <span
-                  className="text-[10px] font-bold uppercase tracking-wider"
-                  style={{ color: teamA.color }}
-                >
-                  ◆ {teamA.name} received
-                </span>
+              <td colSpan={colSpan} className="pl-3 pb-2 text-xs italic" style={{ color: TEXT_MUTED }}>
+                —
               </td>
             </tr>
-            {sideA.length === 0 && (
-              <tr>
-                <td colSpan={99} className="text-xs italic text-muted-foreground pl-3 pb-2">
-                  —
-                </td>
-              </tr>
-            )}
-            {sideA.map(renderPlayerRow)}
+          )}
+          {sideA.map(renderRow)}
 
-            {/* Side B */}
+          <tr>
+            <td colSpan={colSpan} className="pt-4 pb-1">
+              <span className="text-[10px] font-bold uppercase tracking-[0.15em]" style={{ color: ACCENT }}>
+                ◆ {teamBName} received
+              </span>
+            </td>
+          </tr>
+          {sideB.length === 0 && (
             <tr>
-              <td
-                colSpan={
-                  1 + preRounds.length + (preRounds.length > 0 ? 1 : 0) + 1 + postRounds.length + 1
-                }
-                className="pt-4 pb-1"
-              >
-                <span
-                  className="text-[10px] font-bold uppercase tracking-wider"
-                  style={{ color: teamB.color }}
-                >
-                  ◆ {teamB.name} received
-                </span>
+              <td colSpan={colSpan} className="pl-3 pb-2 text-xs italic" style={{ color: TEXT_MUTED }}>
+                —
               </td>
             </tr>
-            {sideB.length === 0 && (
-              <tr>
-                <td colSpan={99} className="text-xs italic text-muted-foreground pl-3 pb-2">
-                  —
-                </td>
-              </tr>
-            )}
-            {sideB.map(renderPlayerRow)}
-          </tbody>
-        </table>
-      </div>
-
+          )}
+          {sideB.map(renderRow)}
+        </tbody>
+      </table>
       {postRounds.length === 0 && (
-        <p className="text-xs text-muted-foreground mt-3 italic">
-          No post-trade rounds played yet — scores will fill in once R{roundExecuted + 1} is
-          uploaded.
+        <p className="text-xs italic mt-3" style={{ color: TEXT_MUTED }}>
+          No post-trade rounds played yet — scores will fill in once R{roundExecuted + 1} is uploaded.
         </p>
       )}
     </div>
   );
 }
 
-// ============================================================
-// Deep-dive: Per-player summary
-// ============================================================
-
-function PerPlayerSummary({ performance }: { performance: PlayerPerformance[] }) {
+function ScoreCell({
+  pts,
+  hasRound,
+  baseline,
+}: {
+  pts: number | null;
+  hasRound: boolean;
+  baseline: number;
+}) {
+  if (!hasRound) {
+    return (
+      <span
+        className="inline-block min-w-[2.25rem] px-1.5 py-0.5 rounded text-xs tabular-nums"
+        style={{ color: TEXT_MUTED }}
+      >
+        —
+      </span>
+    );
+  }
+  const cell = scoreCellStyle(pts, baseline);
   return (
-    <div className="bg-white border border-border rounded-lg p-5">
-      <h3 className="text-sm font-semibold mb-3">Per-player summary</h3>
-      <div className="overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="text-left text-xs text-muted-foreground border-b border-border">
-              <th className="py-2 pr-4">Player</th>
-              <th className="py-2 pr-4">→ Team</th>
-              <th className="py-2 pr-4">Position</th>
-              <th className="py-2 pr-4 text-right">Pre-trade avg</th>
-              <th className="py-2 pr-4 text-right">Post-trade avg</th>
-              <th className="py-2 pr-4 text-right">Δ</th>
-              <th className="py-2 pr-4 text-right">Rounds</th>
-              <th className="py-2">Status</th>
-            </tr>
-          </thead>
-          <tbody>
-            {performance.map((p) => {
-              const isInjured = p.injured;
-              const hasPost = p.rounds_played > 0;
-              const delta = hasPost && p.pre_trade_avg != null ? p.post_trade_avg - p.pre_trade_avg : null;
-              return (
-                <tr key={p.player_id} className="border-b border-border last:border-0">
-                  <td className="py-2 pr-4 font-medium">{p.player_name}</td>
-                  <td className="py-2 pr-4 text-xs">{p.receiving_team_name}</td>
-                  <td className="py-2 pr-4 text-xs text-muted-foreground">{displayPosition(p)}</td>
-                  <td className="py-2 pr-4 text-right tabular-nums">{p.pre_trade_avg?.toFixed(0) ?? '—'}</td>
-                  <td className="py-2 pr-4 text-right tabular-nums">
-                    {isInjured && !hasPost ? (
-                      <span className="text-red-600 text-xs font-medium">🔴 Injured</span>
-                    ) : hasPost ? (
-                      p.post_trade_avg.toFixed(0)
-                    ) : (
-                      '—'
-                    )}
-                  </td>
-                  <td className="py-2 pr-4 text-right text-xs tabular-nums">
-                    {isInjured && !hasPost && p.pre_trade_avg != null ? (
-                      <span className="text-amber-600 italic">Proj. {p.pre_trade_avg.toFixed(0)}</span>
-                    ) : delta == null ? (
-                      '—'
-                    ) : (
-                      <span className={delta >= 0 ? 'text-green-600' : 'text-red-600'}>
-                        {delta >= 0 ? '+' : ''}
-                        {delta.toFixed(0)}
-                      </span>
-                    )}
-                  </td>
-                  <td
-                    className={`py-2 pr-4 text-right text-xs tabular-nums ${isInjured && !hasPost ? 'text-red-600' : ''}`}
-                  >
-                    {p.rounds_played}/{p.rounds_possible}
-                  </td>
-                  <td className="py-2 text-xs">
-                    {isInjured ? (
-                      <span className="text-red-600">🔴 Injured</span>
-                    ) : (
-                      <span className="text-green-600">✅ Active</span>
-                    )}
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
-    </div>
+    <span
+      className="inline-block min-w-[2.25rem] px-1.5 py-0.5 rounded text-xs tabular-nums font-medium"
+      style={{
+        background: cell.bg,
+        color: cell.color,
+        border: `1px solid ${cell.border}`,
+      }}
+    >
+      {pts == null ? 'DNP' : pts}
+    </span>
   );
 }
