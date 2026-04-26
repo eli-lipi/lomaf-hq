@@ -238,11 +238,16 @@ export async function recalculateTradeAcrossPostTradeRounds(
 
   let maxRound: number | null = opts.maxRound ?? null;
   if (maxRound == null && playerIds.length > 0) {
+    // Only consider rounds with ACTUAL scores. Without this, CSVs that
+    // pre-create columns for the entire AFL season (R0-R28) cause the recalc
+    // to walk forward through unplayed rounds and stamp the trade with
+    // 'Updated R28' bogus values.
     const { data } = await supabase
       .from('player_rounds')
       .select('round_number')
       .in('player_id', playerIds)
       .gt('round_number', trade.round_executed)
+      .not('points', 'is', null)
       .order('round_number', { ascending: false })
       .limit(1);
     maxRound = (data as { round_number: number }[] | null)?.[0]?.round_number ?? null;
@@ -252,6 +257,13 @@ export async function recalculateTradeAcrossPostTradeRounds(
   // the UI has something to render (shows ~50/50 at confidence 0).
   if (maxRound == null || maxRound <= trade.round_executed) {
     await recalculateTradeForRound(supabase, tradeId, trade.round_executed, opts.force === true);
+    // Sweep any stale future-round rows (left over from old buggy recalcs that
+    // walked into unplayed rounds).
+    await supabase
+      .from('trade_probabilities')
+      .delete()
+      .eq('trade_id', tradeId)
+      .gt('round_number', trade.round_executed);
     return { rounds: [trade.round_executed] };
   }
 
@@ -260,6 +272,12 @@ export async function recalculateTradeAcrossPostTradeRounds(
   for (const r of rounds) {
     await recalculateTradeForRound(supabase, tradeId, r, opts.force === true);
   }
+  // Sweep stale rows beyond the actual played rounds (idempotent cleanup).
+  await supabase
+    .from('trade_probabilities')
+    .delete()
+    .eq('trade_id', tradeId)
+    .gt('round_number', maxRound);
   return { rounds };
 }
 
@@ -279,10 +297,15 @@ export async function recalculateAllTradesForRound(
   let failed = 0;
   for (const t of trades ?? []) {
     try {
-      await recalculateTradeForRound(supabase, t.id, roundNumber);
+      // Walk the full post-trade span so the trade's full probability curve
+      // stays current (and so we sweep any stale future-round rows). The
+      // span helper determines its own maxRound based on actual played
+      // points — passing roundNumber here would incorrectly force walks
+      // into unplayed rounds when the CSV grid has columns for R0-R28.
+      await recalculateTradeAcrossPostTradeRounds(supabase, t.id, { force: true });
     } catch (e) {
       failed++;
-      console.error(`[recalculate] Trade ${t.id} R${roundNumber} failed`, e);
+      console.error(`[recalculate] Trade ${t.id} (after R${roundNumber}) failed`, e);
     }
   }
   return { attempted: (trades ?? []).length, failed };

@@ -2,11 +2,10 @@
 
 import { ArrowRight } from 'lucide-react';
 import { TEAMS } from '@/lib/constants';
-import type { Trade, TradePlayer } from '@/lib/trades/types';
+import { getTeamColor } from '@/lib/team-colors';
+import type { Trade, TradePlayer, TradeProbability } from '@/lib/trades/types';
 
-// List-view API adds these computed fields onto each trade player — accepted
-// here for typing compatibility, but deliberately not rendered. The homepage
-// card is purely factual: who traded with whom, when, which players.
+// List-view API adds these computed fields onto each trade player.
 type ListPlayer = TradePlayer & {
   draft_position?: string | null;
   injured?: boolean;
@@ -15,6 +14,7 @@ type ListPlayer = TradePlayer & {
 interface Props {
   trade: Trade;
   players: ListPlayer[];
+  latestProbability?: TradeProbability | null;
   onViewDetails: () => void;
 }
 
@@ -29,12 +29,27 @@ function coachFor(teamId: number): string {
   return TEAMS.find((t) => t.team_id === teamId)?.coach ?? '';
 }
 
-export default function TradeCard({ trade, players, onViewDetails }: Props) {
+export default function TradeCard({
+  trade,
+  players,
+  latestProbability,
+  onViewDetails,
+}: Props) {
   const teamAPlayers = players.filter((p) => p.receiving_team_id === trade.team_a_id);
   const teamBPlayers = players.filter((p) => p.receiving_team_id === trade.team_b_id);
 
   const coachA = coachFor(trade.team_a_id);
   const coachB = coachFor(trade.team_b_id);
+
+  // Probability ticker — only shown if we have post-trade data. If both sides
+  // are 50/50 and no rounds have played, hide it (50/50 isn't informative).
+  const probA = latestProbability ? Number(latestProbability.team_a_probability) : null;
+  const probB = latestProbability ? Number(latestProbability.team_b_probability) : null;
+  const showTicker =
+    probA != null &&
+    probB != null &&
+    latestProbability != null &&
+    latestProbability.round_number > trade.round_executed;
 
   return (
     <button
@@ -65,6 +80,19 @@ export default function TradeCard({ trade, players, onViewDetails }: Props) {
         <PlayerLine players={teamAPlayers} />
         <PlayerLine players={teamBPlayers} />
       </div>
+
+      {/* Win-probability ticker — small, clean, just enough signal to entice a click */}
+      {showTicker && (
+        <ProbTicker
+          teamAName={trade.team_a_name}
+          teamBName={trade.team_b_name}
+          teamAColor={getTeamColor(trade.team_a_id)}
+          teamBColor={getTeamColor(trade.team_b_id)}
+          probA={probA!}
+          probB={probB!}
+          updatedRound={latestProbability!.round_number}
+        />
+      )}
     </button>
   );
 }
@@ -80,6 +108,53 @@ function PlayerLine({ players }: { players: ListPlayer[] }) {
       <p className="text-[11px] text-muted-foreground mt-0.5">
         ({players.length} {players.length === 1 ? 'player' : 'players'})
       </p>
+    </div>
+  );
+}
+
+function ProbTicker({
+  teamAName,
+  teamBName,
+  teamAColor,
+  teamBColor,
+  probA,
+  probB,
+  updatedRound,
+}: {
+  teamAName: string;
+  teamBName: string;
+  teamAColor: string;
+  teamBColor: string;
+  probA: number;
+  probB: number;
+  updatedRound: number;
+}) {
+  const winningIsA = probA >= probB;
+  const winColor = winningIsA ? teamAColor : teamBColor;
+  const winName = winningIsA ? teamAName : teamBName;
+  const winPct = Math.round(winningIsA ? probA : probB);
+
+  return (
+    <div className="flex items-center gap-3 mt-4 pt-3 border-t border-border">
+      <div className="flex-1 flex items-center gap-2 min-w-0">
+        <span
+          className="text-base font-bold tabular-nums shrink-0"
+          style={{ color: winColor }}
+        >
+          {winPct}%
+        </span>
+        <span className="text-xs text-muted-foreground truncate">
+          {winName} winning
+        </span>
+      </div>
+      {/* Slim two-segment bar for visual weight without dominating the card */}
+      <div className="hidden sm:flex h-1.5 w-24 rounded-full overflow-hidden shrink-0">
+        <div style={{ width: `${probA}%`, backgroundColor: teamAColor }} />
+        <div style={{ width: `${probB}%`, backgroundColor: teamBColor }} />
+      </div>
+      <span className="text-[10px] text-muted-foreground tabular-nums shrink-0">
+        R{updatedRound}
+      </span>
     </div>
   );
 }
