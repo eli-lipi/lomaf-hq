@@ -7,8 +7,8 @@ import { normalizePosition, cleanPositionDisplay } from '@/lib/trades/positions'
 import { recalculateTradeAcrossPostTradeRounds } from '@/lib/trades/recalculate';
 
 const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+  process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://placeholder.supabase.co',
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'placeholder-key'
 );
 
 export async function GET(_request: Request, ctx: { params: Promise<{ id: string }> }) {
