@@ -223,35 +223,82 @@ export default function ConcentrationTab() {
     return              { bg: '#FF4757',                       color: '#FFFFFF',       fontWeight: 800 };
   };
 
-  // Leaderboard row: rank | icon | (two-line name) | value
+  // Leaderboard row: rank | icon | (two-line name) | value. Clickable when
+  // onClick is provided — drives the click-to-drill-down to the heatmap.
   const LeaderRow = ({
-    rank, icon, line1, line2, value,
-  }: { rank: number; icon: React.ReactNode; line1: React.ReactNode; line2?: React.ReactNode; value: React.ReactNode }) => (
-    <li className="flex items-center gap-3 py-1.5">
-      <span className="text-[11px] font-bold text-muted-foreground/60 w-3 tabular-nums">{rank}</span>
-      {icon}
-      <div className="flex-1 min-w-0">
-        <div className="text-xs font-semibold truncate">{line1}</div>
-        {line2 && <div className="text-[10px] text-muted-foreground truncate">{line2}</div>}
-      </div>
-      <span className="text-sm font-bold tabular-nums">{value}</span>
-    </li>
-  );
+    rank, icon, line1, line2, value, onClick,
+  }: {
+    rank: number;
+    icon: React.ReactNode;
+    line1: React.ReactNode;
+    line2?: React.ReactNode;
+    value: React.ReactNode;
+    onClick?: () => void;
+  }) => {
+    const inner = (
+      <>
+        <span className="text-[11px] font-bold text-muted-foreground/60 w-3 tabular-nums">{rank}</span>
+        {icon}
+        <div className="flex-1 min-w-0 text-left">
+          <div className="text-xs font-semibold truncate">{line1}</div>
+          {line2 && <div className="text-[10px] text-muted-foreground truncate">{line2}</div>}
+        </div>
+        <span className="text-sm font-bold tabular-nums">{value}</span>
+      </>
+    );
+    if (onClick) {
+      return (
+        <li>
+          <button
+            onClick={onClick}
+            className="w-full flex items-center gap-3 py-1.5 px-1 -mx-1 rounded hover:bg-muted/40 transition-colors"
+          >
+            {inner}
+          </button>
+        </li>
+      );
+    }
+    return <li className="flex items-center gap-3 py-1.5">{inner}</li>;
+  };
+
+  // Click on any leaderboard item → expand the corresponding row in the heatmap
+  // and scroll to it. Means the existing per-team breakdown UI doubles as the
+  // drill-down for the leaderboards.
+  const focusClub = (code: string) => {
+    setExpandedClub((prev) => (prev === code ? null : code));
+    requestAnimationFrame(() => {
+      const el = document.getElementById(`afl-row-${code}`);
+      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    });
+  };
 
   return (
     <div className="space-y-6">
+      {/* Header — what this tab actually shows */}
+      <div className="bg-card border border-border rounded-lg p-4 shadow-sm">
+        <h2 className="text-sm font-semibold mb-1">AFL Club Concentration</h2>
+        <p className="text-xs text-muted-foreground">
+          Which AFL clubs are most represented across LOMAF rosters{' '}
+          <span className="font-semibold text-foreground">right now</span> (R{latestRound}).
+          Reflects current rosters — trades, waivers, and pickups are all included.
+        </p>
+      </div>
+
       {/* ============ Leaderboard cards ============ */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         {/* Coach leaderboards */}
         <div className="bg-card border border-border rounded-lg shadow-sm">
           <div className="px-4 pt-3 pb-2 border-b border-border/50">
             <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-              Coach leaderboards
+              LOMAF Coach Leaderboards
             </h3>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-border/50">
             <div className="p-4">
-              <p className="text-[11px] font-semibold text-foreground mb-2">Biggest single-club bets</p>
+              <p className="text-[11px] font-semibold text-foreground mb-1">Biggest single-club bets</p>
+              <p className="text-[10px] text-muted-foreground mb-2">
+                One LOMAF coach with the most players from a single AFL club.
+              </p>
               <ol className="space-y-0">
                 {stats.biggestBets.slice(0, 5).map((b, i) => (
                   <LeaderRow
@@ -265,12 +312,16 @@ export default function ConcentrationTab() {
                     }
                     line2={<>× {AFL_CLUBS[b.club].name}</>}
                     value={b.count}
+                    onClick={() => focusClub(b.club)}
                   />
                 ))}
               </ol>
             </div>
             <div className="p-4">
-              <p className="text-[11px] font-semibold text-foreground mb-2">Widest nets</p>
+              <p className="text-[11px] font-semibold text-foreground mb-1">Widest nets</p>
+              <p className="text-[10px] text-muted-foreground mb-2">
+                LOMAF coaches whose rosters span the most different AFL clubs.
+              </p>
               <ol className="space-y-0">
                 {stats.widestNets.slice(0, 5).map((w, i) => (
                   <LeaderRow
@@ -295,12 +346,16 @@ export default function ConcentrationTab() {
         <div className="bg-card border border-border rounded-lg shadow-sm">
           <div className="px-4 pt-3 pb-2 border-b border-border/50">
             <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-              AFL club leaderboards
+              AFL Club Ownership
             </h3>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-border/50">
             <div className="p-4">
-              <p className="text-[11px] font-semibold text-foreground mb-2">Most-drafted</p>
+              <p className="text-[11px] font-semibold text-foreground mb-1">Most-owned AFL clubs</p>
+              <p className="text-[10px] text-muted-foreground mb-2">
+                AFL clubs with the most players across LOMAF rosters right now.
+                Click to see who owns them.
+              </p>
               <ol className="space-y-0">
                 {stats.mostDrafted.slice(0, 5).map((m, i) => (
                   <LeaderRow
@@ -309,12 +364,16 @@ export default function ConcentrationTab() {
                     icon={<ClubBadge code={m.code} size={22} />}
                     line1={AFL_CLUBS[m.code].name}
                     value={m.count}
+                    onClick={() => focusClub(m.code)}
                   />
                 ))}
               </ol>
             </div>
             <div className="p-4">
-              <p className="text-[11px] font-semibold text-foreground mb-2">Blind spots</p>
+              <p className="text-[11px] font-semibold text-foreground mb-1">Least-owned AFL clubs</p>
+              <p className="text-[10px] text-muted-foreground mb-2">
+                AFL clubs barely represented across LOMAF rosters. The league&apos;s blind spots.
+              </p>
               <ol className="space-y-0">
                 {stats.blindSpots.slice(0, 5).map((m, i) => (
                   <LeaderRow
@@ -323,6 +382,7 @@ export default function ConcentrationTab() {
                     icon={<ClubBadge code={m.code} size={22} />}
                     line1={AFL_CLUBS[m.code].name}
                     value={m.count}
+                    onClick={() => focusClub(m.code)}
                   />
                 ))}
               </ol>
@@ -335,9 +395,9 @@ export default function ConcentrationTab() {
       <div className="bg-card border border-border rounded-lg p-5 shadow-sm">
         <div className="flex items-center justify-between mb-1 flex-wrap gap-2">
           <div>
-            <h3 className="font-semibold text-sm">AFL club draft spread</h3>
+            <h3 className="font-semibold text-sm">AFL Club Ownership Across LOMAF Rosters</h3>
             <p className="text-xs text-muted-foreground">
-              R{latestRound}. Top 3 LOMAF teams owning each AFL club are labelled; the rest fold into <span className="text-foreground">others</span>.
+              Current rosters (R{latestRound}). Each bar is one AFL club; the segments show which LOMAF teams own them. Top 3 owners labelled, the rest fold into <span className="text-foreground">others</span>.
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -496,10 +556,11 @@ export default function ConcentrationTab() {
                 <>
                   <tr
                     key={code}
+                    id={`afl-row-${code}`}
                     className={cn(
                       'border-t border-border/50 cursor-pointer transition-colors',
                       isRowHot ? 'bg-muted/40' : 'hover:bg-muted/20',
-                      isExpanded && 'bg-muted/20'
+                      isExpanded && 'bg-muted/20 ring-1 ring-primary/40'
                     )}
                     onClick={() => setExpandedClub(isExpanded ? null : code)}
                   >
