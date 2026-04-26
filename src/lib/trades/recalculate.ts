@@ -86,6 +86,7 @@ export async function recalculateTradeForRound(
       injured: injury.injured,
       missed_rounds: injury.missedRounds,
       round_scores: rounds,
+      pre_trade_round_scores: [], // not needed for the recalc; only used by the detail UI
     };
   });
 
@@ -121,8 +122,21 @@ export async function recalculateTradeForRound(
 
     const playerBreakdownLines = performance.map((p) => {
       const status = p.injured ? '🔴 Injured' : '✅ Active';
-      const pre = p.pre_trade_avg?.toFixed(0) ?? '?';
+      const pre = p.pre_trade_avg ?? null;
+      const preStr = pre != null ? pre.toFixed(0) : '?';
       const post = p.rounds_played > 0 ? p.post_trade_avg.toFixed(0) : '—';
+      // Predicted-vs-actual gap. The pre-trade avg is the implicit prediction
+      // — what the trade was made on. Below it = trade is failing on output.
+      const gap =
+        pre != null && p.rounds_played > 0
+          ? p.post_trade_avg - pre
+          : null;
+      const gapStr =
+        gap == null
+          ? ''
+          : gap >= 0
+            ? ` (+${gap.toFixed(0)} vs predicted)`
+            : ` (${gap.toFixed(0)} vs predicted)`;
       // Per-round scores: "R3:72, R4:0, R5:88" — 0/null shown explicitly so
       // the model can see DNPs / injuries / bye patterns.
       const perRound = p.round_scores.length > 0
@@ -130,7 +144,7 @@ export async function recalculateTradeForRound(
             .map((s) => `R${s.round}:${s.points == null ? 'DNP' : s.points}`)
             .join(', ')
         : '(no rounds played since trade)';
-      return `- ${p.player_name} (${cleanPositionDisplay(p.raw_position) ?? p.position ?? '?'}) → ${p.receiving_team_name}: pre-trade avg ${pre}, post-trade avg ${post}, ${p.rounds_played}/${p.rounds_possible} rounds, ${status}\n    scores: ${perRound}`;
+      return `- ${p.player_name} (${cleanPositionDisplay(p.raw_position) ?? p.position ?? '?'}) → ${p.receiving_team_name}: predicted avg ${preStr}, actual avg ${post}${gapStr}, ${p.rounds_played}/${p.rounds_possible} rounds, ${status}\n    scores: ${perRound}`;
     });
 
     const teamAReceives = teamA.map((p) => p.player_name);

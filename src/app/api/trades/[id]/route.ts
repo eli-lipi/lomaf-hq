@@ -34,20 +34,30 @@ export async function GET(_request: Request, ctx: { params: Promise<{ id: string
     const probs = probsRes.data ?? [];
     const latestRound = probs.length > 0 ? probs[probs.length - 1].round_number : trade.round_executed;
 
-    // Build per-player performance for the latest round
+    // Build per-player performance — covers the full trajectory (pre-trade
+    // rounds + post-trade rounds) so the UI can show the before/after split.
     const playerIds = players.map((p) => p.player_id);
-    const { data: playerRounds } = await supabase
+    const { data: playerRoundsAll } = await supabase
       .from('player_rounds')
       .select('player_id, team_id, round_number, points')
       .in('player_id', playerIds)
-      .gt('round_number', trade.round_executed)
       .lte('round_number', latestRound);
 
+    // Post-trade scores (on receiving team only) — used for post averages,
+    // injury detection, the chart, etc.
     const scoresByKey = new Map<string, { round: number; points: number | null }[]>();
-    for (const r of playerRounds ?? []) {
-      const key = `${r.player_id}-${r.team_id}`;
-      if (!scoresByKey.has(key)) scoresByKey.set(key, []);
-      scoresByKey.get(key)!.push({ round: r.round_number, points: r.points });
+    // Pre-trade scores (any team) — used for the "before trade" half of the
+    // scores-since-trade table. Keyed by player_id only.
+    const preScoresByPlayer = new Map<number, { round: number; points: number | null }[]>();
+    for (const r of playerRoundsAll ?? []) {
+      if (r.round_number > trade.round_executed) {
+        const key = `${r.player_id}-${r.team_id}`;
+        if (!scoresByKey.has(key)) scoresByKey.set(key, []);
+        scoresByKey.get(key)!.push({ round: r.round_number, points: r.points });
+      } else {
+        if (!preScoresByPlayer.has(r.player_id)) preScoresByPlayer.set(r.player_id, []);
+        preScoresByPlayer.get(r.player_id)!.push({ round: r.round_number, points: r.points });
+      }
     }
 
     const roundsPossible = Math.max(0, latestRound - trade.round_executed);
@@ -65,6 +75,7 @@ export async function GET(_request: Request, ctx: { params: Promise<{ id: string
     const playerPerformance: PlayerPerformance[] = players.map((p) => {
       const key = `${p.player_id}-${p.receiving_team_id}`;
       const rounds = (scoresByKey.get(key) ?? []).sort((a, b) => a.round - b.round);
+      const preRounds = (preScoresByPlayer.get(p.player_id) ?? []).sort((a, b) => a.round - b.round);
       const roundsPlayed = rounds.filter((r) => r.points !== null).length;
       const sum = rounds.reduce((s, r) => s + (r.points ?? 0), 0);
       const postAvg = rounds.length > 0 ? sum / rounds.length : 0;
@@ -84,6 +95,7 @@ export async function GET(_request: Request, ctx: { params: Promise<{ id: string
         injured: injury.injured,
         missed_rounds: injury.missedRounds,
         round_scores: rounds,
+        pre_trade_round_scores: preRounds,
       };
     });
 

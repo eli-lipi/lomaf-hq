@@ -69,6 +69,10 @@ export interface PlayerPerformance {
   injured: boolean;
   missed_rounds: number;
   round_scores: { round: number; points: number | null }[];
+  // Pre-trade rounds for this player (any team). Lets the UI render the
+  // before/after timeline side-by-side. May be empty if the trade was
+  // executed at R0.
+  pre_trade_round_scores?: { round: number; points: number | null }[];
 }
 
 export interface TradeWithDetails {
