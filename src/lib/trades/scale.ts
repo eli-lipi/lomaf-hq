@@ -10,6 +10,40 @@ export function snap5(pct: number): number {
   return Math.round(pct / 5) * 5;
 }
 
+/**
+ * v6 — convert a signed advantage (-100..+100, polarised to positive_team_id)
+ * into an unsigned percentage paired with the winning team's identity. The
+ * raw signed value is only used internally for chart positioning; every
+ * user-facing percentage display uses this helper so the minus sign never
+ * leaks into the UI.
+ */
+export function formatWinPercentage(
+  signedAdvantage: number,
+  positiveTeamId: number | null | undefined,
+  negativeTeamId: number | null | undefined,
+  positiveTeamName: string,
+  negativeTeamName: string
+): { percentage: number; teamId: number | null; teamName: string; isWash: boolean } {
+  const snapped = snap5(signedAdvantage);
+  if (snapped === 0) {
+    return { percentage: 0, teamId: null, teamName: '', isWash: true };
+  }
+  if (snapped > 0) {
+    return {
+      percentage: Math.abs(snapped),
+      teamId: positiveTeamId ?? null,
+      teamName: positiveTeamName,
+      isWash: false,
+    };
+  }
+  return {
+    percentage: Math.abs(snapped),
+    teamId: negativeTeamId ?? null,
+    teamName: negativeTeamName,
+    isWash: false,
+  };
+}
+
 // ──────────────────────────────────────────────────────────────────
 // v5 — Per-team colour palette (10 permanent team identities)
 // ──────────────────────────────────────────────────────────────────
@@ -178,9 +212,10 @@ export function playerVerdictFor(
   avgSinceTrade: number | null,
   expectedAvg: number | null,
   expectedGames: number | null,
-  actualGames: number
+  actualGames: number,
+  avgBeforeTrade?: number | null
 ): PlayerVerdictResult {
-  // Availability drag check first — it overrides perf when severe
+  // Availability drag check first — overrides perf when severe.
   if (
     expectedGames != null &&
     expectedGames >= 1 &&
@@ -192,10 +227,24 @@ export function playerVerdictFor(
       text: `Availability drag — missed ${Math.round(expectedGames - actualGames)} of ${Math.round(expectedGames)} expected games`,
     };
   }
-  if (avgSinceTrade == null || expectedAvg == null) {
+
+  // True "Pending": no post-trade data exists yet (the trade was logged but
+  // no rounds have been played). Only this case yields the pending verdict.
+  if (avgSinceTrade == null) {
     return { level: 'pending', text: 'Pending — no post-trade data yet' };
   }
-  const delta = avgSinceTrade - expectedAvg;
+
+  // Verdict baseline fallback chain: prefer expected_avg → fall back to
+  // avg_before_trade → last-ditch tracking. The bug v6 fixed: previously
+  // a missing expected_avg short-circuited to 'Pending' even when there was
+  // post-trade data, which stripped the verdict from real plays.
+  const baseline =
+    expectedAvg != null ? expectedAvg : avgBeforeTrade != null ? avgBeforeTrade : null;
+  if (baseline == null) {
+    return { level: 'tracking', text: 'Tracking expectation' };
+  }
+
+  const delta = avgSinceTrade - baseline;
   if (delta > 10) return { level: 'crushing', text: 'Crushing the bet' };
   if (delta >= 5) return { level: 'outperforming', text: 'Outperforming' };
   if (delta >= -5) return { level: 'tracking', text: 'Tracking expectation' };

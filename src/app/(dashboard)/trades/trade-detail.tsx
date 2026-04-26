@@ -264,17 +264,19 @@ export default function TradeDetail({ tradeId, onBack, onDeleted }: Props) {
         </div>
       </div>
 
-      {/* ── Tier-0: thin metadata strip ───────────────────────── */}
-      <MetadataStrip trade={trade} latestProbability={latestProbability} />
+      {/* v6 — Top metadata strip removed. Every field it carried is duplicated
+          elsewhere on the page (X-axis starts at trade-executed round, the
+          analysis section carries 'Updated R{N}', team names appear in the
+          'received' subtitle below the player headline). The page now opens
+          directly with the player headline. */}
 
-      {/* ── PLAYER HEADLINE — surnames front and centre ───────── */}
+      {/* PLAYER HEADLINE — surnames front and centre.
+          v6 — verdict pill on the right is gone. The chart line position +
+          quadrant labels deliver the verdict; a pill triplicating it is noise. */}
       <PlayerHeadline
         trade={trade}
         teamAPlayers={teamAPlayers}
         teamBPlayers={teamBPlayers}
-        verdict={verdict}
-        winningTeamName={winningTeamName}
-        advantage={advantage}
       />
 
       {/* ── Tier-1: the chart, FULL BLEED, no card ────────────── */}
@@ -293,10 +295,20 @@ export default function TradeDetail({ tradeId, onBack, onDeleted }: Props) {
                 </InfoTip>
               </h2>
             </div>
+            {/* v6 — Loud team label ABOVE the chart. Full saturation, 16px,
+                weight 600, ▲ glyph, with a thin team-coloured rule extending
+                rightward to anchor the positive zone. */}
+            <QuadrantLabel
+              direction="up"
+              teamName={positiveTeamName}
+              color={colorPositive}
+            />
+
             <div className="relative">
-              {/* Trade Executed flag — sits ABOVE the chart on the dashed line */}
-              <TradeExecutedFlag chartData={chartData} executedRound={trade.round_executed} />
-              <ResponsiveContainer width="100%" height={400}>
+              {/* v6 — 'Trade Executed' flag deleted. The chart's X-axis starts
+                  at the trade-executed round, which makes the marker redundant.
+                  The dashed vertical line stays as a subtle anchor. */}
+              <ResponsiveContainer width="100%" height={360}>
                 <ComposedChart data={chartData} margin={{ top: 30, right: 16, bottom: 6, left: 8 }}>
                   <defs>
                     {/* Vertical gradient — green above 0%, cyan below. Hard stop at y=0 (50% of −100..+100 axis). */}
@@ -391,31 +403,28 @@ export default function TradeDetail({ tradeId, onBack, onDeleted }: Props) {
                 </ComposedChart>
               </ResponsiveContainer>
 
-              {/* Team labels — once at the extremes, not at every tick */}
-              <div
-                className="absolute pointer-events-none text-[11px] font-medium uppercase tracking-wider"
-                style={{ top: 36, right: 24, color: colorPositive }}
-              >
-                ↑ {positiveTeamName}
-              </div>
-              <div
-                className="absolute pointer-events-none text-[11px] font-medium uppercase tracking-wider"
-                style={{ bottom: 32, right: 24, color: colorNegative }}
-              >
-                ↓ {negativeTeamName}
-              </div>
+              {/* v6 — old corner labels deleted. Replaced by loud labels
+                  ABOVE and BELOW the chart (rendered as siblings around the
+                  ResponsiveContainer, see the wrapping JSX). */}
 
-              {/* Price tag — top-right of chart, coloured by current side */}
-              <div className="absolute top-8 right-3 pointer-events-none">
+              {/* Price tag — top-right of chart. v6 — quieter element:
+                  team name above, big % below, no box, always positive. */}
+              <div className="absolute top-2 right-3 pointer-events-none">
                 <PriceTag
                   advantage={advantage}
                   winningTeamName={winningTeamName}
-                  delta={heroDelta}
                   colorPositive={colorPositive}
                   colorNegative={colorNegative}
                 />
               </div>
             </div>
+
+            {/* v6 — Loud team label BELOW the chart, ▼ glyph, full saturation. */}
+            <QuadrantLabel
+              direction="down"
+              teamName={negativeTeamName}
+              color={colorNegative}
+            />
           </>
         )}
       </div>
@@ -430,6 +439,13 @@ export default function TradeDetail({ tradeId, onBack, onDeleted }: Props) {
         const positivePlayers = positiveIsA ? teamAPlayers : teamBPlayers;
         const negativePlayers = positiveIsA ? teamBPlayers : teamAPlayers;
         const positiveTeamId = positiveIsA ? trade.team_a_id : trade.team_b_id;
+        // v6 — dynamic post-trade window. Replaces the hardcoded 4 from v2.
+        // (current_round - executed_round). Used as the (n / m) denominator
+        // and as the availability-ratio denominator in the verdict logic.
+        const postTradeWindow = Math.max(
+          0,
+          (latestProbability?.round_number ?? trade.round_executed) - trade.round_executed
+        );
         const negativeTeamId = positiveIsA ? trade.team_b_id : trade.team_a_id;
         const positiveTN = positiveIsA ? trade.team_a_name : trade.team_b_name;
         const negativeTN = positiveIsA ? trade.team_b_name : trade.team_a_name;
@@ -442,6 +458,7 @@ export default function TradeDetail({ tradeId, onBack, onDeleted }: Props) {
               teamColor={colorPositive}
               teamId={positiveTeamId}
               displayLabels={displayLabels}
+              postTradeWindow={postTradeWindow}
             />
             <PlayerTableSection
               title={`${negativeTN} received`}
@@ -450,6 +467,7 @@ export default function TradeDetail({ tradeId, onBack, onDeleted }: Props) {
               teamColor={colorNegative}
               teamId={negativeTeamId}
               displayLabels={displayLabels}
+              postTradeWindow={postTradeWindow}
             />
           </div>
         );
@@ -593,16 +611,10 @@ function PlayerHeadline({
   trade,
   teamAPlayers,
   teamBPlayers,
-  verdict,
-  winningTeamName,
-  advantage,
 }: {
   trade: Trade;
   teamAPlayers: TradePlayer[];
   teamBPlayers: TradePlayer[];
-  verdict: { level: string; text: string; isFlip: boolean };
-  winningTeamName: string;
-  advantage: number;
 }) {
   const allPlayers = [...teamAPlayers, ...teamBPlayers];
   const labels = buildDisplayLabels(
@@ -652,32 +664,15 @@ function PlayerHeadline({
             />
           </div>
         )}
-        {/* Verdict pill — coloured by the winning side */}
-        <VerdictPillV3
-          verdict={verdict}
-          winnerColor={
-            verdict.isFlip
-              ? null
-              : advantage >= 0
-                ? colorForTeam(trade.positive_team_id ?? trade.team_a_id, trade.positive_team_id)
-                : colorForTeam(trade.negative_team_id ?? trade.team_b_id, trade.positive_team_id)
-          }
-        />
+        {/* v6 — verdict pill removed. Chart line + quadrant labels carry the verdict. */}
       </div>
-      {/* Subtitle row showing receiving teams (for 1-for-1) */}
-      {isOneForOne && (
-        <p className="text-[12px] mt-2" style={{ color: TEXT_MUTED }}>
-          <span style={{ color: colorA }}>{trade.team_a_name} received</span>
-          <span className="mx-3" style={{ color: 'rgba(255,255,255,0.18)' }}>|</span>
-          <span style={{ color: colorB }}>{trade.team_b_name} received</span>
-        </p>
-      )}
-      {/* Optional helper line for multi-player shows the winner cleanly */}
-      {!isOneForOne && (
-        <p className="text-[12px] mt-2" style={{ color: TEXT_MUTED }}>
-          {winningTeamName !== '' ? `Currently: ${verdict.text}` : ''}
-        </p>
-      )}
+      {/* Subtitle: receiving teams in their colour. Used for both 1-for-1
+          and multi-player trades — gives the team-name context once. */}
+      <p className="text-[12px] mt-2" style={{ color: TEXT_MUTED }}>
+        <span style={{ color: colorA }}>{trade.team_a_name} received</span>
+        <span className="mx-3" style={{ color: 'rgba(255,255,255,0.18)' }}>|</span>
+        <span style={{ color: colorB }}>{trade.team_b_name} received</span>
+      </p>
     </div>
   );
 }
@@ -857,84 +852,72 @@ function VerdictPill({ verdict }: { verdict: { level: string; text: string; isFl
 }
 
 // ============================================================
-// Right-edge price tag — signed ±100 advantage with team colour
+// Quadrant label — v6 LOUD treatment above/below the chart.
+// ============================================================
+function QuadrantLabel({
+  direction,
+  teamName,
+  color,
+}: {
+  direction: 'up' | 'down';
+  teamName: string;
+  color: string;
+}) {
+  const glyph = direction === 'up' ? '▲' : '▼';
+  const className = direction === 'up' ? 'mb-2' : 'mt-2';
+  return (
+    <div className={`flex items-center gap-3 ${className}`}>
+      <span
+        className="font-semibold uppercase tracking-[0.10em] flex items-center gap-2"
+        style={{ color, fontSize: 16 }}
+      >
+        <span style={{ fontSize: 12 }}>{glyph}</span>
+        {teamName}
+      </span>
+      <div className="h-px flex-1" style={{ background: hexWithOpacity(color, 0.30) }} />
+    </div>
+  );
+}
+
+// ============================================================
+// Right-edge price tag — v6 quiet two-line element, no box.
+// Always shows a positive percentage; team name carries the polarity.
 // ============================================================
 function PriceTag({
   advantage,
   winningTeamName,
-  delta,
   colorPositive,
   colorNegative,
 }: {
   advantage: number;
   winningTeamName: string;
-  delta: number | null;
   colorPositive: string;
   colorNegative: string;
 }) {
-  // Wash state — neither side leading
   if (advantage === 0) {
     return (
-      <div
-        className="rounded-lg px-3 py-2 text-right"
-        style={{
-          background: 'rgba(10,15,28,0.85)',
-          border: `1px solid ${BORDER}`,
-          backdropFilter: 'blur(4px)',
-          minWidth: 110,
-        }}
-      >
-        <div className="text-xl font-bold leading-none tracking-wider" style={{ color: TEXT }}>
+      <div className="text-right">
+        <div className="text-[13px] font-semibold uppercase tracking-wider" style={{ color: TEXT }}>
           WASH
         </div>
-        <div className="text-[10px] mt-1.5" style={{ color: TEXT_MUTED }}>
-          neither side leading
+        <div className="text-[32px] font-medium leading-none tabular-nums mt-1" style={{ color: TEXT }}>
+          0%
         </div>
       </div>
     );
   }
-
   const winnerColor = advantage > 0 ? colorPositive : colorNegative;
-  const sign = advantage > 0 ? '+' : '';
-  // Delta only shown if it's non-zero AFTER snapping (per spec — suppress fake noise)
-  const showDelta = delta != null && delta !== 0;
-  // Delta colour: positive-team's colour for upward movement, negative-team's
-  // for downward. Never red — that was the contradictory-pill bug.
-  const deltaColor = showDelta && delta! > 0 ? colorPositive : colorNegative;
-
   return (
-    <div
-      className="rounded-lg px-3 py-2 text-right"
-      style={{
-        background: 'rgba(10,15,28,0.85)',
-        border: `1px solid ${BORDER}`,
-        backdropFilter: 'blur(4px)',
-        minWidth: 120,
-      }}
-    >
-      <div className="text-2xl font-bold leading-none tabular-nums" style={{ color: winnerColor }}>
-        {sign}
-        {advantage}%
-      </div>
+    <div className="text-right">
       <div
-        className="text-[11px] mt-1 font-semibold leading-tight truncate"
-        style={{ color: winnerColor }}
+        className="text-[13px] font-semibold leading-tight truncate"
+        style={{ color: winnerColor, maxWidth: 180 }}
       >
         {winningTeamName}
       </div>
-      <div className="text-[10px]" style={{ color: TEXT_MUTED }}>
-        winning
+      <div className="text-[34px] font-medium leading-none tabular-nums" style={{ color: winnerColor }}>
+        {Math.abs(advantage)}%
       </div>
-      {showDelta && (
-        <div
-          className="text-[10px] mt-1.5 flex items-center justify-end gap-0.5 font-medium tabular-nums"
-          style={{ color: deltaColor }}
-        >
-          {delta! > 0 ? <TrendingUp size={10} /> : <TrendingDown size={10} />}
-          {delta! > 0 ? '+' : ''}
-          {delta}% from prev
-        </div>
-      )}
     </div>
   );
 }
@@ -1164,6 +1147,7 @@ function PlayerTableSection({
   teamColor,
   teamId,
   displayLabels,
+  postTradeWindow,
 }: {
   title: string;
   tradePlayers: TradePlayer[];
@@ -1171,6 +1155,7 @@ function PlayerTableSection({
   teamColor: string;
   teamId: number;
   displayLabels: Map<number, string>;
+  postTradeWindow: number;
 }) {
   void teamId;
   return (
@@ -1193,6 +1178,7 @@ function PlayerTableSection({
         perfById={perfById}
         teamColor={teamColor}
         displayLabels={displayLabels}
+        postTradeWindow={postTradeWindow}
       />
     </div>
   );
@@ -1203,26 +1189,30 @@ function PlayerVerdictTable({
   perfById,
   teamColor,
   displayLabels,
+  postTradeWindow,
 }: {
   tradePlayers: TradePlayer[];
   perfById: Map<number, PlayerPerformance>;
   teamColor: string;
   displayLabels: Map<number, string>;
+  postTradeWindow: number;
 }) {
   return (
     <div className="overflow-x-auto">
-      <table className="w-full text-sm">
+      {/* table-layout fixed + colgroup → symmetric column widths across BOTH
+          tables (positive and negative side render the same widths so the
+          eye can scan vertically). */}
+      <table className="w-full text-sm" style={{ tableLayout: 'fixed' }}>
+        <colgroup>
+          <col style={{ width: '34%' }} />
+          <col style={{ width: '14%' }} />
+          <col style={{ width: '14%' }} />
+          <col style={{ width: '12%' }} />
+          <col style={{ width: '26%' }} />
+        </colgroup>
         <thead>
           <tr className="text-[10px] uppercase tracking-wider" style={{ color: TEXT_MUTED }}>
             <th className="text-left font-medium pr-2 pb-2">Player</th>
-            <th className="text-left font-medium px-2 pb-2 whitespace-nowrap">
-              <span className="inline-flex items-center gap-1">
-                Verdict
-                <InfoTip>
-                  <strong style={{ color: TEXT }}>Per-player verdict:</strong> compares Avg Since Trade against Expected Avg. Beat by &gt;10 = Crushing. Within ±5 = Tracking. Behind by &gt;10 = Bet broken. Availability drag overrides if &lt;50% of expected games played.
-                </InfoTip>
-              </span>
-            </th>
             <th className="text-right font-medium px-2 pb-2 whitespace-nowrap">Avg Since</th>
             <th className="text-right font-medium px-2 pb-2 whitespace-nowrap">
               <span className="inline-flex items-center gap-1 justify-end">
@@ -1232,11 +1222,19 @@ function PlayerVerdictTable({
                 </InfoTip>
               </span>
             </th>
-            <th className="text-right font-medium pl-2 pb-2 whitespace-nowrap">
+            <th className="text-right font-medium px-2 pb-2 whitespace-nowrap">
               <span className="inline-flex items-center gap-1 justify-end">
                 Expected
                 <InfoTip>
-                  <strong style={{ color: TEXT }}>Expected average:</strong> the bar this player needed to clear for the trade to make sense. Locked at trade execution. Auto-derived from a position-tier baseline blended 60/40 with last-3-rounds form, or set manually at trade-logging time.
+                  <strong style={{ color: TEXT }}>Expected average:</strong> the bar this player needed to clear for the trade to make sense. Locked at trade execution. Auto-derived from a position-tier baseline blended 60/40 with last-3-rounds form. If unavailable, falls back to the player&apos;s pre-trade average.
+                </InfoTip>
+              </span>
+            </th>
+            <th className="text-right font-medium pl-2 pb-2 whitespace-nowrap">
+              <span className="inline-flex items-center gap-1 justify-end">
+                Verdict
+                <InfoTip>
+                  <strong style={{ color: TEXT }}>Per-player verdict:</strong> compares Avg Since Trade against Expected Avg (or Avg Before if Expected is unavailable). Beat by &gt;10 = Crushing. Within ±5 = Tracking. Behind by &gt;10 = Bet broken. Availability drag overrides if &lt;50% of expected games played.
                 </InfoTip>
               </span>
             </th>
@@ -1255,6 +1253,7 @@ function PlayerVerdictTable({
               performance={perfById.get(tp.player_id)}
               teamColor={teamColor}
               displayLabel={displayLabels.get(tp.player_id) ?? tp.player_name}
+              postTradeWindow={postTradeWindow}
             />
           ))}
         </tbody>
@@ -1268,25 +1267,55 @@ function PlayerVerdictRow({
   performance,
   teamColor,
   displayLabel,
+  postTradeWindow,
 }: {
   tradePlayer: TradePlayer;
   performance: PlayerPerformance | undefined;
   teamColor: string;
   displayLabel: string;
+  postTradeWindow: number;
 }) {
   const [expanded, setExpanded] = useState(false);
   const injured = performance?.injured ?? false;
   const pos =
     performance ? displayPosition(performance) : cleanPositionDisplay(tradePlayer.raw_position) ?? '—';
 
-  const expectedAvg = tradePlayer.expected_avg ?? tradePlayer.pre_trade_avg ?? null;
-  const expectedGames = tradePlayer.expected_games ?? 4;
+  // Pre-trade avg fallback — if the stored value is null but we have
+  // pre_trade_round_scores, compute from those so the column populates.
+  const computedPreAvg = (() => {
+    if (tradePlayer.pre_trade_avg != null) return tradePlayer.pre_trade_avg;
+    const rs = performance?.pre_trade_round_scores ?? [];
+    const played = rs.filter((s) => s.points != null && s.points > 0);
+    if (played.length === 0) return null;
+    return played.reduce((sum, s) => sum + (s.points ?? 0), 0) / played.length;
+  })();
+
+  // Expected: stored → fallback to pre-trade avg → still null.
+  const expectedAvg = tradePlayer.expected_avg ?? computedPreAvg ?? null;
+  const expectedFallbackUsed =
+    tradePlayer.expected_avg == null && computedPreAvg != null;
+
+  // Dynamic post-trade window. The stored expected_games (default 4 from v2)
+  // is treated as a CAP — if the user explicitly said "expect 0" at trade
+  // time, that overrides. Otherwise the window is current_round - executed.
+  const storedExpected = tradePlayer.expected_games;
+  const isUserExplicit = storedExpected != null && storedExpected !== 4;
+  const expectedGames = isUserExplicit
+    ? Math.min(postTradeWindow, storedExpected as number)
+    : postTradeWindow;
+
   const actualGames = performance?.rounds_played ?? 0;
   const avgSince = actualGames > 0 ? performance!.post_trade_avg : null;
-  const preAvg = tradePlayer.pre_trade_avg;
 
-  const preDelta = preAvg != null && expectedAvg != null ? preAvg - expectedAvg : null;
-  const verdict = playerVerdictFor(avgSince, expectedAvg, expectedGames, actualGames);
+  const preDelta =
+    computedPreAvg != null && expectedAvg != null ? computedPreAvg - expectedAvg : null;
+  const verdict = playerVerdictFor(
+    avgSince,
+    expectedAvg,
+    expectedGames,
+    actualGames,
+    computedPreAvg
+  );
 
   // Inline mini-trajectory data when expanded
   const traj = useMemo(() => {
@@ -1325,41 +1354,37 @@ function PlayerVerdictRow({
         style={{ borderTop: `1px solid ${BORDER}` }}
       >
         <td className="py-2 pr-2 text-sm">
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 min-w-0">
             <span
               className="w-1.5 h-1.5 rounded-full shrink-0"
               style={{ background: dotColor }}
               title={injured ? 'Injured' : 'Active'}
             />
-            <span className="font-medium" style={{ color: TEXT }}>
+            <span className="font-medium truncate" style={{ color: TEXT }}>
               {displayLabel}
             </span>
-            <span className="text-[10px]" style={{ color: TEXT_MUTED }}>
+            <span className="text-[10px] shrink-0" style={{ color: TEXT_MUTED }}>
               ({pos})
             </span>
           </div>
         </td>
-        {/* Verdict column — promoted to position 2 per v3 */}
-        <td className="px-2 text-left text-[11px] font-semibold" style={{ color: verdictColor }}>
-          {verdict.text}
-        </td>
+        {/* v6 — Avg Since: number + 'played all N' / 'missed K of N' suffix */}
         <td className="px-2 text-right text-sm tabular-nums" style={{ color: TEXT }}>
           {avgSince != null ? Math.round(avgSince) : '—'}
-          <span className="ml-1 text-[10px]" style={{ color: TEXT_MUTED }}>
-            ({actualGames}/{expectedGames})
-          </span>
+          <div className="text-[10px] mt-0.5" style={{ color: TEXT_MUTED }}>
+            {availabilityText(actualGames, expectedGames)}
+          </div>
         </td>
+        {/* Avg Before — now sourced from computedPreAvg with fallback */}
         <td className="px-2 text-right text-sm tabular-nums" style={{ color: TEXT_BODY }}>
-          {preAvg != null ? Math.round(preAvg) : '—'}
+          {computedPreAvg != null ? Math.round(computedPreAvg) : '—'}
           {preDelta != null && (
             <span
               className="ml-1 text-[10px]"
               style={{
-                // Muted when delta is 0; positive deltas take the team's colour;
-                // negative deltas in red.
                 color:
                   preDelta === 0
-                    ? TEXT_MUTED
+                    ? 'rgba(155,163,181,0.55)' // visibly muted at delta=0
                     : preDelta > 0
                       ? teamColor
                       : STATUS_INJURED,
@@ -1370,19 +1395,27 @@ function PlayerVerdictRow({
             </span>
           )}
         </td>
-        <td className="pl-2 text-right text-sm tabular-nums" style={{ color: TEXT }}>
+        <td className="px-2 text-right text-sm tabular-nums" style={{ color: TEXT }}>
           <span className="inline-flex items-center gap-1 justify-end">
             {expectedAvg != null ? Math.round(expectedAvg) : '—'}
             {expectedAvg != null && (
               <InfoTip>
                 <strong style={{ color: TEXT }}>Expected: {Math.round(expectedAvg)}</strong>
                 <br />
-                Source: {tradePlayer.expected_avg_source === 'manual' ? 'Manual override' : 'Auto-derived'}
+                {expectedFallbackUsed
+                  ? 'Source: Pre-trade average (auto-derived expected unavailable)'
+                  : tradePlayer.expected_avg_source === 'manual'
+                    ? 'Source: Manual override'
+                    : 'Source: Auto-derived (60% position-tier baseline + 40% last-3-rounds form)'}
                 <br />
                 Locked at trade execution — cannot be edited.
               </InfoTip>
             )}
           </span>
+        </td>
+        {/* v6 — Verdict moved to RIGHTMOST column. */}
+        <td className="pl-2 text-right text-[11px] font-semibold" style={{ color: verdictColor }}>
+          {verdict.text}
         </td>
       </tr>
       {expanded && traj.length > 0 && performance && (
@@ -1458,6 +1491,18 @@ function ActionButton({
 // ============================================================
 // Helpers
 // ============================================================
+/**
+ * v6 — replaces the cryptic "(N/M)" availability suffix with plain English.
+ * 'played all 5' when actual === expected, 'missed K of N' otherwise,
+ * 'no rounds yet' if the post-trade window is zero.
+ */
+function availabilityText(actual: number, expected: number): string {
+  if (expected <= 0) return 'no rounds yet';
+  if (actual >= expected) return `played all ${expected}`;
+  if (actual === 0) return `missed all ${expected}`;
+  return `missed ${expected - actual} of ${expected}`;
+}
+
 /** Readable foreground (white or dark navy) for a hex background. YIQ luminance. */
 function readableTextOn(hex: string): string {
   const cleaned = hex.replace('#', '');

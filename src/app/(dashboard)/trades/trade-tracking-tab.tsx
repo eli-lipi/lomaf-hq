@@ -344,7 +344,9 @@ function NarrativeStats({
   const biggestSwing = swings.sort((a, b) => Math.abs(b.signed) - Math.abs(a.signed))[0];
 
   // Format helpers — reused for lopsided/swing
-  const formatSignedPct = (n: number) => `${n > 0 ? '+' : ''}${n}%`;
+  // v6 — always-positive sign convention. The minus sign never reaches the
+  // user; the team association underneath the value carries the polarity.
+  const formatSignedPct = (n: number) => `${Math.abs(n)}%`;
 
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">

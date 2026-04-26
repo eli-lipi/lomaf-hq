@@ -157,8 +157,7 @@ export default function TradeCard({
               className="text-2xl font-bold leading-none tabular-nums"
               style={{ color: winningColor }}
             >
-              {advantage > 0 ? '+' : ''}
-              {advantage}%
+              {Math.abs(advantage)}%
             </div>
             <div
               className="text-[10px] font-bold uppercase tracking-[0.10em] truncate max-w-[160px]"
