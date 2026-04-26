@@ -3,13 +3,9 @@ import { createClient } from '@supabase/supabase-js';
 import { getAnthropicClient, AI_MODEL, parseAIJson, logAIUsage, getSystemPrompt } from '@/lib/ai';
 import { getCurrentUser } from '@/lib/auth';
 
-// Placeholder fallbacks: Next.js 16's "Collecting page data" build step
-// evaluates route modules without injected env vars; @supabase/supabase-js
-// v2 createClient throws synchronously on missing/empty supabaseUrl. The
-// real env vars take over at runtime.
 const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://placeholder.supabase.co',
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'placeholder-key'
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 );
 
 export async function GET(request: Request) {
