@@ -1,6 +1,7 @@
 'use client';
 
 import { TEAMS } from '@/lib/constants';
+import { snap5 as importedSnap5 } from '@/lib/trades/scale';
 import type { Trade, TradePlayer, TradeProbability } from '@/lib/trades/types';
 
 // Shared dark-theme tokens (kept in sync with trade-detail.tsx)
@@ -26,12 +27,9 @@ interface Props {
   onViewDetails: () => void;
 }
 
-/** Snap a percentage to the nearest 5 — matches the storage-side snap in
- *  compute-probability.ts so trades never display non-5%-aligned numbers
- *  even while older data hasn't been recalculated yet. */
-function snap5(pct: number): number {
-  return Math.round(pct / 5) * 5;
-}
+// Re-export snap5 from the scale module (single source of truth) under the
+// local name kept by callers in this file.
+const snap5 = importedSnap5;
 
 function surname(fullName: string): string {
   const parts = fullName.trim().split(/\s+/);

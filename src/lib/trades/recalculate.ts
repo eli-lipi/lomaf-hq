@@ -6,7 +6,7 @@ import type {
   NormalizedPosition,
   TradeFactorsBreakdown,
 } from './types';
-import { computeProbability, detectInjury } from './compute-probability';
+import { computeProbability, detectInjury, type PlayerSidePerf } from './compute-probability';
 import { generateTradeNarrative, type LineRanks } from './ai-assessment';
 import { cleanPositionDisplay } from './positions';
 
@@ -60,13 +60,18 @@ export async function recalculateTradeForRound(
     scoresByPlayer.get(key)!.push({ round: r.round_number, points: r.points });
   }
 
-  // 3. Build PlayerPerformance for both sides
+  // 3. Build PlayerPerformance for both sides.
+  //    v2 — post_trade_avg is now computed over PLAYED rounds only (DNPs are
+  //    dropped). The availability story is told separately by the
+  //    rounds_played / expected_games ratio.
   const performance: PlayerPerformance[] = players.map((p) => {
     const key = `${p.player_id}-${p.receiving_team_id}`;
     const rounds = (scoresByPlayer.get(key) ?? []).sort((a, b) => a.round - b.round);
-    const roundsPlayed = rounds.filter((r) => r.points !== null && r.points !== undefined).length;
-    const pointsSum = rounds.reduce((sum, r) => sum + (r.points ?? 0), 0);
-    const postTradeAvg = roundsPlayed > 0 ? pointsSum / Math.max(rounds.length, 1) : 0;
+    const playedRounds = rounds.filter((r) => r.points !== null && r.points !== undefined && r.points > 0);
+    const roundsPlayed = playedRounds.length;
+    const pointsSum = playedRounds.reduce((sum, r) => sum + (r.points ?? 0), 0);
+    // Avg over played rounds only. DNPs/0s are dropped from the divisor.
+    const postTradeAvg = roundsPlayed > 0 ? pointsSum / roundsPlayed : 0;
 
     const recentScores = rounds.map((r) => r.points);
     const injury = detectInjury(recentScores, p.pre_trade_avg);
@@ -86,12 +91,41 @@ export async function recalculateTradeForRound(
       injured: injury.injured,
       missed_rounds: injury.missedRounds,
       round_scores: rounds,
-      pre_trade_round_scores: [], // not needed for the recalc; only used by the detail UI
+      pre_trade_round_scores: [],
     };
   });
 
   const teamA = performance.filter((p) => p.receiving_team_id === trade.team_a_id);
   const teamB = performance.filter((p) => p.receiving_team_id === trade.team_b_id);
+
+  // v2 — Build PlayerSidePerf rows for the new probability calc. Uses each
+  // trade_player's locked expected_avg/games, falling back to pre_trade_avg
+  // and 4 if they were not populated (legacy rows pre-migration).
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const playerByIdAndSide = new Map<string, any>();
+  for (const p of players as unknown as Array<Record<string, unknown>>) {
+    const k = `${p.player_id}-${p.receiving_team_id}`;
+    playerByIdAndSide.set(k, p);
+  }
+  const buildSidePerf = (perf: PlayerPerformance[]): PlayerSidePerf[] =>
+    perf.map((p) => {
+      const tp = playerByIdAndSide.get(`${p.player_id}-${p.receiving_team_id}`) as
+        | { expected_avg?: number | null; expected_games?: number | null }
+        | undefined;
+      const expected_avg =
+        (tp?.expected_avg as number | null | undefined) ??
+        p.pre_trade_avg ??
+        70; // last-ditch baseline
+      const expected_games =
+        tp?.expected_games != null ? Number(tp.expected_games) : 4;
+      return {
+        player_id: p.player_id,
+        expected_avg,
+        expected_games,
+        rounds_played: p.rounds_played,
+        avg_when_played: p.rounds_played > 0 ? p.post_trade_avg : null,
+      };
+    });
 
   // 4. Check if AI narrative is cached
   let aiEdge: 'team_a' | 'team_b' | 'even' = 'even';
@@ -155,6 +189,8 @@ export async function recalculateTradeForRound(
     const preliminary = computeProbability({
       roundsSince,
       currentRound: roundNumber,
+      teamA: buildSidePerf(teamA),
+      teamB: buildSidePerf(teamB),
       teamAPerformance: teamA,
       teamBPerformance: teamB,
       aiEdge: 'even',
@@ -202,14 +238,24 @@ export async function recalculateTradeForRound(
   }
 
   // 6. Final compute with AI edge
-  const { probA, probB, factors } = computeProbability({
+  const { advantageA, probA, probB, factors } = computeProbability({
     roundsSince,
     currentRound: roundNumber,
+    teamA: buildSidePerf(teamA),
+    teamB: buildSidePerf(teamB),
     teamAPerformance: teamA,
     teamBPerformance: teamB,
     aiEdge,
     aiMagnitude,
   });
+
+  // Polarity-flip the advantage for storage. positive_team_id = team_b means
+  // a positive advantage_a is a negative stored advantage (positive side is
+  // losing).
+  const advantage =
+    trade.positive_team_id != null && trade.positive_team_id === trade.team_b_id
+      ? -advantageA
+      : advantageA;
 
   // 7. Upsert
   await supabase.from('trade_probabilities').upsert(
@@ -218,6 +264,7 @@ export async function recalculateTradeForRound(
       round_number: roundNumber,
       team_a_probability: Number(probA.toFixed(2)),
       team_b_probability: Number(probB.toFixed(2)),
+      advantage,
       factors,
       ai_assessment: aiNarrative || null,
       calculated_at: new Date().toISOString(),

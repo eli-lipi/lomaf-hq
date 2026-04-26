@@ -15,6 +15,11 @@ export interface Trade {
   context_notes: string | null;
   screenshot_url: string | null;
   created_at: string;
+  // v2 — frozen at trade execution
+  positive_team_id: number | null;
+  negative_team_id: number | null;
+  team_a_ladder_at_trade: number | null;
+  team_b_ladder_at_trade: number | null;
 }
 
 export interface TradePlayer {
@@ -27,6 +32,10 @@ export interface TradePlayer {
   receiving_team_id: number;
   receiving_team_name: string;
   pre_trade_avg: number | null;
+  // v2 — locked at trade execution
+  expected_avg: number | null;
+  expected_avg_source: 'manual' | 'auto' | null;
+  expected_games: number | null;       // 0..4, default 4
 }
 
 export interface TradeFactorsBreakdown {
@@ -41,6 +50,11 @@ export interface TradeFactorsBreakdown {
   avgA: number;                    // raw per-round avg for A's acquired players
   avgB: number;
   rawEdge: number;                 // combined weighted edge before confidence
+  // v2 — availability adjustment + per-side performance vs expected
+  perfVsExpectedA?: number;        // sum of (actual - expected) for side A's players
+  perfVsExpectedB?: number;
+  availabilityDragA?: number;      // 0..1 — how much of A's expected output went missing
+  availabilityDragB?: number;
 }
 
 export interface TradeProbability {
@@ -49,6 +63,9 @@ export interface TradeProbability {
   round_number: number;
   team_a_probability: number;
   team_b_probability: number;
+  // v2 — signed advantage on the ±100 scale, polarized to positive_team_id.
+  // +N = positive_team winning the trade by N percentage points.
+  advantage: number | null;
   factors: TradeFactorsBreakdown | null;
   ai_assessment: string | null;
   calculated_at: string;

@@ -21,8 +21,10 @@ import {
   Tooltip,
   ResponsiveContainer,
   ReferenceLine,
+  ReferenceArea,
 } from 'recharts';
 import { cleanPositionDisplay } from '@/lib/trades/positions';
+import { snap5, verdictFor, playerVerdictFor } from '@/lib/trades/scale';
 import type {
   PlayerPerformance,
   Trade,
@@ -57,11 +59,6 @@ interface Props {
   onDeleted: () => void;
 }
 
-/** Snap a probability to 5% increments — keeps display in sync with the
- *  storage-side snap in compute-probability.ts so older un-recalced trades
- *  also render as 55/45 rather than 53/47. */
-const snap5 = (pct: number): number => Math.round(pct / 5) * 5;
-
 // League-avg baseline by position, used when a player has no pre-trade avg
 const POSITION_BASELINE: Record<string, number> = { DEF: 70, MID: 85, FWD: 70, RUC: 80 };
 
@@ -79,46 +76,8 @@ function baselineForPerformance(p: PlayerPerformance): number {
   return POSITION_BASELINE[pos] ?? 70;
 }
 
-// ============================================================
-// Verdict logic — converts the current win prob into a one-line take
-// ============================================================
-type VerdictLevel = 'flip' | 'slight' | 'edge' | 'robbery';
-
-interface Verdict {
-  level: VerdictLevel;
-  text: string;
-  team: 'A' | 'B' | null;
-}
-
-function computeVerdict(probA: number, probB: number, teamAName: string, teamBName: string): Verdict {
-  const aWins = probA >= probB;
-  const winPct = aWins ? probA : probB;
-  const winName = aWins ? teamAName : teamBName;
-  const team = aWins ? 'A' : 'B';
-
-  if (winPct < 55) return { level: 'flip', text: 'Coin flip', team: null };
-  if (winPct < 65) return { level: 'slight', text: `Slight edge — ${winName}`, team };
-  if (winPct < 80) return { level: 'edge', text: `Edge — ${winName}`, team };
-  return { level: 'robbery', text: `Robbery — ${winName}`, team };
-}
-
-// ============================================================
-// Auto-zoom Y-axis logic — keeps small probability moves visible
-// ============================================================
-function autoZoomDomain(values: number[]): [number, number] {
-  if (values.length === 0) return [30, 70];
-  const min = Math.min(...values, 50);
-  const max = Math.max(...values, 50);
-  // Pad 5% on each side, snap to nearest 5
-  let yMin = Math.max(0, Math.floor((min - 5) / 5) * 5);
-  let yMax = Math.min(100, Math.ceil((max + 5) / 5) * 5);
-  // Ensure at least 20pp visible — flat lines get the 30-70 default treatment
-  if (yMax - yMin < 20) {
-    yMin = Math.max(0, Math.min(yMin, 30));
-    yMax = Math.min(100, Math.max(yMax, 70));
-  }
-  return [yMin, yMax];
-}
+// Verdict logic now lives in '@/lib/trades/scale' (verdictFor).
+// Y-axis is fixed −100..+100; auto-zoom is gone (snapping makes it unnecessary).
 
 // ============================================================
 // Main detail component
@@ -129,7 +88,6 @@ export default function TradeDetail({ tradeId, onBack, onDeleted }: Props) {
   const [recalculating, setRecalculating] = useState(false);
   const [editing, setEditing] = useState(false);
   const [showDetails, setShowDetails] = useState(false);
-  const [fullZoom, setFullZoom] = useState(false);
 
   const load = async () => {
     setLoading(true);
@@ -160,22 +118,33 @@ export default function TradeDetail({ tradeId, onBack, onDeleted }: Props) {
     onDeleted();
   };
 
+  // v2 chart data — signed advantage on the ±100 scale, polarized to
+  // positive_team_id. Falls back to deriving from team_a_probability for
+  // legacy rows that haven't been re-computed yet.
   const chartData = useMemo(() => {
-    if (!data) return [] as { round: string; roundNum: number; probA: number; deltaPct: number | null }[];
+    if (!data) return [] as { round: string; roundNum: number; advantage: number; deltaPct: number | null }[];
+    const positiveIsA = data.trade.positive_team_id == null
+      ? true
+      : data.trade.positive_team_id === data.trade.team_a_id;
+    const advFromRow = (p: TradeProbability): number => {
+      if (p.advantage != null) return snap5(Number(p.advantage));
+      // Legacy fallback: derive from team_a_probability (0-100 → ±100)
+      const aEdge = (Number(p.team_a_probability) - 50) * 2;
+      return snap5(positiveIsA ? aEdge : -aEdge);
+    };
     const map = new Map<number, number>();
-    map.set(data.trade.round_executed, 50);
+    map.set(data.trade.round_executed, 0); // anchor at neutral
     for (const p of data.probabilityHistory) {
       if (p.round_number === data.trade.round_executed) continue;
-      // Snap on read so the chart, deltas, and tooltips never show
-      // sub-5% precision (e.g. 53% bobbing to 51% reads as noise).
-      map.set(p.round_number, snap5(Number(p.team_a_probability)));
+      map.set(p.round_number, advFromRow(p));
     }
     const sorted = Array.from(map.entries()).sort(([a], [b]) => a - b);
-    return sorted.map(([round, pa], idx) => ({
+    return sorted.map(([round, adv], idx) => ({
       round: `R${round}`,
       roundNum: round,
-      probA: pa,
-      deltaPct: idx === 0 ? null : pa - sorted[idx - 1][1],
+      advantage: adv,
+      // Delta vs prior round, computed between snapped values per spec.
+      deltaPct: idx === 0 ? null : adv - sorted[idx - 1][1],
     }));
   }, [data]);
 
@@ -199,27 +168,31 @@ export default function TradeDetail({ tradeId, onBack, onDeleted }: Props) {
   const teamBPlayers = players.filter((p) => p.receiving_team_id === trade.team_b_id);
   const perfById = new Map(playerPerformance.map((p) => [p.player_id, p]));
 
-  // Display-snap to nearest 5%. Storage already snaps in compute-probability.ts;
-  // this guard catches older rows that were stored before the snap was added.
-  const probA = snap5(Number(latestProbability?.team_a_probability ?? 50));
-  const probB = 100 - probA;
-  const verdict = computeVerdict(probA, probB, trade.team_a_name, trade.team_b_name);
-  const aWins = probA >= probB;
-  const heroPct = aWins ? probA : probB;
-  const heroName = aWins ? trade.team_a_name : trade.team_b_name;
+  // v2 — work in signed ±100 advantage. Polarity is locked at trade time on
+  // `trade.positive_team_id`. Legacy rows fall back to assuming team A is
+  // positive.
+  const positiveIsA =
+    trade.positive_team_id == null ? true : trade.positive_team_id === trade.team_a_id;
+  const positiveTeamName = positiveIsA ? trade.team_a_name : trade.team_b_name;
+  const negativeTeamName = positiveIsA ? trade.team_b_name : trade.team_a_name;
 
-  // Delta vs prior round (for the price tag)
-  const sortedHistory = [...probabilityHistory].sort((a, b) => a.round_number - b.round_number);
+  // Latest snapped advantage. Uses the stored `advantage` field; falls back
+  // to deriving from team_a_probability for legacy rows.
+  const advantage: number = (() => {
+    if (latestProbability?.advantage != null) return snap5(Number(latestProbability.advantage));
+    const aEdge = (snap5(Number(latestProbability?.team_a_probability ?? 50)) - 50) * 2;
+    return positiveIsA ? aEdge : -aEdge;
+  })();
+
+  const verdict = verdictFor(advantage, positiveTeamName, negativeTeamName);
+  const winningTeamName = advantage >= 0 ? positiveTeamName : negativeTeamName;
+
+  // Delta vs prior round — computed between snapped values per spec, so a
+  // round where nothing changed shows 0% (no fake movement).
   let heroDelta: number | null = null;
-  if (sortedHistory.length >= 2) {
-    const last = sortedHistory[sortedHistory.length - 1];
-    const prev = sortedHistory[sortedHistory.length - 2];
-    const latestSide = snap5(aWins ? Number(last.team_a_probability) : Number(last.team_b_probability));
-    const prevSide = snap5(aWins ? Number(prev.team_a_probability) : Number(prev.team_b_probability));
-    heroDelta = latestSide - prevSide;
+  if (chartData.length >= 2) {
+    heroDelta = chartData[chartData.length - 1].deltaPct ?? null;
   }
-
-  const yDomain: [number, number] = fullZoom ? [0, 100] : autoZoomDomain(chartData.map((d) => d.probA));
 
   const editInitial: InitialTradeData = {
     tradeId: trade.id,
@@ -288,12 +261,29 @@ export default function TradeDetail({ tradeId, onBack, onDeleted }: Props) {
             )}
           </div>
           <h1 className="text-2xl md:text-3xl font-semibold mt-2 leading-tight">
-            {trade.team_a_name} <span style={{ color: TEXT_MUTED, fontWeight: 400 }} className="mx-2">⇄</span> {trade.team_b_name}
+            {trade.team_a_name}
+            {trade.team_a_ladder_at_trade != null && (
+              <span className="text-base ml-1.5 font-normal" style={{ color: TEXT_MUTED }}>
+                ({ordinal(trade.team_a_ladder_at_trade)})
+              </span>
+            )}
+            <span style={{ color: TEXT_MUTED, fontWeight: 400 }} className="mx-2">⇄</span>
+            {trade.team_b_name}
+            {trade.team_b_ladder_at_trade != null && (
+              <span className="text-base ml-1.5 font-normal" style={{ color: TEXT_MUTED }}>
+                ({ordinal(trade.team_b_ladder_at_trade)})
+              </span>
+            )}
           </h1>
           <p className="text-sm mt-1" style={{ color: TEXT_MUTED }}>
             {coachByTeamId(trade.team_a_id, trade.team_a_name)}
             <span className="mx-2" style={{ color: 'rgba(255,255,255,0.15)' }}>·</span>
             {coachByTeamId(trade.team_b_id, trade.team_b_name)}
+            {trade.team_a_ladder_at_trade != null && trade.team_b_ladder_at_trade != null && (
+              <span className="ml-2 text-[11px] italic" style={{ color: 'rgba(255,255,255,0.30)' }}>
+                — ladder positions at time of trade
+              </span>
+            )}
           </p>
         </div>
         <VerdictPill verdict={verdict} />
@@ -311,26 +301,28 @@ export default function TradeDetail({ tradeId, onBack, onDeleted }: Props) {
         ) : (
           <>
             <div className="flex items-center justify-between mb-3">
-              <h2 className="text-[10px] font-bold uppercase tracking-[0.15em]" style={{ color: TEXT_MUTED }}>
+              <h2 className="text-[10px] font-bold uppercase tracking-[0.15em] flex items-center gap-1.5" style={{ color: TEXT_MUTED }}>
                 Win Probability
+                <InfoTip>
+                  Performance vs. each player&apos;s expected average (~70%) blended with availability vs. expected games (~30%). Snapped to nearest 5%. Polarity locked at trade execution to whichever team had the better ladder position.
+                </InfoTip>
               </h2>
-              <button
-                onClick={() => setFullZoom((v) => !v)}
-                className="text-[11px] transition-colors"
-                style={{ color: fullZoom ? ACCENT : TEXT_MUTED }}
-              >
-                {fullZoom ? 'Auto-zoom' : 'Show 0–100%'}
-              </button>
+              <span className="text-[10px]" style={{ color: TEXT_MUTED }}>
+                {positiveTeamName} positive · {negativeTeamName} negative
+              </span>
             </div>
             <div className="relative">
-            <ResponsiveContainer width="100%" height={400}>
-              <ComposedChart data={chartData} margin={{ top: 16, right: 16, bottom: 6, left: 6 }}>
+            <ResponsiveContainer width="100%" height={420}>
+              <ComposedChart data={chartData} margin={{ top: 16, right: 24, bottom: 6, left: 90 }}>
                 <defs>
                   <linearGradient id="winFill" x1="0" y1="0" x2="0" y2="1">
                     <stop offset="0%" stopColor={ACCENT} stopOpacity={0.20} />
                     <stop offset="100%" stopColor={ACCENT} stopOpacity={0} />
                   </linearGradient>
                 </defs>
+                {/* Zone shading: top half green, bottom half neutral white */}
+                <ReferenceArea y1={0} y2={100} fill={ACCENT} fillOpacity={0.06} ifOverflow="visible" />
+                <ReferenceArea y1={-100} y2={0} fill="rgba(255,255,255,0.03)" ifOverflow="visible" />
                 <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false} />
                 <XAxis
                   dataKey="round"
@@ -339,13 +331,13 @@ export default function TradeDetail({ tradeId, onBack, onDeleted }: Props) {
                   tickLine={false}
                 />
                 <YAxis
-                  domain={yDomain}
-                  ticks={generateTicks(yDomain)}
-                  tickFormatter={(v) => `${v}%`}
-                  tick={{ fontSize: 11, fill: TEXT_MUTED }}
+                  domain={[-100, 100]}
+                  ticks={[-100, -50, 0, 50, 100]}
+                  tickFormatter={(v) => verdictAxisLabel(v as number, positiveTeamName, negativeTeamName)}
+                  tick={{ fontSize: 10, fill: TEXT_MUTED }}
                   axisLine={false}
                   tickLine={false}
-                  width={40}
+                  width={86}
                 />
                 <Tooltip
                   cursor={{ stroke: 'rgba(255,255,255,0.20)', strokeWidth: 1, strokeDasharray: '3 3' }}
@@ -353,53 +345,46 @@ export default function TradeDetail({ tradeId, onBack, onDeleted }: Props) {
                   content={(props: any) => (
                     <ChartTooltip
                       {...props}
-                      teamAName={trade.team_a_name}
-                      teamBName={trade.team_b_name}
+                      positiveTeamName={positiveTeamName}
+                      negativeTeamName={negativeTeamName}
                     />
                   )}
                 />
-                {/* 50% coin-flip baseline */}
-                <ReferenceLine
-                  y={50}
-                  stroke="rgba(255,255,255,0.20)"
-                  strokeDasharray="4 4"
-                  strokeWidth={1}
-                  label={{
-                    value: 'Coin flip',
-                    position: 'left',
-                    fill: TEXT_MUTED,
-                    fontSize: 10,
-                    offset: 8,
-                  }}
-                />
+                {/* Wash baseline — solid not dashed, this is the most important reference */}
+                <ReferenceLine y={0} stroke="rgba(255,255,255,0.45)" strokeWidth={1.5} />
+                {/* Edge markers */}
+                <ReferenceLine y={50} stroke="rgba(255,255,255,0.15)" strokeDasharray="4 4" strokeWidth={1} />
+                <ReferenceLine y={-50} stroke="rgba(255,255,255,0.15)" strokeDasharray="4 4" strokeWidth={1} />
                 {/* Trade-executed vertical anchor */}
                 <ReferenceLine
                   x={`R${trade.round_executed}`}
                   stroke={ACCENT}
-                  strokeOpacity={0.45}
+                  strokeOpacity={0.55}
                   strokeDasharray="2 4"
                   label={{
                     value: 'Trade Executed',
-                    position: 'insideTopLeft',
+                    position: 'top',
                     fill: ACCENT,
                     fontSize: 10,
-                    offset: 6,
+                    offset: 14,
                   }}
                 />
-                {/* Area fill under the WHOLE curve, not just one half */}
+                {/* Area fill (signed — Recharts will fill from baseline 0 if we set baseValue) */}
                 <Area
                   type="monotone"
-                  dataKey="probA"
+                  dataKey="advantage"
                   stroke="none"
-                  fill="url(#winFill)"
+                  fill={ACCENT}
+                  fillOpacity={0.10}
+                  baseValue={0}
                   isAnimationActive={false}
                   legendType="none"
                   activeDot={false}
                 />
-                {/* The probability line */}
+                {/* The advantage line */}
                 <Line
                   type="monotone"
-                  dataKey="probA"
+                  dataKey="advantage"
                   stroke={ACCENT}
                   strokeWidth={2.5}
                   dot={((dotProps: Record<string, unknown>) => {
@@ -435,7 +420,7 @@ export default function TradeDetail({ tradeId, onBack, onDeleted }: Props) {
             {/* Price tag — anchored to the top-right of the chart panel.
                 Polymarket-style "current price in the corner". */}
             <div className="absolute top-2 right-3 pointer-events-none">
-              <PriceTag pct={heroPct} teamName={heroName} delta={heroDelta} />
+              <PriceTag advantage={advantage} winningTeamName={winningTeamName} delta={heroDelta} />
             </div>
             </div>
           </>
@@ -476,21 +461,21 @@ export default function TradeDetail({ tradeId, onBack, onDeleted }: Props) {
         </div>
       )}
 
-      {/* ── Strip 4: Players in the trade (compact rows) ──────── */}
+      {/* ── Strip 4: Resolution criteria — the bet being judged ───── */}
       <div
         className="rounded-xl p-5"
         style={{ background: SURFACE, border: `1px solid ${BORDER}` }}
       >
         <h2 className="text-[10px] font-bold uppercase tracking-[0.15em] mb-3" style={{ color: TEXT_MUTED }}>
-          Players in the Trade
+          Players in the Trade — the bet being judged
         </h2>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-3">
-          <PlayerRowGroup
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-x-6 gap-y-4">
+          <PlayerVerdictTable
             heading={`${trade.team_a_name} received`}
             tradePlayers={teamAPlayers}
             perfById={perfById}
           />
-          <PlayerRowGroup
+          <PlayerVerdictTable
             heading={`${trade.team_b_name} received`}
             tradePlayers={teamBPlayers}
             perfById={perfById}
@@ -550,8 +535,8 @@ export default function TradeDetail({ tradeId, onBack, onDeleted }: Props) {
 // ============================================================
 // Header verdict pill
 // ============================================================
-function VerdictPill({ verdict }: { verdict: Verdict }) {
-  const isFlip = verdict.level === 'flip';
+function VerdictPill({ verdict }: { verdict: { level: string; text: string; isFlip: boolean } }) {
+  const isFlip = verdict.isFlip;
   return (
     <div
       className="px-4 py-2 rounded-lg flex items-center gap-2"
@@ -575,17 +560,18 @@ function VerdictPill({ verdict }: { verdict: Verdict }) {
 }
 
 // ============================================================
-// Right-edge price tag (the one fused to the chart line)
+// Right-edge price tag — signed ±100 advantage
 // ============================================================
 function PriceTag({
-  pct,
-  teamName,
+  advantage,
+  winningTeamName,
   delta,
 }: {
-  pct: number;
-  teamName: string;
+  advantage: number;
+  winningTeamName: string;
   delta: number | null;
 }) {
+  const sign = advantage >= 0 ? '+' : '';
   return (
     <div
       className="rounded-lg px-3 py-2 text-right"
@@ -593,23 +579,24 @@ function PriceTag({
         background: 'rgba(10,15,28,0.85)',
         border: `1px solid ${BORDER}`,
         backdropFilter: 'blur(4px)',
-        minWidth: 100,
+        minWidth: 110,
       }}
     >
       <div className="text-2xl font-bold leading-none tabular-nums" style={{ color: ACCENT }}>
-        {snap5(pct)}%
+        {sign}
+        {advantage}%
       </div>
       <div className="text-[10px] mt-1 font-medium truncate" style={{ color: TEXT_BODY }}>
-        {teamName} winning
+        {winningTeamName} winning
       </div>
-      {delta != null && Math.abs(delta) >= 0.5 && (
+      {delta != null && Math.abs(delta) >= 5 && (
         <div
           className="text-[10px] mt-1 flex items-center justify-end gap-0.5 font-semibold tabular-nums"
           style={{ color: delta >= 0 ? ACCENT : STATUS_INJURED }}
         >
           {delta >= 0 ? <TrendingUp size={10} /> : <TrendingDown size={10} />}
           {delta >= 0 ? '+' : ''}
-          {delta.toFixed(1)}%
+          {delta}% since prev
         </div>
       )}
     </div>
@@ -624,14 +611,14 @@ function ChartTooltip(props: {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   payload?: any[];
   label?: string;
-  teamAName: string;
-  teamBName: string;
+  positiveTeamName: string;
+  negativeTeamName: string;
 }) {
   if (!props.active || !props.payload?.length) return null;
-  const p = props.payload[0]?.payload as { probA: number; deltaPct: number | null; round: string } | undefined;
+  const p = props.payload[0]?.payload as { advantage: number; deltaPct: number | null; round: string } | undefined;
   if (!p) return null;
-  const winName = p.probA >= 50 ? props.teamAName : props.teamBName;
-  const winPct = p.probA >= 50 ? p.probA : 100 - p.probA;
+  const winName = p.advantage >= 0 ? props.positiveTeamName : props.negativeTeamName;
+  const sign = p.advantage >= 0 ? '+' : '';
   return (
     <div
       style={{
@@ -639,7 +626,7 @@ function ChartTooltip(props: {
         border: `1px solid ${BORDER}`,
         borderRadius: 8,
         padding: '8px 10px',
-        minWidth: 130,
+        minWidth: 150,
         boxShadow: '0 4px 24px rgba(0,0,0,0.4)',
       }}
     >
@@ -647,15 +634,16 @@ function ChartTooltip(props: {
         Round {String(p.round).replace('R', '')}
       </div>
       <div className="text-sm font-semibold" style={{ color: ACCENT }}>
-        {snap5(winPct)}% {winName}
+        {sign}
+        {p.advantage}% · {winName}
       </div>
-      {p.deltaPct != null && Math.abs(p.deltaPct) >= 0.1 && (
+      {p.deltaPct != null && Math.abs(p.deltaPct) >= 5 && (
         <div
           className="text-[10px] mt-0.5 tabular-nums"
           style={{ color: p.deltaPct >= 0 ? ACCENT : STATUS_INJURED }}
         >
           {p.deltaPct >= 0 ? '+' : ''}
-          {p.deltaPct.toFixed(1)}% vs prev round
+          {p.deltaPct}% vs prev round
         </div>
       )}
     </div>
@@ -826,6 +814,192 @@ function MiniTrajectory({
 }
 
 // ============================================================
+// Player verdict table — resolution criteria for the trade
+// (replaces the old PlayerRowGroup. Old PlayerRowGroup kept for the
+//  inline mini-trajectory rendering, just no longer the headline.)
+// ============================================================
+function PlayerVerdictTable({
+  heading,
+  tradePlayers,
+  perfById,
+}: {
+  heading: string;
+  tradePlayers: TradePlayer[];
+  perfById: Map<number, PlayerPerformance>;
+}) {
+  return (
+    <div>
+      <p className="text-[10px] font-bold uppercase tracking-[0.15em] mb-2" style={{ color: TEXT_MUTED }}>
+        {heading}
+      </p>
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="text-[10px] uppercase tracking-wider" style={{ color: TEXT_MUTED }}>
+              <th className="text-left font-medium pr-3 pb-2">Player</th>
+              <th className="text-right font-medium px-2 pb-2 whitespace-nowrap">Avg Since</th>
+              <th className="text-right font-medium px-2 pb-2 whitespace-nowrap">Avg Before</th>
+              <th className="text-right font-medium px-2 pb-2 whitespace-nowrap">
+                <span className="inline-flex items-center gap-1 justify-end">
+                  Expected
+                  <InfoTip>
+                    <strong style={{ color: TEXT }}>Expected average:</strong> the bar this player needed to clear for the trade to make sense. Locked at trade execution. Auto-derived from a position-tier baseline blended 60/40 with last-3-rounds form, or set manually at trade-logging time.
+                  </InfoTip>
+                </span>
+              </th>
+              <th className="text-right font-medium pl-2 pb-2 whitespace-nowrap">
+                <span className="inline-flex items-center gap-1 justify-end">
+                  Verdict
+                  <InfoTip>
+                    <strong style={{ color: TEXT }}>Per-player verdict:</strong> compares Avg Since Trade against Expected Avg. Beat by &gt;10 = Crushing. Within ±5 = Tracking. Behind by &gt;10 = Bet broken. Availability drag overrides if &lt;50% of expected games played.
+                  </InfoTip>
+                </span>
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {tradePlayers.length === 0 && (
+              <tr>
+                <td colSpan={5} className="text-xs italic py-2" style={{ color: TEXT_MUTED }}>—</td>
+              </tr>
+            )}
+            {tradePlayers.map((tp) => (
+              <PlayerVerdictRow key={tp.id} tradePlayer={tp} performance={perfById.get(tp.player_id)} />
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function PlayerVerdictRow({
+  tradePlayer,
+  performance,
+}: {
+  tradePlayer: TradePlayer;
+  performance: PlayerPerformance | undefined;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const injured = performance?.injured ?? false;
+  const pos =
+    performance ? displayPosition(performance) : cleanPositionDisplay(tradePlayer.raw_position) ?? '—';
+
+  const expectedAvg = tradePlayer.expected_avg ?? tradePlayer.pre_trade_avg ?? null;
+  const expectedGames = tradePlayer.expected_games ?? 4;
+  const actualGames = performance?.rounds_played ?? 0;
+  const avgSince = actualGames > 0 ? performance!.post_trade_avg : null;
+  const preAvg = tradePlayer.pre_trade_avg;
+
+  const preDelta = preAvg != null && expectedAvg != null ? preAvg - expectedAvg : null;
+  const verdict = playerVerdictFor(avgSince, expectedAvg, expectedGames, actualGames);
+
+  // Inline mini-trajectory data when expanded
+  const traj = useMemo(() => {
+    if (!performance) return [] as { round: number; pts: number | null }[];
+    const all: { round: number; pts: number | null }[] = [
+      ...(performance.pre_trade_round_scores ?? []).map((s) => ({ round: s.round, pts: s.points })),
+      ...performance.round_scores.map((s) => ({ round: s.round, pts: s.points })),
+    ];
+    return all.sort((a, b) => a.round - b.round);
+  }, [performance]);
+
+  const verdictColor =
+    verdict.level === 'crushing' || verdict.level === 'outperforming'
+      ? ACCENT
+      : verdict.level === 'tracking' || verdict.level === 'pending'
+        ? TEXT_BODY
+        : STATUS_INJURED;
+
+  return (
+    <>
+      <tr
+        onClick={() => setExpanded((v) => !v)}
+        className="cursor-pointer"
+        style={{ borderTop: `1px solid ${BORDER}` }}
+      >
+        <td className="py-2 pr-3 text-sm">
+          <div className="flex items-center gap-2">
+            <span
+              className="w-1.5 h-1.5 rounded-full shrink-0"
+              style={{ background: injured ? STATUS_INJURED : ACCENT }}
+              title={injured ? 'Injured' : 'Active'}
+            />
+            <span className="font-medium" style={{ color: TEXT }}>
+              {tradePlayer.player_name}
+            </span>
+            <span className="text-[10px]" style={{ color: TEXT_MUTED }}>
+              ({pos})
+            </span>
+          </div>
+        </td>
+        <td className="px-2 text-right text-sm tabular-nums" style={{ color: TEXT }}>
+          {avgSince != null ? Math.round(avgSince) : '—'}
+          <span className="ml-1 text-[10px]" style={{ color: TEXT_MUTED }}>
+            ({actualGames}/{expectedGames})
+          </span>
+        </td>
+        <td className="px-2 text-right text-sm tabular-nums" style={{ color: TEXT_BODY }}>
+          {preAvg != null ? Math.round(preAvg) : '—'}
+          {preDelta != null && (
+            <span
+              className="ml-1 text-[10px]"
+              style={{ color: preDelta >= 0 ? ACCENT : STATUS_INJURED }}
+            >
+              ({preDelta >= 0 ? '+' : ''}
+              {Math.round(preDelta)})
+            </span>
+          )}
+        </td>
+        <td className="px-2 text-right text-sm tabular-nums" style={{ color: TEXT }}>
+          <span className="inline-flex items-center gap-1 justify-end">
+            {expectedAvg != null ? Math.round(expectedAvg) : '—'}
+            {expectedAvg != null && (
+              <InfoTip>
+                <strong style={{ color: TEXT }}>Expected: {Math.round(expectedAvg)}</strong>
+                <br />
+                Source: {tradePlayer.expected_avg_source === 'manual' ? 'Manual override' : 'Auto-derived'}
+                <br />
+                Locked at R{performance ? '' : ''} — cannot be edited.
+              </InfoTip>
+            )}
+          </span>
+        </td>
+        <td className="pl-2 text-right text-[11px] font-semibold" style={{ color: verdictColor }}>
+          {verdict.text}
+        </td>
+      </tr>
+      {expanded && traj.length > 0 && performance && (
+        <tr style={{ background: 'rgba(255,255,255,0.02)' }}>
+          <td colSpan={5} className="px-2 pb-3">
+            <div className="grid grid-flow-col auto-cols-fr gap-1 mt-1">
+              {traj.map((s) => {
+                const cell = scoreCellStyle(s.pts, baselineForPerformance(performance));
+                return (
+                  <div
+                    key={s.round}
+                    className="rounded text-center py-1.5 text-[11px] tabular-nums"
+                    style={{
+                      background: cell.bg,
+                      color: cell.color,
+                      border: `1px solid ${cell.border}`,
+                    }}
+                    title={`R${s.round}`}
+                  >
+                    <div className="text-[9px] opacity-60 leading-none mb-0.5">R{s.round}</div>
+                    <div className="font-semibold leading-none">{s.pts == null ? 'DNP' : s.pts}</div>
+                  </div>
+                );
+              })}
+            </div>
+          </td>
+        </tr>
+      )}
+    </>
+  );
+}
+
+// ============================================================
 // Action button (Edit / Recalc / Delete)
 // ============================================================
 function ActionButton({
@@ -868,13 +1042,83 @@ function ActionButton({
 // ============================================================
 // Helpers
 // ============================================================
+/** Ordinal helper: 1 → "1st", 2 → "2nd", ... */
+function ordinal(n: number): string {
+  const suffix =
+    n % 100 >= 11 && n % 100 <= 13
+      ? 'th'
+      : ['th', 'st', 'nd', 'rd', 'th', 'th', 'th', 'th', 'th', 'th'][n % 10];
+  return `${n}${suffix}`;
+}
+
+/** Y-axis label for the chart — verdict words instead of percentages. */
+function verdictAxisLabel(v: number, positiveName: string, negativeName: string): string {
+  if (v === 100) return `Robbery — ${shortName(positiveName)}`;
+  if (v === 50) return `Edge — ${shortName(positiveName)}`;
+  if (v === 0) return 'WASH';
+  if (v === -50) return `Edge — ${shortName(negativeName)}`;
+  if (v === -100) return `Robbery — ${shortName(negativeName)}`;
+  return '';
+}
+
+/** Trim long team names to fit in the Y-axis labels. */
+function shortName(name: string): string {
+  if (name.length <= 14) return name;
+  return name.split(' ')[0];
+}
+
+/** Small ⓘ icon with a hover tooltip — used for methodology disclosures. */
+function InfoTip({ children }: { children: React.ReactNode }) {
+  const [show, setShow] = useState(false);
+  return (
+    <span
+      className="relative inline-flex items-center"
+      onMouseEnter={() => setShow(true)}
+      onMouseLeave={() => setShow(false)}
+    >
+      <span
+        aria-hidden
+        className="inline-flex items-center justify-center rounded-full text-[10px] font-bold cursor-help"
+        style={{
+          width: 14,
+          height: 14,
+          background: 'rgba(255,255,255,0.10)',
+          color: TEXT_BODY,
+        }}
+      >
+        i
+      </span>
+      {show && (
+        <span
+          role="tooltip"
+          className="absolute left-1/2 top-full z-50 mt-2 -translate-x-1/2 normal-case tracking-normal"
+          style={{
+            background: BG,
+            color: TEXT_BODY,
+            border: `1px solid ${BORDER}`,
+            borderRadius: 8,
+            padding: '8px 10px',
+            fontSize: 11,
+            fontWeight: 400,
+            lineHeight: 1.5,
+            width: 280,
+            maxWidth: '80vw',
+            boxShadow: '0 8px 32px rgba(0,0,0,0.6)',
+            pointerEvents: 'none',
+          }}
+        >
+          {children}
+        </span>
+      )}
+    </span>
+  );
+}
+
 function generateTicks([min, max]: [number, number]): number[] {
   const range = max - min;
-  // Aim for 4-6 ticks
   const step = range <= 20 ? 5 : range <= 40 ? 10 : 25;
   const ticks: number[] = [];
   for (let v = Math.ceil(min / step) * step; v <= max; v += step) ticks.push(v);
-  // Always include 50 if it's in range
   if (50 >= min && 50 <= max && !ticks.includes(50)) ticks.push(50);
   return ticks.sort((a, b) => a - b);
 }
@@ -983,11 +1227,19 @@ function DarkScoresGrid({
             </td>
           );
         })}
-        <td className="px-2 py-2 text-right text-xs tabular-nums" style={{ color: TEXT_MUTED, borderLeft: `1px solid ${BORDER}` }}>
+        {/* Trade-executed divider band — Pre-avg label lives INSIDE the band */}
+        <td
+          className="px-2 py-2 text-right text-xs tabular-nums"
+          style={{
+            color: TEXT_MUTED,
+            background: 'rgba(163,255,18,0.10)',
+            borderLeft: `1px solid rgba(163,255,18,0.35)`,
+            borderRight: `1px solid rgba(163,255,18,0.35)`,
+            minWidth: 42,
+          }}
+          title="Pre-trade average"
+        >
           {preAvg != null ? preAvg.toFixed(0) : '—'}
-        </td>
-        <td className="px-1" style={{ width: 4 }}>
-          <div className="h-7 w-1 mx-auto rounded-full" style={{ background: ACCENT }} />
         </td>
         {postRounds.map((r) => {
           const pts = postMap.get(r);
@@ -1004,7 +1256,8 @@ function DarkScoresGrid({
     );
   };
 
-  const colSpan = 1 + preRounds.length + 1 + 1 + postRounds.length + 1;
+  // Player + pre rounds + (band/pre-avg) + post rounds + post-avg
+  const colSpan = 1 + preRounds.length + 1 + postRounds.length + 1;
 
   return (
     <div className="overflow-x-auto">
@@ -1013,30 +1266,72 @@ function DarkScoresGrid({
           <tr className="text-[10px] uppercase tracking-wider" style={{ color: TEXT_MUTED }}>
             <th className="py-1 pr-3 text-left font-medium">Player</th>
             {preRounds.length > 0 && (
-              <th colSpan={preRounds.length} className="py-1 px-1 text-center font-semibold">
+              <th
+                colSpan={preRounds.length}
+                className="py-1 px-1 text-center font-semibold"
+                style={{ borderBottom: `1px solid rgba(255,255,255,0.18)` }}
+              >
                 Before
               </th>
             )}
-            <th className="py-1 px-2 text-center font-medium" style={{ borderLeft: `1px solid ${BORDER}` }}>
-              Pre
+            {/* Divider header carries the TRADE EXECUTED label */}
+            <th
+              className="py-1 px-1 text-center font-bold whitespace-nowrap"
+              style={{
+                color: ACCENT,
+                background: 'rgba(163,255,18,0.10)',
+                borderLeft: `1px solid rgba(163,255,18,0.35)`,
+                borderRight: `1px solid rgba(163,255,18,0.35)`,
+                fontSize: 9,
+                letterSpacing: '0.10em',
+              }}
+            >
+              Trade Executed
             </th>
-            <th className="px-1" />
             {postRounds.length > 0 && (
-              <th colSpan={postRounds.length} className="py-1 px-1 text-center font-semibold">
+              <th
+                colSpan={postRounds.length}
+                className="py-1 px-1 text-center font-semibold"
+                style={{
+                  color: ACCENT,
+                  borderBottom: `1px solid rgba(163,255,18,0.40)`,
+                }}
+              >
                 After
               </th>
             )}
-            <th className="py-1 pl-3 text-right font-medium">Post</th>
+            <th className="py-1 pl-3 text-right font-medium" style={{ color: ACCENT }}>
+              Post
+            </th>
           </tr>
           <tr className="text-[10px]" style={{ color: TEXT_MUTED, borderBottom: `1px solid ${BORDER}` }}>
             <th className="py-1 pr-3" />
             {preRounds.map((r) => (
-              <th key={`hpre-${r}`} className="py-1 px-1 text-center font-normal">R{r}</th>
+              <th key={`hpre-${r}`} className="py-1 px-1 text-center font-normal">
+                R{r}
+              </th>
             ))}
-            <th className="py-1 px-2" style={{ borderLeft: `1px solid ${BORDER}` }} />
-            <th className="px-1" />
+            {/* Divider sub-header: PRE label */}
+            <th
+              className="py-1 px-2 text-center font-semibold tabular-nums"
+              style={{
+                color: ACCENT,
+                background: 'rgba(163,255,18,0.10)',
+                borderLeft: `1px solid rgba(163,255,18,0.35)`,
+                borderRight: `1px solid rgba(163,255,18,0.35)`,
+                fontSize: 9,
+              }}
+            >
+              Pre
+            </th>
             {postRounds.map((r) => (
-              <th key={`hpost-${r}`} className="py-1 px-1 text-center font-normal">R{r}</th>
+              <th
+                key={`hpost-${r}`}
+                className="py-1 px-1 text-center font-normal"
+                style={{ color: 'rgba(163,255,18,0.70)' }}
+              >
+                R{r}
+              </th>
             ))}
             <th />
           </tr>

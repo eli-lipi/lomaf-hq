@@ -5,6 +5,7 @@ import type { NormalizedPosition, PlayerPerformance, Trade, TradePlayer } from '
 import { detectInjury } from '@/lib/trades/compute-probability';
 import { normalizePosition, cleanPositionDisplay } from '@/lib/trades/positions';
 import { recalculateTradeAcrossPostTradeRounds } from '@/lib/trades/recalculate';
+import { autoExpectedAvg, autoExpectedGames } from '@/lib/trades/expected';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -138,6 +139,8 @@ interface PatchPlayer {
   player_name: string;
   raw_position: string | null;
   receiving_team_id: number;
+  expected_avg?: number | null;
+  expected_games?: number | null;
 }
 
 interface PatchBody {
@@ -174,6 +177,46 @@ export async function PATCH(request: Request, ctx: { params: Promise<{ id: strin
 
     const nextRound = body.round_executed ?? existing.round_executed;
 
+    // Recompute polarity + ladder snapshot if teams or round changed.
+    let positive_team_id: number = existing.positive_team_id ?? teamA.team_id;
+    let negative_team_id: number = existing.negative_team_id ?? teamB.team_id;
+    let team_a_ladder_at_trade: number | null = existing.team_a_ladder_at_trade ?? null;
+    let team_b_ladder_at_trade: number | null = existing.team_b_ladder_at_trade ?? null;
+
+    const teamsChanged =
+      existing.team_a_id !== teamA.team_id || existing.team_b_id !== teamB.team_id;
+    const roundChanged = existing.round_executed !== nextRound;
+    if (teamsChanged || roundChanged || existing.positive_team_id == null) {
+      const { data: snapAtExec } = await supabase
+        .from('team_snapshots')
+        .select('team_id, league_rank')
+        .in('team_id', [teamA.team_id, teamB.team_id])
+        .eq('round_number', nextRound);
+      team_a_ladder_at_trade =
+        (snapAtExec ?? []).find((s) => s.team_id === teamA.team_id)?.league_rank ?? null;
+      team_b_ladder_at_trade =
+        (snapAtExec ?? []).find((s) => s.team_id === teamB.team_id)?.league_rank ?? null;
+
+      if (team_a_ladder_at_trade != null && team_b_ladder_at_trade != null && team_a_ladder_at_trade !== team_b_ladder_at_trade) {
+        if (team_a_ladder_at_trade < team_b_ladder_at_trade) {
+          positive_team_id = teamA.team_id;
+          negative_team_id = teamB.team_id;
+        } else {
+          positive_team_id = teamB.team_id;
+          negative_team_id = teamA.team_id;
+        }
+      } else {
+        // Tiebreaker: alphabetical by team name
+        if (teamA.team_name.localeCompare(teamB.team_name) <= 0) {
+          positive_team_id = teamA.team_id;
+          negative_team_id = teamB.team_id;
+        } else {
+          positive_team_id = teamB.team_id;
+          negative_team_id = teamA.team_id;
+        }
+      }
+    }
+
     // 3. Update trade row
     const { error: updateErr } = await supabase
       .from('trades')
@@ -184,6 +227,10 @@ export async function PATCH(request: Request, ctx: { params: Promise<{ id: strin
         team_b_name: teamB.team_name,
         round_executed: nextRound,
         context_notes: body.context_notes !== undefined ? body.context_notes : existing.context_notes,
+        positive_team_id,
+        negative_team_id,
+        team_a_ladder_at_trade,
+        team_b_ladder_at_trade,
       })
       .eq('id', id);
     if (updateErr) throw updateErr;
@@ -202,14 +249,26 @@ export async function PATCH(request: Request, ctx: { params: Promise<{ id: strin
 
       const scoresByPlayer = new Map<number, number[]>();
       const posByPlayer = new Map<number, string>();
+      const rawScoresByPlayer = new Map<number, { round: number; points: number | null }[]>();
       for (const r of preRounds ?? []) {
+        if (!rawScoresByPlayer.has(r.player_id)) rawScoresByPlayer.set(r.player_id, []);
+        rawScoresByPlayer.get(r.player_id)!.push({ round: r.round_number, points: r.points });
         if (r.points !== null && r.points !== undefined) {
           if (!scoresByPlayer.has(r.player_id)) scoresByPlayer.set(r.player_id, []);
           scoresByPlayer.get(r.player_id)!.push(Number(r.points));
         }
-        // Only store real positions (DEF/MID/FWD/RUC), never lineup slots (BN/UTL)
         const cleaned = cleanPositionDisplay(r.pos);
         if (cleaned && !posByPlayer.has(r.player_id)) posByPlayer.set(r.player_id, cleaned);
+      }
+
+      // Draft positions for tier-baseline lookup
+      const { data: draftPicks } = await supabase
+        .from('draft_picks')
+        .select('player_id, position')
+        .in('player_id', playerIds);
+      const draftPosByPlayer = new Map<number, string>();
+      for (const d of (draftPicks ?? []) as { player_id: number; position: string | null }[]) {
+        if (d.position) draftPosByPlayer.set(d.player_id, d.position);
       }
 
       const playerRows = body.players.map((p) => {
@@ -217,6 +276,28 @@ export async function PATCH(request: Request, ctx: { params: Promise<{ id: strin
         const scores = scoresByPlayer.get(p.player_id) ?? [];
         const preAvg = scores.length > 0 ? scores.reduce((a, b) => a + b, 0) / scores.length : null;
         const rawPos = p.raw_position || posByPlayer.get(p.player_id) || null;
+        const draftPos = draftPosByPlayer.get(p.player_id) ?? null;
+        const priorRounds = rawScoresByPlayer.get(p.player_id) ?? [];
+
+        let expected_avg: number;
+        let expected_avg_source: 'manual' | 'auto';
+        if (p.expected_avg != null && p.expected_avg > 0) {
+          expected_avg = p.expected_avg;
+          expected_avg_source = 'manual';
+        } else {
+          const auto = autoExpectedAvg({
+            raw_position: rawPos,
+            draft_position: draftPos,
+            prior_round_scores: priorRounds,
+          });
+          expected_avg = auto.expected_avg;
+          expected_avg_source = 'auto';
+        }
+        const expected_games =
+          p.expected_games != null && p.expected_games >= 0 && p.expected_games <= 4
+            ? p.expected_games
+            : autoExpectedGames({ prior_round_scores: priorRounds });
+
         return {
           trade_id: id,
           player_id: p.player_id,
@@ -226,6 +307,9 @@ export async function PATCH(request: Request, ctx: { params: Promise<{ id: strin
           receiving_team_id: receivingTeam.team_id,
           receiving_team_name: receivingTeam.team_name,
           pre_trade_avg: preAvg,
+          expected_avg,
+          expected_avg_source,
+          expected_games,
         };
       });
 
