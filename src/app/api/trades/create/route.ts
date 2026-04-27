@@ -217,8 +217,27 @@ export async function POST(request: Request) {
       };
     });
 
-    const { error: playersErr } = await supabase.from('trade_players').insert(playerRows);
-    if (playersErr) throw playersErr;
+    // Try insert with v11 columns; if the schema isn't migrated yet, strip
+    // them and retry so trade-creation still works.
+    let playersErr: { message?: string; code?: string } | null = null;
+    const tryFirst = await supabase.from('trade_players').insert(playerRows);
+    playersErr = tryFirst.error as { message?: string; code?: string } | null;
+    if (
+      playersErr &&
+      /column .* does not exist|expected_tier|expected_games_remaining|expected_games_max|player_context/i.test(
+        playersErr.message ?? ''
+      )
+    ) {
+      console.warn('[trades/create] v11 columns missing — retrying without them.');
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const stripped = (playerRows as any[]).map(({ expected_tier, expected_games_remaining, expected_games_max, player_context, ...rest }) => {
+        void expected_tier; void expected_games_remaining; void expected_games_max; void player_context;
+        return rest;
+      });
+      const retry = await supabase.from('trade_players').insert(stripped);
+      playersErr = retry.error as { message?: string; code?: string } | null;
+    }
+    if (playersErr) throw new Error(playersErr.message ?? 'trade_players insert failed');
 
     // 4. Kick off initial recalc across every post-trade round that has data.
     try {

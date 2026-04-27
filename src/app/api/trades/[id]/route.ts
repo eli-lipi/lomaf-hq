@@ -323,8 +323,30 @@ export async function PATCH(request: Request, ctx: { params: Promise<{ id: strin
         };
       });
 
-      const { error: insertErr } = await supabase.from('trade_players').insert(playerRows);
-      if (insertErr) throw insertErr;
+      // Try insert with v11 columns; if the schema hasn't been migrated yet
+      // (column does not exist), strip the v11 fields and retry. Keeps Edit
+      // working even when the admin hasn't run migration-trades-v11.sql yet.
+      let insertErr: { message?: string; code?: string } | null = null;
+      const tryFirst = await supabase.from('trade_players').insert(playerRows);
+      insertErr = tryFirst.error as { message?: string; code?: string } | null;
+      if (
+        insertErr &&
+        /column .* does not exist|expected_tier|expected_games_remaining|expected_games_max|player_context/i.test(
+          insertErr.message ?? ''
+        )
+      ) {
+        console.warn(
+          '[trades/[id] PATCH] v11 columns missing — retrying without them. Run migration-trades-v11.sql to enable.'
+        );
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const stripped = (playerRows as any[]).map(({ expected_tier, expected_games_remaining, expected_games_max, player_context, ...rest }) => {
+          void expected_tier; void expected_games_remaining; void expected_games_max; void player_context;
+          return rest;
+        });
+        const retry = await supabase.from('trade_players').insert(stripped);
+        insertErr = retry.error as { message?: string; code?: string } | null;
+      }
+      if (insertErr) throw new Error(insertErr.message ?? 'trade_players insert failed');
     }
 
     // 5. Wipe old probability rows — they're based on stale assumptions — and recompute fresh
@@ -339,10 +361,14 @@ export async function PATCH(request: Request, ctx: { params: Promise<{ id: strin
     return NextResponse.json({ success: true });
   } catch (err) {
     console.error('[trades/[id] PATCH]', err);
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Edit failed' },
-      { status: 500 }
-    );
+    // Surface the actual error message even when err isn't an Error instance
+    // (Supabase rejections often arrive as plain objects with .message).
+    let message = 'Edit failed';
+    if (err instanceof Error) message = err.message;
+    else if (err && typeof err === 'object' && 'message' in err) {
+      message = String((err as { message: unknown }).message);
+    }
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }
 
