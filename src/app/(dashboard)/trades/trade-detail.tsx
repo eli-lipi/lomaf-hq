@@ -13,7 +13,6 @@ import {
 import LogTradeModal, { type InitialTradeData } from './log-trade-modal';
 import {
   ComposedChart,
-  Area,
   Line,
   XAxis,
   YAxis,
@@ -318,13 +317,29 @@ export default function TradeDetail({ tradeId, onBack, onDeleted }: Props) {
                       <stop offset="50%" stopColor={colorNegative} />
                       <stop offset="100%" stopColor={colorNegative} />
                     </linearGradient>
-                    <linearGradient id="areaFillSplit" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor={colorPositive} stopOpacity={0.18} />
-                      <stop offset="50%" stopColor={colorPositive} stopOpacity={0.04} />
-                      <stop offset="50%" stopColor={colorNegative} stopOpacity={0.04} />
-                      <stop offset="100%" stopColor={colorNegative} stopOpacity={0.18} />
-                    </linearGradient>
+                    {/* v6's areaFillSplit gradient is gone in v7 — replaced by
+                        the two-zone background shading below. The zones make
+                        the area-under-curve fill redundant. */}
                   </defs>
+                  {/* v7 — Permanent territorial zones. Positive team's colour
+                      tints the upper half, negative tints the lower. The line
+                      runs across both zones, switching colour at the 0% line. */}
+                  <ReferenceArea
+                    y1={0}
+                    y2={100}
+                    fill={colorPositive}
+                    fillOpacity={0.10}
+                    stroke="none"
+                    ifOverflow="extendDomain"
+                  />
+                  <ReferenceArea
+                    y1={-100}
+                    y2={0}
+                    fill={colorNegative}
+                    fillOpacity={0.10}
+                    stroke="none"
+                    ifOverflow="extendDomain"
+                  />
                   <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false} />
                   <XAxis
                     dataKey="round"
@@ -358,20 +373,12 @@ export default function TradeDetail({ tradeId, onBack, onDeleted }: Props) {
                     stroke="rgba(255,255,255,0.30)"
                     strokeDasharray="2 4"
                   />
-                  {/* Wash baseline — solid */}
+                  {/* Wash baseline — solid white at 0%, separates the two zones */}
                   <ReferenceLine y={0} stroke="rgba(255,255,255,0.45)" strokeWidth={1.5} />
-                  {/* Area fill — gradient handles the green-above / cyan-below split */}
-                  <Area
-                    type="monotone"
-                    dataKey="advantage"
-                    stroke="none"
-                    fill="url(#areaFillSplit)"
-                    baseValue={0}
-                    isAnimationActive={false}
-                    legendType="none"
-                    activeDot={false}
-                  />
-                  {/* The advantage line — gradient stroke = green above 0, cyan below */}
+                  {/* v7 — area-under-curve fill removed. Permanent zones above
+                      handle the colour story; an area fill on top would
+                      double-layer and muddy the chart. */}
+                  {/* The advantage line — gradient stroke = positive-team colour above 0, negative below */}
                   <Line
                     type="monotone"
                     dataKey="advantage"
