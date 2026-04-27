@@ -167,13 +167,22 @@ The season has 23 rounds. Finals start around R21. A "ton" is 100+, a "zero" is 
 
 The "edge" field: which side is currently winning the trade based on output vs. their predictions? Magnitude 1-3 = slight, 4-6 = clear, 7-10 = decisive. If too early to tell (0-2 rounds of data), use magnitude 1-3.
 
-Narrative: 3-4 sentences, punchy opinionated sports-analyst voice. Reference actual scores AND the predicted-vs-actual gap. End with the finals implication for each side.
+Narrative format (v10): a tight tabloid-style headline plus 3–5 bullet points.
+- The headline is ONE punchy line, MAX 12 WORDS, capturing the core take. Like a tabloid lead. Ends with a period or exclamation.
+- The bullets are 3–5 items, each ONE punchy sentence (max ~20 words). Each bullet should be a TAKE or a SHARP DATA POINT framed as a take — not a bare fact. Cite specific scores and the predicted-vs-actual gap. The last bullet should land the finals implication.
+- Render as a string with the headline on the first line, then each bullet prefixed with '- ' on its own line. Example:
+
+The Mambas' Rozee acquisition has been a disaster.
+- Rozee has missed all 5 post-trade rounds with injury — zero return on the marquee pickup.
+- Ryan has delivered a steady 79 average for Doge across 5 rounds (58, 36, 121, 90).
+- Tim Freed traded away his most consistent defender for a player who never suited up.
+- For a contender sitting 2nd, this trade could prove costly come finals.
 
 Return ONLY valid JSON (no markdown fences):
 {
   "edge": "team_a" | "team_b" | "even",
   "magnitude": 1-10,
-  "narrative": "string (3-4 sentences, citing actual scores and predicted-vs-actual gaps)"
+  "narrative": "string — headline on first line then 3-5 bullets each prefixed with '- ', max 12 words on the headline, max ~20 words per bullet"
 }`;
 
 function lineRanksStr(lines: LineRanks): string {

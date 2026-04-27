@@ -275,29 +275,33 @@ export default function TradeDetail({ tradeId, onBack, onDeleted }: Props) {
           → Trade Justification → Trade Performance → Trade Analysis.
           ════════════════════════════════════════════════════════════════ */}
 
-      {/* Section 1 — Trade Headline (centred content) */}
-      <TradeSection title="Trade Headline">
+      {/* Section 1 — Trade Headline.
+          v10: 'EXECUTED AFTER ROUND N' is the prominent lede above the
+          surnames; coach names are dropped (they appear elsewhere on the
+          page in context); 'Updated R{N}' demotes to small muted metadata. */}
+      <TradeSection
+        title="Trade Headline"
+        titleAdornment={
+          latestProbability?.round_number != null ? (
+            <span className="text-[11px] ml-auto pl-3 normal-case tracking-normal font-normal" style={{ color: TEXT_MUTED }}>
+              Updated R{latestProbability.round_number}
+            </span>
+          ) : null
+        }
+      >
         <div className="text-center">
+          <p
+            className="font-semibold uppercase tracking-[0.12em] mb-6"
+            style={{ color: TEXT, fontSize: 22 }}
+          >
+            Executed After Round {trade.round_executed}
+          </p>
           <PlayerHeadline
             trade={trade}
             teamAPlayers={teamAPlayers}
             teamBPlayers={teamBPlayers}
             perfById={perfById}
           />
-          <p className="text-[12px] mt-3 uppercase tracking-[0.12em]" style={{ color: TEXT_MUTED }}>
-            <span style={{ color: TEXT_BODY }}>{coachByTeamId(trade.team_a_id, trade.team_a_name)}</span>
-            <span className="mx-2" style={{ color: 'rgba(255,255,255,0.18)' }}>⇄</span>
-            <span style={{ color: TEXT_BODY }}>{coachByTeamId(trade.team_b_id, trade.team_b_name)}</span>
-          </p>
-          <p className="text-[11px] mt-2" style={{ color: TEXT_MUTED }}>
-            Executed after R{trade.round_executed}
-            {latestProbability?.round_number != null && (
-              <>
-                <span className="mx-2" style={{ color: 'rgba(255,255,255,0.18)' }}>·</span>
-                Updated R{latestProbability.round_number}
-              </>
-            )}
-          </p>
         </div>
       </TradeSection>
 
@@ -610,9 +614,9 @@ function TradeSection({
         padding: 24,
       }}
     >
-      <div className="flex items-center gap-3 mb-4">
+      <div className="flex items-center gap-3 mb-5">
         <div
-          className="text-[11px] font-semibold uppercase tracking-[0.18em] flex items-center gap-1.5 shrink-0"
+          className="text-[14px] md:text-[15px] font-semibold uppercase tracking-[0.18em] flex items-center gap-1.5 shrink-0"
           style={{ color: TEXT_MUTED }}
         >
           {title}
@@ -1174,26 +1178,87 @@ function ChartTooltip(props: {
 }
 
 // ============================================================
-// Trade analysis body — splits AI narrative into headline + body
+// Trade analysis body — v10: tight headline (≤12 words) + bullet list.
+// Compatible with both new structured payloads ("Headline.\n- bullet\n- bullet")
+// and legacy prose paragraphs (sentences split into bullets).
 // ============================================================
 function AnalysisBody({ narrative }: { narrative: string }) {
-  const trimmed = narrative.trim();
-  // Treat first sentence as the headline
-  const match = trimmed.match(/^[^.!?]+[.!?]/);
-  const headline = match ? match[0].trim() : trimmed;
-  const rest = match ? trimmed.slice(match[0].length).trim() : '';
+  const { headline, bullets } = parseAnalysisNarrative(narrative);
   return (
-    <>
-      <p className="text-lg font-medium leading-snug" style={{ color: TEXT }}>
-        {headline}
-      </p>
-      {rest && (
-        <p className="text-sm mt-2 leading-relaxed" style={{ color: TEXT_BODY }}>
-          {rest}
+    <div style={{ maxWidth: 800 }}>
+      {headline && (
+        <p
+          className="text-[18px] md:text-[20px] font-medium leading-snug"
+          style={{ color: TEXT }}
+        >
+          {headline}
         </p>
       )}
-    </>
+      {bullets.length > 0 && (
+        <ul className="mt-4 space-y-2 pl-1">
+          {bullets.map((b, i) => (
+            <li
+              key={i}
+              className="flex items-start gap-3 text-[14px] md:text-[15px] leading-[1.55]"
+              style={{ color: TEXT }}
+            >
+              <span className="shrink-0 mt-2" style={{ color: TEXT_MUTED }}>
+                •
+              </span>
+              <span style={{ color: TEXT_BODY }}>{b}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   );
+}
+
+/**
+ * Parse the AI-written narrative into a tight headline + bullet list.
+ *
+ * v10 will eventually feed the AI a JSON-output prompt; until then this
+ * gracefully handles three cases:
+ *   1. Pre-structured markdown — headline on first line, '- ...' bullets.
+ *   2. Legacy prose — first sentence becomes the headline, the rest is
+ *      sentence-split into bullets.
+ *   3. Empty — both fields undefined.
+ *
+ * Headline is capped at 12 words; overflow falls into the first bullet so
+ * we don't lose any of the AI's content.
+ */
+function parseAnalysisNarrative(narrative: string): { headline: string; bullets: string[] } {
+  const trimmed = (narrative ?? '').trim();
+  if (!trimmed) return { headline: '', bullets: [] };
+
+  // Case 1 — explicit bullet markers
+  const lines = trimmed.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  const bulletLines = lines.filter((l) => /^[-•·*]\s+/.test(l));
+  if (bulletLines.length >= 1 && lines.length > bulletLines.length) {
+    const headline = lines.find((l) => !/^[-•·*]\s+/.test(l)) ?? '';
+    const bullets = bulletLines.map((l) => l.replace(/^[-•·*]\s+/, ''));
+    return { headline: tightenHeadline(headline), bullets };
+  }
+
+  // Case 2 — sentence-split fallback. First sentence = headline.
+  const sentences = trimmed
+    .replace(/\s+/g, ' ')
+    .match(/[^.!?]+[.!?]+/g)
+    ?.map((s) => s.trim())
+    .filter(Boolean) ?? [];
+  if (sentences.length === 0) {
+    return { headline: tightenHeadline(trimmed), bullets: [] };
+  }
+  const headline = tightenHeadline(sentences[0]);
+  const bullets = sentences.slice(1, 6); // cap at 5 bullets
+  return { headline, bullets };
+}
+
+/** Trim a headline to the first 12 words, preserving terminal punctuation. */
+function tightenHeadline(s: string): string {
+  const words = s.trim().split(/\s+/);
+  if (words.length <= 12) return s.trim();
+  return words.slice(0, 12).join(' ').replace(/[,;:]+$/, '') + '…';
 }
 
 // ============================================================
@@ -1403,42 +1468,55 @@ function PlayerVerdictTable({
 }) {
   return (
     <div className="overflow-x-auto">
-      {/* table-layout fixed + colgroup → symmetric column widths across BOTH
-          tables (positive and negative side render the same widths so the
-          eye can scan vertically). */}
+      {/* v10 — six-column structure with a vertical separator between the
+          "Actuals" group (left) and the "Expectations" group (right). */}
       <table className="w-full text-sm" style={{ tableLayout: 'fixed' }}>
         <colgroup>
-          <col style={{ width: '34%' }} />
-          <col style={{ width: '14%' }} />
-          <col style={{ width: '14%' }} />
-          <col style={{ width: '12%' }} />
-          <col style={{ width: '26%' }} />
+          <col style={{ width: '28%' }} />          {/* Player */}
+          <col style={{ width: '14%' }} />          {/* Games Played */}
+          <col style={{ width: '14%' }} />          {/* Avg Since */}
+          <col style={{ width: '4%' }} />            {/* visual separator */}
+          <col style={{ width: '20%' }} />          {/* Avg Before (Δ) */}
+          <col style={{ width: '20%' }} />          {/* Expected (Δ) */}
         </colgroup>
         <thead>
+          {/* Group header row — 'ACTUALS' over the left half, 'EXPECTATIONS' over the right. */}
+          <tr className="text-[10px] uppercase tracking-[0.18em]" style={{ color: TEXT_MUTED }}>
+            <th />
+            <th
+              colSpan={2}
+              className="text-center pb-1 font-semibold"
+              style={{ borderBottom: '1px solid rgba(255,255,255,0.06)' }}
+            >
+              Actuals
+            </th>
+            <th />
+            <th
+              colSpan={2}
+              className="text-center pb-1 font-semibold"
+              style={{ borderBottom: '1px solid rgba(255,255,255,0.06)' }}
+            >
+              Expectations
+            </th>
+          </tr>
           <tr className="text-[10px] uppercase tracking-wider" style={{ color: TEXT_MUTED }}>
             <th className="text-left font-medium pr-2 pb-2">Player</th>
+            <th className="text-right font-medium px-2 pb-2 whitespace-nowrap">Games Played</th>
             <th className="text-right font-medium px-2 pb-2 whitespace-nowrap">Avg Since</th>
+            <th />
             <th className="text-right font-medium px-2 pb-2 whitespace-nowrap">
               <span className="inline-flex items-center gap-1 justify-end">
                 Avg Before
                 <InfoTip>
-                  Pre-trade season average. The number in parentheses is the delta vs Expected Avg.
-                </InfoTip>
-              </span>
-            </th>
-            <th className="text-right font-medium px-2 pb-2 whitespace-nowrap">
-              <span className="inline-flex items-center gap-1 justify-end">
-                Expected
-                <InfoTip>
-                  <strong style={{ color: TEXT }}>Expected average:</strong> the bar this player needed to clear for the trade to make sense. Locked at trade execution. Auto-derived from a position-tier baseline blended 60/40 with last-3-rounds form. If unavailable, falls back to the player&apos;s pre-trade average.
+                  Pre-trade season average. The delta in parentheses compares it to the Expected Avg.
                 </InfoTip>
               </span>
             </th>
             <th className="text-right font-medium pl-2 pb-2 whitespace-nowrap">
               <span className="inline-flex items-center gap-1 justify-end">
-                Verdict
+                Expected
                 <InfoTip>
-                  <strong style={{ color: TEXT }}>Per-player verdict:</strong> compares Avg Since Trade against Expected Avg (or Avg Before if Expected is unavailable). Beat by &gt;10 = Crushing. Within ±5 = Tracking. Behind by &gt;10 = Bet broken. Availability drag overrides if &lt;50% of expected games played.
+                  <strong style={{ color: TEXT }}>Expected average:</strong> the bar this player needed to clear for the trade to make sense. Locked at trade execution. Auto-derived from a position-tier baseline blended 60/40 with last-3-rounds form. The delta in parentheses compares Avg Since to Expected.
                 </InfoTip>
               </span>
             </th>
@@ -1447,7 +1525,7 @@ function PlayerVerdictTable({
         <tbody>
           {tradePlayers.length === 0 && (
             <tr>
-              <td colSpan={5} className="text-xs italic py-2" style={{ color: TEXT_MUTED }}>—</td>
+              <td colSpan={6} className="text-xs italic py-2" style={{ color: TEXT_MUTED }}>—</td>
             </tr>
           )}
           {tradePlayers.map((tp) => (
@@ -1531,24 +1609,21 @@ function PlayerVerdictRow({
     return all.sort((a, b) => a.round - b.round);
   }, [performance]);
 
-  // v3 — verdict colour bands per spec
-  // v5 — positive verdicts take THIS table's team colour, reinforcing identity.
-  // Other verdicts keep their absolute meaning bands.
-  const verdictColor =
-    verdict.level === 'crushing' || verdict.level === 'outperforming'
-      ? teamColor
-      : verdict.level === 'tracking' || verdict.level === 'pending'
-        ? TEXT
-        : verdict.level === 'slight-under'
-          ? '#EF9F27' // soft amber
-          : verdict.level === 'broken'
-            ? STATUS_INJURED
-            : verdict.level === 'avail-drag'
-              ? TEXT_MUTED // neutral grey — availability isn't a perf verdict
-              : TEXT_BODY;
-
   // Status dot — injured red overrides team colour
   const dotColor = injured ? STATUS_INJURED : teamColor;
+
+  // v10 — verdict reference is unused in the new column layout; kept above for
+  // potential future reintroduction as Path B in the spec.
+  void verdict;
+
+  // v10 — delta vs Expected for the actuals (avg-since side). Shown next to
+  // both Avg Before and Expected, so the gap reads twice.
+  const sinceDelta = avgSince != null && expectedAvg != null ? avgSince - expectedAvg : null;
+
+  // Games-played colour rule: amber when below expected (availability concern),
+  // neutral white otherwise. Never red.
+  const gamesColor =
+    expectedGames > 0 && actualGames < expectedGames ? '#EF9F27' : TEXT;
 
   return (
     <>
@@ -1557,7 +1632,8 @@ function PlayerVerdictRow({
         className="cursor-pointer"
         style={{ borderTop: `1px solid ${BORDER}` }}
       >
-        <td className="py-2 pr-2 text-sm">
+        {/* Player */}
+        <td className="py-3 pr-2 text-sm">
           <div className="flex items-center gap-2 min-w-0">
             <span
               className="w-1.5 h-1.5 rounded-full shrink-0"
@@ -1572,34 +1648,33 @@ function PlayerVerdictRow({
             </span>
           </div>
         </td>
-        {/* v6 — Avg Since: number + 'played all N' / 'missed K of N' suffix */}
-        <td className="px-2 text-right text-sm tabular-nums" style={{ color: TEXT }}>
-          {avgSince != null ? Math.round(avgSince) : '—'}
+        {/* Games Played — own column with text label below */}
+        <td className="px-2 text-right tabular-nums">
+          <div className="text-sm font-medium" style={{ color: gamesColor }}>
+            {actualGames}/{expectedGames}
+          </div>
           <div className="text-[10px] mt-0.5" style={{ color: TEXT_MUTED }}>
             {availabilityText(actualGames, expectedGames)}
           </div>
         </td>
-        {/* Avg Before — now sourced from computedPreAvg with fallback */}
+        {/* Avg Since — number only; Games column carries the (n/m) now */}
+        <td className="px-2 text-right text-sm tabular-nums" style={{ color: TEXT }}>
+          {avgSince != null ? Math.round(avgSince) : '—'}
+        </td>
+        {/* Visual separator between actuals and expectations */}
+        <td className="p-0">
+          <div
+            className="mx-auto h-full"
+            style={{ width: 1, background: 'rgba(255,255,255,0.12)', minHeight: 36 }}
+          />
+        </td>
+        {/* Avg Before (Δ vs Expected) */}
         <td className="px-2 text-right text-sm tabular-nums" style={{ color: TEXT_BODY }}>
           {computedPreAvg != null ? Math.round(computedPreAvg) : '—'}
-          {preDelta != null && (
-            <span
-              className="ml-1 text-[10px]"
-              style={{
-                color:
-                  preDelta === 0
-                    ? 'rgba(155,163,181,0.55)' // visibly muted at delta=0
-                    : preDelta > 0
-                      ? teamColor
-                      : STATUS_INJURED,
-              }}
-            >
-              ({preDelta >= 0 ? '+' : ''}
-              {Math.round(preDelta)})
-            </span>
-          )}
+          <DeltaPill delta={preDelta} teamColor={teamColor} />
         </td>
-        <td className="px-2 text-right text-sm tabular-nums" style={{ color: TEXT }}>
+        {/* Expected (Δ vs Avg Since) */}
+        <td className="pl-2 text-right text-sm tabular-nums" style={{ color: TEXT }}>
           <span className="inline-flex items-center gap-1 justify-end">
             {expectedAvg != null ? Math.round(expectedAvg) : '—'}
             {expectedAvg != null && (
@@ -1616,15 +1691,12 @@ function PlayerVerdictRow({
               </InfoTip>
             )}
           </span>
-        </td>
-        {/* v6 — Verdict moved to RIGHTMOST column. */}
-        <td className="pl-2 text-right text-[11px] font-semibold" style={{ color: verdictColor }}>
-          {verdict.text}
+          <DeltaPill delta={sinceDelta} teamColor={teamColor} />
         </td>
       </tr>
       {expanded && traj.length > 0 && performance && (
         <tr style={{ background: 'rgba(255,255,255,0.02)' }}>
-          <td colSpan={5} className="px-2 pb-3">
+          <td colSpan={6} className="px-2 pb-3">
             <div className="grid grid-flow-col auto-cols-fr gap-1 mt-1">
               {traj.map((s) => {
                 const cell = scoreCellStyle(s.pts, baselineForPerformance(performance));
@@ -1695,6 +1767,42 @@ function ActionButton({
 // ============================================================
 // Helpers
 // ============================================================
+/**
+ * v10 — DeltaPill renders the parenthetical delta after a numeric value.
+ * Negative = soft red, positive = team colour, zero = muted grey, null = (—).
+ * Uses the proper typographic minus character (U+2212) for proper alignment.
+ */
+function DeltaPill({
+  delta,
+  teamColor,
+}: {
+  delta: number | null;
+  teamColor: string;
+}) {
+  if (delta == null) {
+    return (
+      <span className="ml-1 text-[10px]" style={{ color: 'rgba(155,163,181,0.55)' }}>
+        (—)
+      </span>
+    );
+  }
+  const rounded = Math.round(delta);
+  const color =
+    rounded === 0
+      ? 'rgba(155,163,181,0.55)'
+      : rounded > 0
+        ? teamColor
+        : '#E24B4A';
+  const sign = rounded === 0 ? '+' : rounded > 0 ? '+' : '−'; // proper minus
+  const magnitude = Math.abs(rounded);
+  return (
+    <span className="ml-1 text-[10px] tabular-nums" style={{ color }}>
+      ({sign}
+      {magnitude})
+    </span>
+  );
+}
+
 /**
  * v6 — replaces the cryptic "(N/M)" availability suffix with plain English.
  * 'played all 5' when actual === expected, 'missed K of N' otherwise,
