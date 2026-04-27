@@ -290,11 +290,21 @@ export default function TradeDetail({ tradeId, onBack, onDeleted }: Props) {
         }
       >
         <div className="text-center">
-          <p
-            className="font-semibold uppercase tracking-[0.12em] mb-6"
-            style={{ color: TEXT, fontSize: 22 }}
-          >
-            Executed After Round {trade.round_executed}
+          {/* v10.1 — small 'After', big 'Round N'. Round number is the
+              prominent dateline; the preposition fades back. */}
+          <p className="mb-6 leading-none">
+            <span
+              className="uppercase tracking-[0.18em]"
+              style={{ color: TEXT_MUTED, fontSize: 12, fontWeight: 500 }}
+            >
+              After
+            </span>
+            <span
+              className="ml-2 font-semibold tracking-[0.04em]"
+              style={{ color: TEXT, fontSize: 36 }}
+            >
+              Round {trade.round_executed}
+            </span>
           </p>
           <PlayerHeadline
             trade={trade}
@@ -1469,8 +1479,12 @@ function PlayerVerdictTable({
   return (
     <div className="overflow-x-auto">
       {/* v10 — six-column structure with a vertical separator between the
-          "Actuals" group (left) and the "Expectations" group (right). */}
-      <table className="w-full text-sm" style={{ tableLayout: 'fixed' }}>
+          "Actuals" group (left) and the "Expectations" group (right).
+          v10.1 — overall size bumped ~30% via base font size on the table. */}
+      <table
+        className="w-full"
+        style={{ tableLayout: 'fixed', fontSize: 18 }}
+      >
         <colgroup>
           <col style={{ width: '28%' }} />          {/* Player */}
           <col style={{ width: '14%' }} />          {/* Games Played */}
@@ -1481,7 +1495,7 @@ function PlayerVerdictTable({
         </colgroup>
         <thead>
           {/* Group header row — 'ACTUALS' over the left half, 'EXPECTATIONS' over the right. */}
-          <tr className="text-[10px] uppercase tracking-[0.18em]" style={{ color: TEXT_MUTED }}>
+          <tr className="text-[13px] uppercase tracking-[0.18em]" style={{ color: TEXT_MUTED }}>
             <th />
             <th
               colSpan={2}
@@ -1499,12 +1513,12 @@ function PlayerVerdictTable({
               Expectations
             </th>
           </tr>
-          <tr className="text-[10px] uppercase tracking-wider" style={{ color: TEXT_MUTED }}>
-            <th className="text-left font-medium pr-2 pb-2">Player</th>
-            <th className="text-right font-medium px-2 pb-2 whitespace-nowrap">Games Played</th>
-            <th className="text-right font-medium px-2 pb-2 whitespace-nowrap">Avg Since</th>
+          <tr className="text-[13px] uppercase tracking-wider" style={{ color: TEXT_MUTED }}>
+            <th className="text-left font-medium pr-2 pb-3">Player</th>
+            <th className="text-right font-medium px-2 pb-3 whitespace-nowrap">Games Played</th>
+            <th className="text-right font-medium px-2 pb-3 whitespace-nowrap">Avg Since</th>
             <th />
-            <th className="text-right font-medium px-2 pb-2 whitespace-nowrap">
+            <th className="text-right font-medium px-2 pb-3 whitespace-nowrap">
               <span className="inline-flex items-center gap-1 justify-end">
                 Avg Before
                 <InfoTip>
@@ -1512,7 +1526,7 @@ function PlayerVerdictTable({
                 </InfoTip>
               </span>
             </th>
-            <th className="text-right font-medium pl-2 pb-2 whitespace-nowrap">
+            <th className="text-right font-medium pl-2 pb-3 whitespace-nowrap">
               <span className="inline-flex items-center gap-1 justify-end">
                 Expected
                 <InfoTip>
@@ -1633,48 +1647,48 @@ function PlayerVerdictRow({
         style={{ borderTop: `1px solid ${BORDER}` }}
       >
         {/* Player */}
-        <td className="py-3 pr-2 text-sm">
+        <td className="py-4 pr-2 text-[18px]">
           <div className="flex items-center gap-2 min-w-0">
             <span
-              className="w-1.5 h-1.5 rounded-full shrink-0"
+              className="w-2 h-2 rounded-full shrink-0"
               style={{ background: dotColor }}
               title={injured ? 'Injured' : 'Active'}
             />
             <span className="font-medium truncate" style={{ color: TEXT }}>
               {displayLabel}
             </span>
-            <span className="text-[10px] shrink-0" style={{ color: TEXT_MUTED }}>
+            <span className="text-[13px] shrink-0" style={{ color: TEXT_MUTED }}>
               ({pos})
             </span>
           </div>
         </td>
         {/* Games Played — own column with text label below */}
         <td className="px-2 text-right tabular-nums">
-          <div className="text-sm font-medium" style={{ color: gamesColor }}>
+          <div className="text-[18px] font-medium" style={{ color: gamesColor }}>
             {actualGames}/{expectedGames}
           </div>
-          <div className="text-[10px] mt-0.5" style={{ color: TEXT_MUTED }}>
+          <div className="text-[13px] mt-0.5" style={{ color: TEXT_MUTED }}>
             {availabilityText(actualGames, expectedGames)}
           </div>
         </td>
         {/* Avg Since — number only; Games column carries the (n/m) now */}
-        <td className="px-2 text-right text-sm tabular-nums" style={{ color: TEXT }}>
+        <td className="px-2 text-right text-[20px] tabular-nums" style={{ color: TEXT }}>
           {avgSince != null ? Math.round(avgSince) : '—'}
         </td>
         {/* Visual separator between actuals and expectations */}
         <td className="p-0">
           <div
             className="mx-auto h-full"
-            style={{ width: 1, background: 'rgba(255,255,255,0.12)', minHeight: 36 }}
+            style={{ width: 1, background: 'rgba(255,255,255,0.12)', minHeight: 48 }}
           />
         </td>
         {/* Avg Before (Δ vs Expected) */}
-        <td className="px-2 text-right text-sm tabular-nums" style={{ color: TEXT_BODY }}>
+        <td className="px-2 text-right text-[18px] tabular-nums" style={{ color: TEXT_BODY }}>
           {computedPreAvg != null ? Math.round(computedPreAvg) : '—'}
           <DeltaPill delta={preDelta} teamColor={teamColor} />
         </td>
         {/* Expected (Δ vs Avg Since) */}
-        <td className="pl-2 text-right text-sm tabular-nums" style={{ color: TEXT }}>
+        <td className="pl-2 text-right text-[18px] tabular-nums" style={{ color: TEXT }}>
           <span className="inline-flex items-center gap-1 justify-end">
             {expectedAvg != null ? Math.round(expectedAvg) : '—'}
             {expectedAvg != null && (
@@ -1781,7 +1795,7 @@ function DeltaPill({
 }) {
   if (delta == null) {
     return (
-      <span className="ml-1 text-[10px]" style={{ color: 'rgba(155,163,181,0.55)' }}>
+      <span className="ml-1.5 text-[13px]" style={{ color: 'rgba(155,163,181,0.55)' }}>
         (—)
       </span>
     );
@@ -1796,7 +1810,7 @@ function DeltaPill({
   const sign = rounded === 0 ? '+' : rounded > 0 ? '+' : '−'; // proper minus
   const magnitude = Math.abs(rounded);
   return (
-    <span className="ml-1 text-[10px] tabular-nums" style={{ color }}>
+    <span className="ml-1.5 text-[13px] tabular-nums" style={{ color }}>
       ({sign}
       {magnitude})
     </span>
