@@ -23,6 +23,7 @@ import {
   ReferenceArea,
 } from 'recharts';
 import { cleanPositionDisplay } from '@/lib/trades/positions';
+import { autoExpectedAvg } from '@/lib/trades/expected';
 import {
   snap5,
   verdictForProb,
@@ -1580,10 +1581,44 @@ function PlayerVerdictRow({
     return played.reduce((sum, s) => sum + (s.points ?? 0), 0) / played.length;
   })();
 
-  // Expected: stored → fallback to pre-trade avg → still null.
-  const expectedAvg = tradePlayer.expected_avg ?? computedPreAvg ?? null;
-  const expectedFallbackUsed =
-    tradePlayer.expected_avg == null && computedPreAvg != null;
+  // v10.3 — Expected resolution chain:
+  //   1. Stored expected_avg (from trade-creation auto-derivation)
+  //   2. Re-derive via autoExpectedAvg() so legacy rows get a real
+  //      tier-blend value (NOT the same number as Avg Before)
+  //   3. Fall back to computedPreAvg as last resort
+  // Step 2 is the v10.3 fix — previously the fallback collapsed to
+  // pre-trade avg, making the Avg-Before-vs-Expected delta always 0.
+  const autoExpectedRes = useMemo(() => {
+    if (tradePlayer.expected_avg != null) return null;
+    const priorRounds = performance?.pre_trade_round_scores ?? [];
+    if (priorRounds.length === 0) return null;
+    return autoExpectedAvg({
+      raw_position: tradePlayer.raw_position,
+      draft_position: performance?.draft_position ?? null,
+      prior_round_scores: priorRounds,
+    });
+  }, [
+    tradePlayer.expected_avg,
+    tradePlayer.raw_position,
+    performance?.draft_position,
+    performance?.pre_trade_round_scores,
+  ]);
+  const expectedAvg =
+    tradePlayer.expected_avg ?? autoExpectedRes?.expected_avg ?? computedPreAvg ?? null;
+  const expectedSourceLabel = (() => {
+    if (tradePlayer.expected_avg != null) {
+      return tradePlayer.expected_avg_source === 'manual'
+        ? 'Source: Manual override'
+        : 'Source: Auto-derived (60% position-tier baseline + 40% last-3-rounds form)';
+    }
+    if (autoExpectedRes != null) {
+      return 'Source: Auto-derived on render (60% position-tier baseline + 40% last-3-rounds form)';
+    }
+    if (computedPreAvg != null) {
+      return 'Source: Pre-trade average (no prior rounds for tier blend)';
+    }
+    return 'Source: Unavailable';
+  })();
 
   // Dynamic post-trade window. The stored expected_games (default 4 from v2)
   // is treated as a CAP — if the user explicitly said "expect 0" at trade
@@ -1689,11 +1724,7 @@ function PlayerVerdictRow({
               <InfoTip>
                 <strong style={{ color: TEXT }}>Expected: {Math.round(expectedAvg)}</strong>
                 <br />
-                {expectedFallbackUsed
-                  ? 'Source: Pre-trade average (auto-derived expected unavailable)'
-                  : tradePlayer.expected_avg_source === 'manual'
-                    ? 'Source: Manual override'
-                    : 'Source: Auto-derived (60% position-tier baseline + 40% last-3-rounds form)'}
+                {expectedSourceLabel}
                 <br />
                 Locked at trade execution — cannot be edited.
               </InfoTip>
