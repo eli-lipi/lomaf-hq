@@ -141,7 +141,27 @@ export async function recalculateTradeForRound(
 
   const cachedFactors = existingProb?.factors as TradeFactorsBreakdown | null;
 
-  if (!force && existingProb?.ai_assessment && cachedFactors) {
+  // v12 — invalidate cached narrative if its polarity disagrees with the
+  // current probability. Probability is computed from raw production etc.
+  // and is the authoritative read; the narrative must align with it. If the
+  // cached narrative was written when the trade was leaning the other way,
+  // it would now read as a contradiction next to the chart.
+  let cacheValid = !!(existingProb?.ai_assessment && cachedFactors);
+  if (cacheValid && cachedFactors && existingProb) {
+    const cachedProbA = Number(existingProb.team_a_probability ?? 50);
+    const cachedLeader: 'team_a' | 'team_b' | 'even' =
+      cachedProbA > 55 ? 'team_a' : cachedProbA < 45 ? 'team_b' : 'even';
+    const cachedEdge = cachedFactors.aiEdge ?? 'even';
+    if (
+      cachedLeader !== 'even' &&
+      cachedEdge !== 'even' &&
+      cachedLeader !== cachedEdge
+    ) {
+      cacheValid = false;
+    }
+  }
+
+  if (!force && cacheValid && existingProb?.ai_assessment && cachedFactors) {
     aiNarrative = existingProb.ai_assessment;
     aiEdge = cachedFactors.aiEdge ?? 'even';
     aiMagnitude = cachedFactors.aiMagnitude ?? 0;

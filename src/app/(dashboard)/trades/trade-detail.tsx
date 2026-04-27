@@ -1871,16 +1871,17 @@ function ActionButton({
 // Helpers
 // ============================================================
 /**
- * v10 — DeltaPill renders the parenthetical delta after a numeric value.
- * Negative = soft red, positive = team colour, zero = muted grey, null = (—).
+ * v12 — DeltaPill renders the parenthetical delta after a numeric value.
+ * Positive = green, negative = red, zero = muted grey, null = (—).
+ * Pure semantic colours only — no team accent here.
  * Uses the proper typographic minus character (U+2212) for proper alignment.
  */
 function DeltaPill({
   delta,
-  teamColor,
+  teamColor: _teamColor,
 }: {
   delta: number | null;
-  teamColor: string;
+  teamColor?: string;
 }) {
   if (delta == null) {
     return (
@@ -1894,7 +1895,7 @@ function DeltaPill({
     rounded === 0
       ? 'rgba(155,163,181,0.55)'
       : rounded > 0
-        ? teamColor
+        ? '#3FBF7F'
         : '#E24B4A';
   const sign = rounded === 0 ? '+' : rounded > 0 ? '+' : '−'; // proper minus
   const magnitude = Math.abs(rounded);

@@ -167,7 +167,14 @@ The season has 23 rounds. Finals start around R21. A "ton" is 100+, a "zero" is 
 - Each team's ladder position and finals chances
 - Whether the trade plugged a line weakness (check line-rank columns: lower rank = stronger)
 
-The "edge" field: which side is currently winning the trade based on output vs. their predictions? Magnitude 1-3 = slight, 4-6 = clear, 7-10 = decisive. If too early to tell (0-2 rounds of data), use magnitude 1-3.
+CRITICAL — POLARITY ALIGNMENT WITH THE WIN PROBABILITY:
+The user message includes the current win probability for each team (e.g. "Doge Bombers 70% vs Warnered613 30%"). This probability is computed from raw production, scarcity, projected value, and AI inputs — it is the AUTHORITATIVE read of who is winning the trade. Your narrative MUST be consistent with this probability:
+- If Team X is at >55%, your headline and bullets must read as Team X winning the trade overall, even if a couple of their players are underperforming expectations. Lead with Team X's advantage; underperformance becomes a "despite this" sub-point, not the headline.
+- If both teams are within 50–55%, frame it as too close to call.
+- Never write a headline that names the losing team (per the probability) as "clearly winning" or "dominating". The two must agree.
+- The "edge" field MUST match: prob A > prob B → edge = "team_a"; prob B > prob A → edge = "team_b"; within 5pp → "even".
+
+Magnitude 1-3 = slight, 4-6 = clear, 7-10 = decisive. Map roughly to the probability gap: 5–15pp = 1-3, 15-30pp = 4-6, 30pp+ = 7-10. If too early to tell (0-2 rounds of data), use magnitude 1-3.
 
 Narrative format (v10): a tight tabloid-style headline plus 3–5 bullet points.
 - The headline is ONE punchy line, MAX 12 WORDS, capturing the core take. Like a tabloid lead. Ends with a period or exclamation.
