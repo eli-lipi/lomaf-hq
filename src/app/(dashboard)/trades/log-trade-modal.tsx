@@ -459,9 +459,12 @@ function TeamSelect({
 // ============================================================
 const SEASON_END_ROUND = 24;
 
-/** Best-guess byes left in the post-trade window. Without per-team bye data
- *  populated yet (team_byes table awaits manual entry), we assume 1 bye if
- *  the trade is executed before the bye block ends (R15), else 0. */
+/** Best-guess byes left in the post-trade window. Byes are an AFL-CLUB
+ *  attribute (each AFL club gets one bye between R12-R15), not a LOMAF
+ *  attribute. Until afl_club_byes data is wired in we use a league-wide
+ *  approximation: 1 bye if the trade was executed before the AFL bye block
+ *  ends (R15), otherwise 0. The trader can manually drop the games figure
+ *  if their player's specific AFL club hasn't byed yet within the window. */
 function estimatedByesInWindow(executedRound: number): number {
   return executedRound < 15 ? 1 : 0;
 }
@@ -551,8 +554,8 @@ function PlayerExpectations({
             <span className="text-sm text-muted-foreground">/ {maxGames}</span>
           </div>
           <p className="text-[10px] text-muted-foreground mt-1">
-            R{executedRound + 1}–R{SEASON_END_ROUND} = {SEASON_END_ROUND - executedRound} rounds, minus {estimatedByesInWindow(executedRound)} bye = <span className="font-semibold">{maxGames} max</span>.
-            Drop only if you knew something at trade time (suspension, injury return).
+            R{executedRound + 1}–R{SEASON_END_ROUND} = {SEASON_END_ROUND - executedRound} rounds, minus {estimatedByesInWindow(executedRound)} estimated AFL-club bye = <span className="font-semibold">{maxGames} max</span>.
+            Drop if you knew something at trade time (suspension, injury return) or if this player&apos;s AFL club has already byed.
           </p>
         </div>
       </div>

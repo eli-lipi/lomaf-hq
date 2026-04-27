@@ -20,9 +20,8 @@ ALTER TABLE trade_players
   ADD COLUMN IF NOT EXISTS expected_games_max INT,
   ADD COLUMN IF NOT EXISTS player_context TEXT;
 
--- Optional helper table for bye rounds. If teams already have a column
--- somewhere else for this, the helper table is harmless overlap.
-CREATE TABLE IF NOT EXISTS team_byes (
-  team_id INT PRIMARY KEY,
-  bye_round INT
-);
+-- Note: byes are an AFL-CLUB attribute (each AFL club has one bye between
+-- R12-R15), not a LOMAF-team attribute. An afl_club_byes table belongs in a
+-- future migration when AFL bye data is wired in. The league-wide bye
+-- estimate in the trade-logging form approximates this until then.
+DROP TABLE IF EXISTS team_byes;
