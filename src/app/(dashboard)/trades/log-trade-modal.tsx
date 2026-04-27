@@ -4,16 +4,25 @@ import { useEffect, useState } from 'react';
 import { X, Loader2 } from 'lucide-react';
 import { TEAMS } from '@/lib/constants';
 import { cleanPositionDisplay } from '@/lib/trades/positions';
+import {
+  resolvePlayerPosition,
+  tierOptionsFor,
+  type Tier,
+} from '@/lib/trades/tiers';
 
 interface DraftPlayer {
   player_id: number;
   player_name: string;
   pos: string | null;
   receiving_team_id: number;
-  // v2 — optional, locked at trade execution. Empty = auto-derive from
-  // tier baseline + recent form / default 4.
+  // v2 (legacy)
   expected_avg?: number | null;
   expected_games?: number | null;
+  // v11 fields — set inline on the player row in the trade-logging form.
+  expected_tier?: Tier | null;
+  expected_games_remaining?: number | null;
+  expected_games_max?: number | null;
+  player_context?: string | null;
 }
 
 export interface InitialTradeData {
@@ -29,6 +38,9 @@ interface Props {
   onClose: () => void;
   onCreated: () => void;
   initial?: InitialTradeData; // if provided → edit mode
+  /** Total rounds in the season — used to compute max post-trade window.
+   *  Falls back to 24 if not provided. */
+  seasonEndRound?: number;
 }
 
 interface PlayerOption {
@@ -91,6 +103,11 @@ export default function LogTradeModal({ onClose, onCreated, initial }: Props) {
           receiving_team_id: p.receiving_team_id,
           expected_avg: p.expected_avg ?? null,
           expected_games: p.expected_games ?? null,
+          // v11 fields
+          expected_tier: p.expected_tier ?? null,
+          expected_games_remaining: p.expected_games_remaining ?? null,
+          expected_games_max: p.expected_games_max ?? null,
+          player_context: p.player_context ?? null,
         })),
       };
       if (!isEdit) payload.screenshot_url = null;
@@ -430,6 +447,95 @@ function TeamSelect({
   );
 }
 
+// ============================================================
+// v11 — per-player expectations panel (Expected tier, Expected games,
+// per-player context). Renders inline beneath each chosen player chip.
+// ============================================================
+function PlayerExpectations({
+  player,
+  onChange,
+}: {
+  player: DraftPlayer;
+  onChange: (patch: Partial<DraftPlayer>) => void;
+}) {
+  // Resolve the player's position via DPP fallback (FWD > DEF > RUC > MID).
+  const resolved = resolvePlayerPosition(player.pos);
+  const tierOpts = resolved ? tierOptionsFor(resolved) : null;
+
+  return (
+    <div className="px-3 py-3 border-t border-border/60 bg-card/40">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-x-4 gap-y-3">
+        <div>
+          <label className="text-[11px] font-semibold text-muted-foreground block mb-1">
+            Expected Average
+          </label>
+          {resolved && tierOpts ? (
+            <>
+              <select
+                value={player.expected_tier ?? ''}
+                onChange={(e) =>
+                  onChange({ expected_tier: (e.target.value || null) as Tier | null })
+                }
+                className="w-full border border-border rounded px-2 py-1.5 text-sm bg-white"
+              >
+                <option value="">— Auto-suggest from current form —</option>
+                {tierOpts.map((o) => (
+                  <option key={o.tier} value={o.tier}>
+                    {o.label} ({o.hint})
+                  </option>
+                ))}
+              </select>
+              <p className="text-[10px] text-muted-foreground mt-1">
+                Position resolved as <span className="font-semibold">{resolved}</span>.
+                Auto-suggested from R-to-date data unless changed.
+              </p>
+            </>
+          ) : (
+            <p className="text-[11px] text-muted-foreground italic">
+              Position unresolved — tier dropdown unavailable.
+            </p>
+          )}
+        </div>
+        <div>
+          <label className="text-[11px] font-semibold text-muted-foreground block mb-1">
+            Expected Games (rest of season)
+          </label>
+          <input
+            type="number"
+            min={0}
+            max={30}
+            placeholder="default = max available"
+            value={player.expected_games_remaining ?? ''}
+            onChange={(e) =>
+              onChange({
+                expected_games_remaining:
+                  e.target.value === '' ? null : Number(e.target.value),
+              })
+            }
+            className="w-full border border-border rounded px-2 py-1.5 text-sm bg-white"
+          />
+          <p className="text-[10px] text-muted-foreground mt-1">
+            Defaults to all games through R24 minus byes. Drop only if you knew
+            something at trade time (suspension, injury return timeline).
+          </p>
+        </div>
+      </div>
+      <div className="mt-3">
+        <label className="text-[11px] font-semibold text-muted-foreground block mb-1">
+          Per-player context (optional)
+        </label>
+        <textarea
+          rows={2}
+          placeholder='e.g. "Injured at trade time, expected return R5" / "Selling high on hot streak"'
+          value={player.player_context ?? ''}
+          onChange={(e) => onChange({ player_context: e.target.value || null })}
+          className="w-full border border-border rounded px-2 py-1.5 text-sm bg-white resize-none"
+        />
+      </div>
+    </div>
+  );
+}
+
 function PlayerPicker({
   label,
   sourceTeamId,
@@ -522,40 +628,57 @@ function PlayerPicker({
     <div>
       <label className="text-xs font-semibold text-muted-foreground block mb-1">{label}</label>
 
-      <div className="space-y-1 mb-2">
+      <div className="space-y-3 mb-2">
         {players.map((p, idx) => {
           const isOffRoster = offRosterIds.has(p.player_id);
           return (
             <div
               key={`${p.player_id}-${idx}`}
-              className={`flex items-center justify-between rounded px-2 py-1.5 text-sm ${
+              className={`rounded border ${
                 !p.player_id
-                  ? 'bg-amber-50 border border-amber-200'
+                  ? 'bg-amber-50 border-amber-200'
                   : isOffRoster
-                  ? 'bg-blue-50 border border-blue-200'
-                  : 'bg-muted'
+                    ? 'bg-blue-50 border-blue-200'
+                    : 'bg-muted border-border'
               }`}
             >
-              <span className="flex items-center gap-1.5 min-w-0 flex-1">
-                <span className="truncate">
-                  {p.player_name}
-                  {cleanPositionDisplay(p.pos) && <span className="text-muted-foreground ml-1 text-xs">({cleanPositionDisplay(p.pos)})</span>}
-                </span>
-                {!p.player_id && (
-                  <span className="ml-1 text-xs text-amber-700 shrink-0">⚠ needs matching</span>
-                )}
-                {isOffRoster && p.player_id > 0 && (
-                  <span className="ml-1 text-[10px] text-blue-600 bg-blue-100 px-1.5 py-0.5 rounded-full font-medium shrink-0">
-                    Waiver / off-roster
+              <div className="flex items-center justify-between px-2 py-1.5 text-sm">
+                <span className="flex items-center gap-1.5 min-w-0 flex-1">
+                  <span className="truncate">
+                    {p.player_name}
+                    {cleanPositionDisplay(p.pos) && (
+                      <span className="text-muted-foreground ml-1 text-xs">
+                        ({cleanPositionDisplay(p.pos)})
+                      </span>
+                    )}
                   </span>
-                )}
-              </span>
-              <button
-                onClick={() => removePlayer(idx)}
-                className="text-muted-foreground hover:text-foreground ml-2 shrink-0"
-              >
-                <X size={14} />
-              </button>
+                  {!p.player_id && (
+                    <span className="ml-1 text-xs text-amber-700 shrink-0">⚠ needs matching</span>
+                  )}
+                  {isOffRoster && p.player_id > 0 && (
+                    <span className="ml-1 text-[10px] text-blue-600 bg-blue-100 px-1.5 py-0.5 rounded-full font-medium shrink-0">
+                      Waiver / off-roster
+                    </span>
+                  )}
+                </span>
+                <button
+                  onClick={() => removePlayer(idx)}
+                  className="text-muted-foreground hover:text-foreground ml-2 shrink-0"
+                >
+                  <X size={14} />
+                </button>
+              </div>
+              {/* v11 — per-player expectations + context. Always visible. */}
+              {p.player_id > 0 && (
+                <PlayerExpectations
+                  player={p}
+                  onChange={(patch) => {
+                    const next = players.slice();
+                    next[idx] = { ...next[idx], ...patch };
+                    onChange(next);
+                  }}
+                />
+              )}
             </div>
           );
         })}

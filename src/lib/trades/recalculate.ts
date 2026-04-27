@@ -154,13 +154,22 @@ export async function recalculateTradeForRound(
       fetchSnapshot(supabase, trade.team_b_id, roundNumber),
     ]);
 
+    // v11 — fold expected_tier and per-player context into the AI breakdown
+    // so the analysis can reference them when explaining underperformance.
+    const tradePlayerById = new Map<number, { tier?: string | null; ctx?: string | null }>();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    for (const tp of (players as unknown as any[])) {
+      tradePlayerById.set(tp.player_id, {
+        tier: tp.expected_tier ?? null,
+        ctx: tp.player_context ?? null,
+      });
+    }
+
     const playerBreakdownLines = performance.map((p) => {
       const status = p.injured ? '🔴 Injured' : '✅ Active';
       const pre = p.pre_trade_avg ?? null;
       const preStr = pre != null ? pre.toFixed(0) : '?';
       const post = p.rounds_played > 0 ? p.post_trade_avg.toFixed(0) : '—';
-      // Predicted-vs-actual gap. The pre-trade avg is the implicit prediction
-      // — what the trade was made on. Below it = trade is failing on output.
       const gap =
         pre != null && p.rounds_played > 0
           ? p.post_trade_avg - pre
@@ -171,14 +180,15 @@ export async function recalculateTradeForRound(
           : gap >= 0
             ? ` (+${gap.toFixed(0)} vs predicted)`
             : ` (${gap.toFixed(0)} vs predicted)`;
-      // Per-round scores: "R3:72, R4:0, R5:88" — 0/null shown explicitly so
-      // the model can see DNPs / injuries / bye patterns.
       const perRound = p.round_scores.length > 0
         ? p.round_scores
             .map((s) => `R${s.round}:${s.points == null ? 'DNP' : s.points}`)
             .join(', ')
         : '(no rounds played since trade)';
-      return `- ${p.player_name} (${cleanPositionDisplay(p.raw_position) ?? p.position ?? '?'}) → ${p.receiving_team_name}: predicted avg ${preStr}, actual avg ${post}${gapStr}, ${p.rounds_played}/${p.rounds_possible} rounds, ${status}\n    scores: ${perRound}`;
+      const tradeMeta = tradePlayerById.get(p.player_id);
+      const tierStr = tradeMeta?.tier ? ` · expected tier: ${tradeMeta.tier}` : '';
+      const ctxStr = tradeMeta?.ctx ? `\n    trader's note: "${tradeMeta.ctx}"` : '';
+      return `- ${p.player_name} (${cleanPositionDisplay(p.raw_position) ?? p.position ?? '?'}) → ${p.receiving_team_name}: predicted avg ${preStr}, actual avg ${post}${gapStr}, ${p.rounds_played}/${p.rounds_possible} rounds, ${status}${tierStr}\n    scores: ${perRound}${ctxStr}`;
     });
 
     const teamAReceives = teamA.map((p) => p.player_name);

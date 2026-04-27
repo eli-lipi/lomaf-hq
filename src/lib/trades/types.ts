@@ -32,10 +32,17 @@ export interface TradePlayer {
   receiving_team_id: number;
   receiving_team_name: string;
   pre_trade_avg: number | null;
-  // v2 — locked at trade execution
+  // v2 — locked at trade execution (legacy fields, kept for back-compat)
   expected_avg: number | null;
   expected_avg_source: 'manual' | 'auto' | null;
-  expected_games: number | null;       // 0..4, default 4
+  expected_games: number | null;       // 0..4, default 4 (legacy v2 scale)
+
+  // v11 — tier system + per-player context. Nullable for un-edited legacy
+  // trades; populated when admin uses the Edit flow.
+  expected_tier?: 'superstar' | 'elite' | 'good' | 'average' | 'unrated' | null;
+  expected_games_remaining?: number | null;   // raw games over the post-trade window
+  expected_games_max?: number | null;         // max-available at trade execution
+  player_context?: string | null;
 }
 
 export interface TradeFactorsBreakdown {

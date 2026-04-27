@@ -25,6 +25,14 @@ import {
 import { cleanPositionDisplay } from '@/lib/trades/positions';
 import { autoExpectedAvg } from '@/lib/trades/expected';
 import {
+  resolvePlayerPosition,
+  tierFromAvg,
+  tierVerdict,
+  tierDisplay,
+  tierToExpectedAvg,
+  type Tier,
+} from '@/lib/trades/tiers';
+import {
   snap5,
   verdictForProb,
   probabilityFromAdvantage,
@@ -68,6 +76,7 @@ interface DetailData {
 
 interface Props {
   tradeId: string;
+  isAdmin?: boolean;
   onBack: () => void;
   onDeleted: () => void;
 }
@@ -95,7 +104,7 @@ function baselineForPerformance(p: PlayerPerformance): number {
 // ============================================================
 // Main detail component
 // ============================================================
-export default function TradeDetail({ tradeId, onBack, onDeleted }: Props) {
+export default function TradeDetail({ tradeId, isAdmin = false, onBack, onDeleted }: Props) {
   const [data, setData] = useState<DetailData | null>(null);
   const [loading, setLoading] = useState(true);
   const [recalculating, setRecalculating] = useState(false);
@@ -234,6 +243,11 @@ export default function TradeDetail({ tradeId, onBack, onDeleted }: Props) {
       player_name: p.player_name,
       pos: p.raw_position,
       receiving_team_id: p.receiving_team_id,
+      // v11 — pre-populate the new fields when editing an existing trade.
+      expected_tier: p.expected_tier ?? null,
+      expected_games_remaining: p.expected_games_remaining ?? null,
+      expected_games_max: p.expected_games_max ?? null,
+      player_context: p.player_context ?? null,
     })),
   };
 
@@ -254,19 +268,25 @@ export default function TradeDetail({ tradeId, onBack, onDeleted }: Props) {
           <ArrowLeft size={16} /> Back to all trades
         </button>
         <div className="flex items-center gap-2">
-          <ActionButton onClick={() => setEditing(true)} icon={<Pencil size={12} />} label="Edit" />
+          {/* v11 — Edit and Delete are admin-only. Recalculate stays visible
+              to all viewers since it just refreshes computation. */}
+          {isAdmin && (
+            <ActionButton onClick={() => setEditing(true)} icon={<Pencil size={12} />} label="Edit" />
+          )}
           <ActionButton
             onClick={handleRecalculate}
             disabled={recalculating}
             icon={<RefreshCw size={12} className={recalculating ? 'animate-spin' : ''} />}
             label="Recalculate"
           />
-          <ActionButton
-            onClick={handleDelete}
-            icon={<Trash2 size={12} />}
-            label="Delete"
-            danger
-          />
+          {isAdmin && (
+            <ActionButton
+              onClick={handleDelete}
+              icon={<Trash2 size={12} />}
+              label="Delete"
+              danger
+            />
+          )}
         </div>
       </div>
 
@@ -494,6 +514,31 @@ export default function TradeDetail({ tradeId, onBack, onDeleted }: Props) {
       {/* Section 4 — Trade Performance: player tables + the round-by-round
           breakdown accordion (now nested INSIDE this section, not bottom-of-page). */}
       <TradeSection title="Trade Performance">
+        {/* v11 — admin-only nag when no player has expected_tier set.
+            Surfaces that the trade is using v2 fallback intelligence and
+            offers a one-click route to upgrade via the Edit flow. */}
+        {isAdmin && players.every((p) => !p.expected_tier) && (
+          <div
+            className="rounded-md px-3 py-2 mb-4 flex items-center justify-between gap-3 flex-wrap text-[12px]"
+            style={{
+              background: 'rgba(255,255,255,0.04)',
+              border: `1px solid ${BORDER}`,
+              color: TEXT_BODY,
+            }}
+          >
+            <span>
+              Expected tiers not set for this trade — using fallback verdicts. Re-edit
+              to upgrade with the v11 tier system.
+            </span>
+            <button
+              onClick={() => setEditing(true)}
+              className="text-[12px] font-semibold whitespace-nowrap"
+              style={{ color: TEXT }}
+            >
+              Edit trade to add →
+            </button>
+          </div>
+        )}
         {(() => {
           const positiveIsA =
             trade.positive_team_id == null ? true : trade.positive_team_id === trade.team_a_id;
@@ -1636,13 +1681,27 @@ function PlayerVerdictRow({
 
   const preDelta =
     computedPreAvg != null && expectedAvg != null ? computedPreAvg - expectedAvg : null;
-  const verdict = playerVerdictFor(
-    avgSince,
-    expectedAvg,
-    expectedGames,
-    actualGames,
-    computedPreAvg
-  );
+
+  // v11 — Tier-relative verdict when the trade carries an expected_tier.
+  // Otherwise fall back to v2's delta-based verdict (per addendum: existing
+  // un-edited trades degrade gracefully).
+  const v11Verdict = (() => {
+    const betTier = tradePlayer.expected_tier as Tier | null | undefined;
+    if (!betTier) return null;
+    const resolvedPos = resolvePlayerPosition(tradePlayer.raw_position);
+    if (!resolvedPos) return null;
+    if (avgSince == null) return null; // No post-trade data yet
+    const deliveredTier = tierFromAvg(avgSince, resolvedPos);
+    return { tierResult: tierVerdict(deliveredTier, betTier), deliveredTier, betTier };
+  })();
+
+  const verdict = v11Verdict
+    ? {
+        level: v11Verdict.tierResult.level,
+        text: v11Verdict.tierResult.text,
+      }
+    : playerVerdictFor(avgSince, expectedAvg, expectedGames, actualGames, computedPreAvg);
+  void tierDisplay; void tierToExpectedAvg; // reserved for forthcoming bet/delivered badges
 
   // Inline mini-trajectory data when expanded
   const traj = useMemo(() => {

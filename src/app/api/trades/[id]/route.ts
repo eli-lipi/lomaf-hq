@@ -141,6 +141,11 @@ interface PatchPlayer {
   receiving_team_id: number;
   expected_avg?: number | null;
   expected_games?: number | null;
+  // v11 — admin Edit flow can backfill these on existing trades.
+  expected_tier?: 'superstar' | 'elite' | 'good' | 'average' | 'unrated' | null;
+  expected_games_remaining?: number | null;
+  expected_games_max?: number | null;
+  player_context?: string | null;
 }
 
 interface PatchBody {
@@ -310,6 +315,11 @@ export async function PATCH(request: Request, ctx: { params: Promise<{ id: strin
           expected_avg,
           expected_avg_source,
           expected_games,
+          // v11 — admin edit can backfill tier system fields on existing trades.
+          expected_tier: p.expected_tier ?? null,
+          expected_games_remaining: p.expected_games_remaining ?? null,
+          expected_games_max: p.expected_games_max ?? null,
+          player_context: p.player_context ?? null,
         };
       });
 

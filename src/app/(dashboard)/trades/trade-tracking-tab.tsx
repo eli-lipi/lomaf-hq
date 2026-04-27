@@ -31,7 +31,7 @@ type SortKey = 'recent' | 'largest' | 'oldest' | 'closest';
 
 // snap5 imported from @/lib/trades/scale (single source of truth).
 
-export default function TradeTrackingTab() {
+export default function TradeTrackingTab({ isAdmin = false }: { isAdmin?: boolean }) {
   const [items, setItems] = useState<ListItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
@@ -122,6 +122,7 @@ export default function TradeTrackingTab() {
     return (
       <TradeDetail
         tradeId={activeTradeId}
+        isAdmin={isAdmin}
         onBack={() => {
           closeTrade();
           load();

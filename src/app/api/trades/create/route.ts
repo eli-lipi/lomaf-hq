@@ -15,8 +15,15 @@ interface CreatePlayerInput {
   player_name: string;
   raw_position: string | null;
   receiving_team_id: number;
-  expected_avg?: number | null;       // optional manual override
-  expected_games?: number | null;     // optional manual override (0..4)
+  // v2 (legacy) optional overrides — still accepted from older callers.
+  expected_avg?: number | null;
+  expected_games?: number | null;
+  // v11 fields. expected_tier is the new Expected Average representation;
+  // expected_games_remaining is the raw games-over-window value.
+  expected_tier?: 'superstar' | 'elite' | 'good' | 'average' | 'unrated' | null;
+  expected_games_remaining?: number | null;
+  expected_games_max?: number | null;
+  player_context?: string | null;
 }
 
 interface CreateBody {
@@ -202,6 +209,11 @@ export async function POST(request: Request) {
         expected_avg,
         expected_avg_source,
         expected_games,
+        // v11 — pass-through. The form decides what to send; we just persist.
+        expected_tier: p.expected_tier ?? null,
+        expected_games_remaining: p.expected_games_remaining ?? null,
+        expected_games_max: p.expected_games_max ?? null,
+        player_context: p.player_context ?? null,
       };
     });
 

@@ -158,6 +158,8 @@ You are given:
 
 USE THE ACTUAL NUMBERS — do not make up stats. Cite specific scores ("Rozee's R3 ton", "De Koning's 0 in R4", etc) AND compare actual output to the predicted (pre-trade) average ("Mills was averaging 95, has averaged 71 since — under the bar by 24/rd").
 
+If the player breakdown includes a "trader's note" line (e.g., "Injured at trade time, expected return R5"), WEIGHT IT HEAVILY. A DNP that the trader explicitly priced in is fundamentally different from a surprise injury — your analysis should reflect that. Phrases like "the Mambas knew Rozee was injured but the timeline has slipped" are appropriate when the note flagged it; treat unforeseen DNPs as straight bad luck or buyer's-remorse material.
+
 The season has 23 rounds. Finals start around R21. A "ton" is 100+, a "zero" is 0/DNP (injury or bye), a solid score is 80+. Typical stars average 90-120. Consider:
 - The original intent (from the context note) and whether it's playing out
 - Each player's actual avg vs. their predicted (pre-trade) avg — that's the trade's verdict on output
