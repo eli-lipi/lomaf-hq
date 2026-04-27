@@ -269,42 +269,56 @@ export default function TradeDetail({ tradeId, onBack, onDeleted }: Props) {
         </div>
       </div>
 
-      {/* v6 — Top metadata strip removed. Every field it carried is duplicated
-          elsewhere on the page (X-axis starts at trade-executed round, the
-          analysis section carries 'Updated R{N}', team names appear in the
-          'received' subtitle below the player headline). The page now opens
-          directly with the player headline. */}
+      {/* ════════════════════════════════════════════════════════════════
+          v9 — Five-section structure. Each section is a bordered card with
+          its own title. Sections in order: Trade Headline → Win Probability
+          → Trade Justification → Trade Performance → Trade Analysis.
+          ════════════════════════════════════════════════════════════════ */}
 
-      {/* PLAYER HEADLINE — surnames front and centre.
-          v6 — verdict pill on the right is gone. The chart line position +
-          quadrant labels deliver the verdict; a pill triplicating it is noise. */}
-      <PlayerHeadline
-        trade={trade}
-        teamAPlayers={teamAPlayers}
-        teamBPlayers={teamBPlayers}
-      />
+      {/* Section 1 — Trade Headline (centred content) */}
+      <TradeSection title="Trade Headline">
+        <div className="text-center">
+          <PlayerHeadline
+            trade={trade}
+            teamAPlayers={teamAPlayers}
+            teamBPlayers={teamBPlayers}
+            perfById={perfById}
+          />
+          <p className="text-[12px] mt-3 uppercase tracking-[0.12em]" style={{ color: TEXT_MUTED }}>
+            <span style={{ color: TEXT_BODY }}>{coachByTeamId(trade.team_a_id, trade.team_a_name)}</span>
+            <span className="mx-2" style={{ color: 'rgba(255,255,255,0.18)' }}>⇄</span>
+            <span style={{ color: TEXT_BODY }}>{coachByTeamId(trade.team_b_id, trade.team_b_name)}</span>
+          </p>
+          <p className="text-[11px] mt-2" style={{ color: TEXT_MUTED }}>
+            Executed after R{trade.round_executed}
+            {latestProbability?.round_number != null && (
+              <>
+                <span className="mx-2" style={{ color: 'rgba(255,255,255,0.18)' }}>·</span>
+                Updated R{latestProbability.round_number}
+              </>
+            )}
+          </p>
+        </div>
+      </TradeSection>
 
-      {/* ── Tier-1: the chart, FULL BLEED, no card.
-          v8.1 — Bumped vertical padding above and below so the chart
-          breathes against neighbouring sections. */}
-      <div className="px-1 pt-6 pb-6">
+      {/* Section 2 — Win Probability (chart). The 'WIN PROBABILITY' label
+          above the chart is gone — the section title carries it now. The ⓘ
+          methodology tooltip moves up to the section title. */}
+      <TradeSection
+        title="Win Probability"
+        titleAdornment={
+          <InfoTip>
+            This is a relative-advantage score scaled as a probability for readability. <strong style={{ color: TEXT }}>50% means both coaches have equal claim to winning the trade. 100% means one coach is maximally winning.</strong> The score blends performance vs expected average (~70%) and availability vs expected games (~30%), and snaps to the nearest 5% to avoid noise.
+          </InfoTip>
+        }
+      >
         {chartData.length < 2 ? (
           <p className="text-sm py-16 text-center" style={{ color: TEXT_MUTED }}>
             No round data yet — probabilities will appear after the next round&apos;s scores are uploaded.
           </p>
         ) : (
           <>
-            <div className="flex items-center justify-between mb-3">
-              <h2 className="text-[10px] font-bold uppercase tracking-[0.15em] flex items-center gap-1.5" style={{ color: TEXT_MUTED }}>
-                Win Probability
-                <InfoTip>
-                  This is a relative-advantage score scaled as a probability for readability. <strong style={{ color: TEXT }}>50% means both coaches have equal claim to winning the trade. 100% means one coach is maximally winning.</strong> The score blends performance vs expected average (~70%) and availability vs expected games (~30%), and snaps to the nearest 5% to avoid noise.
-                </InfoTip>
-              </h2>
-            </div>
-            {/* v6 — Loud team label ABOVE the chart. Full saturation, 16px,
-                weight 600, ▲ glyph, with a thin team-coloured rule extending
-                rightward to anchor the positive zone. */}
+            {/* v6 — Loud team label ABOVE the chart. */}
             <QuadrantLabel
               direction="up"
               teamName={positiveTeamName}
@@ -318,7 +332,7 @@ export default function TradeDetail({ tradeId, onBack, onDeleted }: Props) {
               {/* v8.1 — wider right margin gives the endpoint label room.
                   Top and bottom margins bumped for breathing space. */}
               <ResponsiveContainer width="100%" height={420}>
-                <ComposedChart data={chartData} margin={{ top: 48, right: 220, bottom: 28, left: 8 }}>
+                <ComposedChart data={chartData} margin={{ top: 48, right: 260, bottom: 28, left: 8 }}>
                   {/* v8 — line gradient gone, line is now plain white.
                       Team identity flows through zone shading + dot colours. */}
                   {/* v7 — Permanent territorial zones. Positive team's colour
@@ -444,120 +458,121 @@ export default function TradeDetail({ tradeId, onBack, onDeleted }: Props) {
             />
           </>
         )}
-      </div>
+      </TradeSection>
 
-      {/* ── Tier-2: Player tables — vertical stacked, team-colour spines ─────
-          v5: positive-side team's table sits on top, negative below. Each
-          gets a 6px team-colour spine on the left edge (inset box-shadow so
-          content stays flush). The "RECEIVED" header sits inside the card. */}
-      {(() => {
-        const positiveIsA =
-          trade.positive_team_id == null ? true : trade.positive_team_id === trade.team_a_id;
-        const positivePlayers = positiveIsA ? teamAPlayers : teamBPlayers;
-        const negativePlayers = positiveIsA ? teamBPlayers : teamAPlayers;
-        const positiveTeamId = positiveIsA ? trade.team_a_id : trade.team_b_id;
-        // v6 — dynamic post-trade window. Replaces the hardcoded 4 from v2.
-        // (current_round - executed_round). Used as the (n / m) denominator
-        // and as the availability-ratio denominator in the verdict logic.
-        const postTradeWindow = Math.max(
-          0,
-          (latestProbability?.round_number ?? trade.round_executed) - trade.round_executed
-        );
-        const negativeTeamId = positiveIsA ? trade.team_b_id : trade.team_a_id;
-        const positiveTN = positiveIsA ? trade.team_a_name : trade.team_b_name;
-        const negativeTN = positiveIsA ? trade.team_b_name : trade.team_a_name;
-        return (
-          <div className="flex flex-col gap-4 mt-6">
-            <PlayerTableSection
-              title={`${positiveTN} received`}
-              tradePlayers={positivePlayers}
-              perfById={perfById}
-              teamColor={colorPositive}
-              teamId={positiveTeamId}
-              displayLabels={displayLabels}
-              postTradeWindow={postTradeWindow}
-            />
-            <PlayerTableSection
-              title={`${negativeTN} received`}
-              tradePlayers={negativePlayers}
-              perfById={perfById}
-              teamColor={colorNegative}
-              teamId={negativeTeamId}
-              displayLabels={displayLabels}
-              postTradeWindow={postTradeWindow}
-            />
-          </div>
-        );
-      })()}
+      {/* Section 3 — Trade Justification. Holds the trader's rationale
+          captured at trade-logging time. Empty state when no rationale. */}
+      <TradeSection title="Trade Justification">
+        {trade.context_notes ? (
+          <p
+            className="text-sm italic pl-4 leading-relaxed"
+            style={{
+              color: TEXT_BODY,
+              // Pull-quote left border in the trade-logger's (LIPI) team colour.
+              borderLeft: `2px solid ${colorForTeam(3194003, trade.positive_team_id)}`,
+              fontFamily: 'Georgia, "Times New Roman", serif',
+            }}
+          >
+            &ldquo;{trade.context_notes}&rdquo;
+          </p>
+        ) : (
+          <p className="text-sm italic" style={{ color: TEXT_MUTED }}>
+            Trade rationale captured at the time of the trade will appear here.
+          </p>
+        )}
+      </TradeSection>
 
-      {/* ── Tier-3: Trade analysis — moved BELOW the tables in v5.
-          Reads as a synthesis of the data above it, not a teaser. */}
-      {(latestProbability?.ai_assessment || trade.context_notes) && (
-        <div className="px-6 pt-4 mt-2">
-          <div className="flex items-baseline justify-between gap-3 mb-3">
-            <h2 className="text-[10px] font-bold uppercase tracking-[0.15em]" style={{ color: TEXT_MUTED }}>
-              Trade Analysis
-            </h2>
-            {latestProbability?.round_number != null && (
-              <span className="text-[10px]" style={{ color: TEXT_MUTED }}>
+      {/* Section 4 — Trade Performance: player tables + the round-by-round
+          breakdown accordion (now nested INSIDE this section, not bottom-of-page). */}
+      <TradeSection title="Trade Performance">
+        {(() => {
+          const positiveIsA =
+            trade.positive_team_id == null ? true : trade.positive_team_id === trade.team_a_id;
+          const positivePlayers = positiveIsA ? teamAPlayers : teamBPlayers;
+          const negativePlayers = positiveIsA ? teamBPlayers : teamAPlayers;
+          const positiveTeamId = positiveIsA ? trade.team_a_id : trade.team_b_id;
+          const postTradeWindow = Math.max(
+            0,
+            (latestProbability?.round_number ?? trade.round_executed) - trade.round_executed
+          );
+          const negativeTeamId = positiveIsA ? trade.team_b_id : trade.team_a_id;
+          const positiveTN = positiveIsA ? trade.team_a_name : trade.team_b_name;
+          const negativeTN = positiveIsA ? trade.team_b_name : trade.team_a_name;
+          return (
+            <div className="flex flex-col gap-4">
+              <PlayerTableSection
+                title={`${positiveTN} received`}
+                tradePlayers={positivePlayers}
+                perfById={perfById}
+                teamColor={colorPositive}
+                teamId={positiveTeamId}
+                displayLabels={displayLabels}
+                postTradeWindow={postTradeWindow}
+              />
+              <PlayerTableSection
+                title={`${negativeTN} received`}
+                tradePlayers={negativePlayers}
+                perfById={perfById}
+                teamColor={colorNegative}
+                teamId={negativeTeamId}
+                displayLabels={displayLabels}
+                postTradeWindow={postTradeWindow}
+              />
+              {/* Round-by-round accordion — moved INTO Trade Performance per v9. */}
+              <div
+                className="rounded-lg mt-2"
+                style={{ background: 'rgba(255,255,255,0.02)', border: `1px solid ${BORDER}` }}
+              >
+                <button
+                  onClick={() => setShowDetails((v) => !v)}
+                  className="w-full flex items-center justify-between px-4 py-3 text-left transition-colors"
+                  style={{ color: TEXT_BODY }}
+                  onMouseEnter={(e) => (e.currentTarget.style.color = TEXT)}
+                  onMouseLeave={(e) => (e.currentTarget.style.color = TEXT_BODY)}
+                >
+                  <span className="text-sm font-medium">
+                    {showDetails ? 'Hide' : 'Show'} round-by-round breakdown
+                  </span>
+                  <ChevronDown
+                    size={16}
+                    className={`transition-transform ${showDetails ? 'rotate-180' : ''}`}
+                  />
+                </button>
+                {showDetails && (
+                  <div style={{ borderTop: `1px solid ${BORDER}` }} className="px-4 py-4">
+                    <DarkScoresGrid
+                      performance={playerPerformance}
+                      roundExecuted={trade.round_executed}
+                      latestRound={latestProbability?.round_number ?? trade.round_executed}
+                      teamAName={trade.team_a_name}
+                      teamAId={trade.team_a_id}
+                      teamBName={trade.team_b_name}
+                      teamBId={trade.team_b_id}
+                    />
+                  </div>
+                )}
+              </div>
+            </div>
+          );
+        })()}
+      </TradeSection>
+
+      {/* Section 5 — Trade Analysis. AI-written narrative only; the
+          trader's pull-quote moved up to Section 3 (Trade Justification). */}
+      {latestProbability?.ai_assessment && (
+        <TradeSection
+          title="Trade Analysis"
+          titleAdornment={
+            latestProbability?.round_number != null ? (
+              <span className="text-[10px] ml-auto pl-3" style={{ color: TEXT_MUTED }}>
                 Updated R{latestProbability.round_number}
               </span>
-            )}
-          </div>
-          {latestProbability?.ai_assessment && (
-            <AnalysisBody narrative={latestProbability.ai_assessment} />
-          )}
-          {trade.context_notes && (
-            <p
-              className="text-sm italic mt-4 pl-4 leading-relaxed"
-              style={{
-                color: TEXT_BODY,
-                // Pull-quote left border in the trade-logger's team colour.
-                // Lipi logs every LOMAF trade — anchor to LIPI's identity.
-                borderLeft: `2px solid ${colorForTeam(3194003, trade.positive_team_id)}`,
-                fontFamily: 'Georgia, "Times New Roman", serif',
-              }}
-            >
-              &ldquo;{trade.context_notes}&rdquo;
-            </p>
-          )}
-        </div>
-      )}
-
-      {/* ── Strip 5: Round-by-round breakdown (collapsed) ─────── */}
-      <div
-        className="rounded-xl"
-        style={{ background: SURFACE, border: `1px solid ${BORDER}` }}
-      >
-        <button
-          onClick={() => setShowDetails((v) => !v)}
-          className="w-full flex items-center justify-between px-5 py-4 text-left transition-colors"
-          style={{ color: TEXT_BODY }}
-          onMouseEnter={(e) => (e.currentTarget.style.color = TEXT)}
-          onMouseLeave={(e) => (e.currentTarget.style.color = TEXT_BODY)}
+            ) : null
+          }
         >
-          <span className="text-sm font-medium">
-            {showDetails ? 'Hide' : 'Show'} round-by-round breakdown
-          </span>
-          <ChevronDown
-            size={16}
-            className={`transition-transform ${showDetails ? 'rotate-180' : ''}`}
-          />
-        </button>
-        {showDetails && (
-          <div style={{ borderTop: `1px solid ${BORDER}` }} className="px-5 py-5">
-            <DarkScoresGrid
-              performance={playerPerformance}
-              roundExecuted={trade.round_executed}
-              latestRound={latestProbability?.round_number ?? trade.round_executed}
-              teamAName={trade.team_a_name}
-              teamAId={trade.team_a_id}
-              teamBName={trade.team_b_name}
-              teamBId={trade.team_b_id}
-            />
-          </div>
-        )}
-      </div>
+          <AnalysisBody narrative={latestProbability.ai_assessment} />
+        </TradeSection>
+      )}
 
       {editing && (
         <LogTradeModal
@@ -570,6 +585,46 @@ export default function TradeDetail({ tradeId, onBack, onDeleted }: Props) {
         />
       )}
     </div>
+  );
+}
+
+// ============================================================
+// v9 — TradeSection: bordered card with a section title and a thin rule
+// extending rightward from the title to the right edge of the card.
+// ============================================================
+function TradeSection({
+  title,
+  titleAdornment,
+  children,
+}: {
+  title: string;
+  titleAdornment?: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  return (
+    <section
+      className="rounded-xl"
+      style={{
+        background: 'rgba(255,255,255,0.02)',
+        border: `1px solid rgba(255,255,255,0.08)`,
+        padding: 24,
+      }}
+    >
+      <div className="flex items-center gap-3 mb-4">
+        <div
+          className="text-[11px] font-semibold uppercase tracking-[0.18em] flex items-center gap-1.5 shrink-0"
+          style={{ color: TEXT_MUTED }}
+        >
+          {title}
+          {titleAdornment}
+        </div>
+        <div
+          className="h-px flex-1"
+          style={{ background: 'rgba(255,255,255,0.06)' }}
+        />
+      </div>
+      {children}
+    </section>
   );
 }
 
@@ -628,10 +683,12 @@ function PlayerHeadline({
   trade,
   teamAPlayers,
   teamBPlayers,
+  perfById,
 }: {
   trade: Trade;
   teamAPlayers: TradePlayer[];
   teamBPlayers: TradePlayer[];
+  perfById: Map<number, PlayerPerformance>;
 }) {
   const allPlayers = [...teamAPlayers, ...teamBPlayers];
   const labels = buildDisplayLabels(
@@ -640,10 +697,8 @@ function PlayerHeadline({
   const colorA = colorForTeam(trade.team_a_id, trade.positive_team_id);
   const colorB = colorForTeam(trade.team_b_id, trade.positive_team_id);
 
-  // Type sizing — scales down as we add players
   const totalPlayers = allPlayers.length;
   const isOneForOne = teamAPlayers.length === 1 && teamBPlayers.length === 1;
-  // Pick a font size class based on player count
   const surnameSize = isOneForOne
     ? 'text-[44px] md:text-[60px]'
     : totalPlayers <= 4
@@ -651,41 +706,57 @@ function PlayerHeadline({
       : 'text-[22px] md:text-[28px]';
   const arrowSize = isOneForOne ? 'text-[28px] md:text-[36px]' : 'text-[20px] md:text-[26px]';
 
+  // v9: drop first names entirely on crowded multi-player trades to keep
+  // the headline readable (4+ players per side).
+  const showFirstNames = teamAPlayers.length <= 3 && teamBPlayers.length <= 3;
+
   return (
-    <div className="mt-2 mb-2">
-      <div className="flex items-center justify-between gap-4 flex-wrap">
-        {/* Names — for 1-for-1 we render side-by-side with arrow.
-            For multi-player we stack rows top/bottom with arrow between. */}
-        {isOneForOne ? (
-          <div className="flex items-baseline gap-4 flex-wrap">
-            <SinglePlayerCluster player={teamAPlayers[0]} color={colorA} labels={labels} size={surnameSize} />
-            <span className={`${arrowSize}`} style={{ color: 'rgba(255,255,255,0.55)', fontWeight: 300 }}>⇄</span>
-            <SinglePlayerCluster player={teamBPlayers[0]} color={colorB} labels={labels} size={surnameSize} />
-          </div>
-        ) : (
-          <div className="flex flex-col gap-1">
-            <PlayerRowHeadline
-              players={teamAPlayers}
-              color={colorA}
-              receivingTeam={trade.team_a_name}
-              labels={labels}
-              size={surnameSize}
-            />
-            <span className={`${arrowSize} my-1`} style={{ color: 'rgba(255,255,255,0.45)', fontWeight: 300 }}>⇅</span>
-            <PlayerRowHeadline
-              players={teamBPlayers}
-              color={colorB}
-              receivingTeam={trade.team_b_name}
-              labels={labels}
-              size={surnameSize}
-            />
-          </div>
-        )}
-        {/* v6 — verdict pill removed. Chart line + quadrant labels carry the verdict. */}
-      </div>
-      {/* Subtitle: receiving teams in their colour. Used for both 1-for-1
-          and multi-player trades — gives the team-name context once. */}
-      <p className="text-[12px] mt-2" style={{ color: TEXT_MUTED }}>
+    <div className="flex flex-col items-center">
+      {isOneForOne ? (
+        <div className="flex items-baseline justify-center gap-4 flex-wrap">
+          <SinglePlayerCluster
+            player={teamAPlayers[0]}
+            color={colorA}
+            labels={labels}
+            size={surnameSize}
+            performance={perfById.get(teamAPlayers[0].player_id)}
+            showFirstName={showFirstNames}
+          />
+          <span className={`${arrowSize}`} style={{ color: 'rgba(255,255,255,0.55)', fontWeight: 300 }}>⇄</span>
+          <SinglePlayerCluster
+            player={teamBPlayers[0]}
+            color={colorB}
+            labels={labels}
+            size={surnameSize}
+            performance={perfById.get(teamBPlayers[0].player_id)}
+            showFirstName={showFirstNames}
+          />
+        </div>
+      ) : (
+        <div className="flex flex-col gap-1 items-center">
+          <PlayerRowHeadline
+            players={teamAPlayers}
+            color={colorA}
+            receivingTeam={trade.team_a_name}
+            labels={labels}
+            size={surnameSize}
+            perfById={perfById}
+            showFirstNames={showFirstNames}
+          />
+          <span className={`${arrowSize} my-1`} style={{ color: 'rgba(255,255,255,0.45)', fontWeight: 300 }}>⇅</span>
+          <PlayerRowHeadline
+            players={teamBPlayers}
+            color={colorB}
+            receivingTeam={trade.team_b_name}
+            labels={labels}
+            size={surnameSize}
+            perfById={perfById}
+            showFirstNames={showFirstNames}
+          />
+        </div>
+      )}
+      {/* Subtitle: receiving teams in their colour. */}
+      <p className="text-[12px] mt-3" style={{ color: TEXT_MUTED }}>
         <span style={{ color: colorA }}>{trade.team_a_name} received</span>
         <span className="mx-3" style={{ color: 'rgba(255,255,255,0.18)' }}>|</span>
         <span style={{ color: colorB }}>{trade.team_b_name} received</span>
@@ -694,30 +765,66 @@ function PlayerHeadline({
   );
 }
 
+/** v9 helper: extract the player's first name. Capitalised for sentence-case. */
+function firstNameOf(fullName: string): string {
+  const first = fullName.trim().split(/\s+/)[0] ?? '';
+  if (!first) return '';
+  return first.charAt(0).toUpperCase() + first.slice(1).toLowerCase();
+}
+
+/** Resolve the position to display in the headline. v9 fix: prefer the
+ *  draft position via PlayerPerformance, then fall back to the raw position
+ *  on the trade_players row. Never show the literal '—' character. */
+function headlinePosition(
+  player: TradePlayer,
+  performance: PlayerPerformance | undefined
+): string | null {
+  if (performance) {
+    const display = displayPosition(performance);
+    if (display && display !== '—') return display;
+  }
+  return cleanPositionDisplay(player.raw_position);
+}
+
 function SinglePlayerCluster({
   player,
   color,
   labels,
   size,
+  performance,
+  showFirstName,
 }: {
   player: TradePlayer;
   color: string;
   labels: Map<number, string>;
   size: string;
+  performance: PlayerPerformance | undefined;
+  showFirstName: boolean;
 }) {
-  const pos = cleanPositionDisplay(player.raw_position) ?? '—';
+  const pos = headlinePosition(player, performance);
   const label = labels.get(player.player_id) ?? player.player_name;
+  const firstName = firstNameOf(player.player_name);
   return (
-    <div className="flex flex-col items-start">
-      <span className={`${size} font-medium leading-none`} style={{ color }}>
+    <div className="flex flex-col items-center">
+      {showFirstName && firstName && (
+        <span
+          className="text-[14px] md:text-[15px] font-normal leading-none"
+          style={{ color: hexWithOpacity(color, 0.55) }}
+        >
+          {firstName}
+        </span>
+      )}
+      <span className={`${size} font-medium leading-none mt-1`} style={{ color }}>
         {label}
       </span>
-      <span
-        className="text-[11px] uppercase tracking-[0.15em] mt-1.5"
-        style={{ color: hexWithOpacity(color, 0.5) }}
-      >
-        {pos}
-      </span>
+      {pos && (
+        <span
+          className="text-[11px] uppercase tracking-[0.15em] mt-1.5"
+          style={{ color: hexWithOpacity(color, 0.5) }}
+        >
+          {pos}
+        </span>
+      )}
     </div>
   );
 }
@@ -728,19 +835,47 @@ function PlayerRowHeadline({
   receivingTeam,
   labels,
   size,
+  perfById,
+  showFirstNames,
 }: {
   players: TradePlayer[];
   color: string;
   receivingTeam: string;
   labels: Map<number, string>;
   size: string;
+  perfById: Map<number, PlayerPerformance>;
+  showFirstNames: boolean;
 }) {
   return (
-    <div className="flex flex-col">
-      <div className="flex items-baseline gap-x-2.5 flex-wrap">
+    <div className="flex flex-col items-center">
+      {/* v9 — first names render in their own row above the surname row,
+          aligned over each surname. Subtle, half-saturated team colour. */}
+      {showFirstNames && (
+        <div className="flex items-baseline justify-center gap-x-2.5 flex-wrap">
+          {players.map((p, i) => {
+            const first = firstNameOf(p.player_name);
+            return (
+              <span
+                key={`first-${p.id}`}
+                className="text-[13px] font-normal leading-none"
+                style={{ color: hexWithOpacity(color, 0.55) }}
+              >
+                {first}
+                {/* spacer to match the surname-row separators */}
+                {i < players.length - 1 && (
+                  <span className="opacity-0 mx-2" aria-hidden>
+                    ·
+                  </span>
+                )}
+              </span>
+            );
+          })}
+        </div>
+      )}
+      <div className="flex items-baseline justify-center gap-x-2.5 flex-wrap mt-1">
         {players.map((p, i) => {
           const label = labels.get(p.player_id) ?? p.player_name;
-          const pos = cleanPositionDisplay(p.raw_position);
+          const pos = headlinePosition(p, perfById.get(p.player_id));
           return (
             <span key={p.id} className={`${size} font-medium leading-tight`} style={{ color }}>
               {label}
@@ -759,7 +894,7 @@ function PlayerRowHeadline({
           );
         })}
       </div>
-      <p className="text-[10px] uppercase tracking-[0.18em] mt-0.5" style={{ color }}>
+      <p className="text-[10px] uppercase tracking-[0.18em] mt-1" style={{ color }}>
         ↑ {receivingTeam} received
       </p>
     </div>
@@ -929,7 +1064,7 @@ function EndpointLabel({
       <div
         className="absolute pointer-events-none"
         style={{
-          right: 16,
+          right: 12,
           top,
           maxWidth: 200,
         }}
