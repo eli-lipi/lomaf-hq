@@ -51,6 +51,44 @@ export default function TradeTrackingTab() {
     load();
   }, [load]);
 
+  // ── Browser-back integration ─────────────────────────────────────
+  // Without this, opening a trade is a pure React state change — no URL
+  // update, no history entry. The browser's Back button then jumps the
+  // user out of /trades entirely (back to PWRNKGs or wherever). Push a
+  // history entry on trade-open and listen for popstate so the in-page
+  // 'Back to all trades' UX matches the browser-back UX.
+  const openTrade = useCallback((id: string) => {
+    setActiveTradeId(id);
+    if (typeof window !== 'undefined') {
+      const url = new URL(window.location.href);
+      url.searchParams.set('trade', id);
+      window.history.pushState({ trade: id }, '', url.toString());
+    }
+  }, []);
+
+  const closeTrade = useCallback(() => {
+    setActiveTradeId(null);
+    if (typeof window !== 'undefined') {
+      const url = new URL(window.location.href);
+      if (url.searchParams.has('trade')) {
+        url.searchParams.delete('trade');
+        window.history.pushState({ trade: null }, '', url.toString());
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    const onPop = () => {
+      if (typeof window === 'undefined') return;
+      const tradeId = new URL(window.location.href).searchParams.get('trade');
+      setActiveTradeId(tradeId);
+    };
+    window.addEventListener('popstate', onPop);
+    // Sync on first mount in case user landed with ?trade=... in the URL
+    onPop();
+    return () => window.removeEventListener('popstate', onPop);
+  }, []);
+
   const sortedItems = useMemo(() => {
     const arr = [...items];
     if (sort === 'recent') {
@@ -84,11 +122,11 @@ export default function TradeTrackingTab() {
       <TradeDetail
         tradeId={activeTradeId}
         onBack={() => {
-          setActiveTradeId(null);
+          closeTrade();
           load();
         }}
         onDeleted={() => {
-          setActiveTradeId(null);
+          closeTrade();
           load();
         }}
       />
@@ -129,8 +167,8 @@ export default function TradeTrackingTab() {
         <EmptyState onLog={() => setModalOpen(true)} />
       ) : (
         <>
-          <NarrativeStats items={items} onOpen={(id) => setActiveTradeId(id)} />
-          <TradeMatrix items={items} onOpen={(id) => setActiveTradeId(id)} />
+          <NarrativeStats items={items} onOpen={openTrade} />
+          <TradeMatrix items={items} onOpen={openTrade} />
 
           {/* Sort pills */}
           <div className="flex items-center gap-2 flex-wrap">
@@ -150,12 +188,12 @@ export default function TradeTrackingTab() {
                   players={item.players}
                   latestProbability={item.latestProbability}
                   probabilityHistory={item.probabilityHistory}
-                  onViewDetails={() => setActiveTradeId(item.trade.id)}
+                  onViewDetails={() => openTrade(item.trade.id)}
                 />
               ))}
             </div>
           ) : (
-            <GroupedByRound items={sortedItems} onOpen={(id) => setActiveTradeId(id)} />
+            <GroupedByRound items={sortedItems} onOpen={openTrade} />
           )}
         </>
       )}
@@ -461,9 +499,10 @@ function TradeMatrix({
   items: ListItem[];
   onOpen: (tradeId: string) => void;
 }) {
-  // Build pair counts and per-pair trade list (for click-to-open)
+  // Pair counts (undirected key) + per-pair trade ids + per-team totals
   const pairCount = new Map<string, number>();
-  const pairTrades = new Map<string, string[]>(); // trade_ids
+  const pairTrades = new Map<string, string[]>();
+  const totalByTeam = new Map<number, number>();
   for (const it of items) {
     const a = it.trade.team_a_id;
     const b = it.trade.team_b_id;
@@ -471,12 +510,14 @@ function TradeMatrix({
     pairCount.set(key, (pairCount.get(key) ?? 0) + 1);
     if (!pairTrades.has(key)) pairTrades.set(key, []);
     pairTrades.get(key)!.push(it.trade.id);
+    totalByTeam.set(a, (totalByTeam.get(a) ?? 0) + 1);
+    totalByTeam.set(b, (totalByTeam.get(b) ?? 0) + 1);
   }
 
   let maxCount = 0;
   for (const v of pairCount.values()) if (v > maxCount) maxCount = v;
 
-  // Use short team names for axes
+  // Short team names for axes
   const SHORT: Record<number, string> = {
     3194002: 'Mansion',
     3194005: 'Dragons',
@@ -490,13 +531,55 @@ function TradeMatrix({
     3194007: 'Warnered',
   };
 
+  /**
+   * Single-hue intensity ramp keyed off raw count. Higher count = louder
+   * cell. Same hue across the matrix so the eye is drawn to busy pairs
+   * regardless of which two teams are involved.
+   */
+  const cellStyleFor = (count: number): { bg: string; fg: string; border: string } => {
+    if (count === 0) {
+      return {
+        bg: 'rgba(255,255,255,0.02)',
+        fg: 'transparent',
+        border: 'rgba(255,255,255,0.04)',
+      };
+    }
+    if (count === 1) {
+      return {
+        bg: 'rgba(163,255,18,0.16)',
+        fg: '#A3FF12',
+        border: 'rgba(163,255,18,0.30)',
+      };
+    }
+    if (count === 2) {
+      return {
+        bg: 'rgba(163,255,18,0.32)',
+        fg: '#0A0F1C',
+        border: 'rgba(163,255,18,0.50)',
+      };
+    }
+    if (count === 3) {
+      return {
+        bg: 'rgba(255,159,39,0.55)', // amber — pair has been busy
+        fg: '#0A0F1C',
+        border: 'rgba(255,159,39,0.70)',
+      };
+    }
+    return {
+      bg: 'rgba(226,75,74,0.65)', // red — heavy traders
+      fg: '#FFFFFF',
+      border: 'rgba(226,75,74,0.80)',
+    };
+  };
+
   return (
     <div className="rounded-xl p-5" style={{ background: SURFACE, border: `1px solid ${BORDER}` }}>
       <h3 className="text-[10px] font-bold uppercase tracking-[0.15em] mb-1" style={{ color: TEXT_MUTED }}>
         Trade Matrix
       </h3>
       <p className="text-xs mb-3" style={{ color: TEXT_BODY }}>
-        Who&apos;s trading with whom. Cells are shaded by how many trades that pair has done.
+        Who&apos;s trading with whom. Cell colour scales with trade count: 1 muted, 2 brighter, 3 amber, 4+ red.
+        Bottom row sums each coach&apos;s total trades.
       </p>
       <div className="overflow-x-auto">
         <table className="text-[11px] border-collapse">
@@ -526,13 +609,17 @@ function TradeMatrix({
                 {TEAMS.map((colTeam) => {
                   const isDiagonal = rowTeam.team_id === colTeam.team_id;
                   if (isDiagonal) {
+                    // Greyed self-intersection — coach trading with himself
+                    // makes no sense; mark it visually inert.
                     return (
                       <td key={colTeam.team_id} className="px-1 py-1">
                         <div
                           className="rounded text-center"
                           style={{
                             height: 32,
-                            background: 'rgba(255,255,255,0.02)',
+                            background:
+                              'repeating-linear-gradient(135deg, rgba(255,255,255,0.03) 0 4px, transparent 4px 8px)',
+                            border: `1px solid rgba(255,255,255,0.04)`,
                           }}
                         />
                       </td>
@@ -543,18 +630,8 @@ function TradeMatrix({
                   const key = a < b ? `${a}-${b}` : `${b}-${a}`;
                   const count = pairCount.get(key) ?? 0;
                   const tradeIds = pairTrades.get(key) ?? [];
-                  // v5 — diagonal-split cell carrying both teams' colours.
-                  // The split itself reinforces the team-colour map across
-                  // the whole portal: every glance at the matrix teaches
-                  // which colour belongs to which team.
-                  const rowColor = colorForTeam(rowTeam.team_id, null);
-                  const colColor = colorForTeam(colTeam.team_id, null);
-                  const onClick =
-                    tradeIds.length === 1
-                      ? () => onOpen(tradeIds[0])
-                      : tradeIds.length > 1
-                        ? () => onOpen(tradeIds[0])
-                        : undefined;
+                  const onClick = tradeIds.length > 0 ? () => onOpen(tradeIds[0]) : undefined;
+                  const cell = cellStyleFor(count);
                   return (
                     <td key={colTeam.team_id} className="px-1 py-1">
                       <button
@@ -565,26 +642,15 @@ function TradeMatrix({
                             ? 'No trades'
                             : `${rowTeam.team_name} ⇄ ${colTeam.team_name}: ${count} trade${count === 1 ? '' : 's'}`
                         }
-                        className="w-full rounded text-center transition-transform relative overflow-hidden"
+                        className="w-full rounded text-center transition-transform"
                         style={{
                           height: 32,
-                          background:
-                            count === 0
-                              ? 'rgba(255,255,255,0.02)'
-                              : // Diagonal split — top-left = row team, bottom-right = column team.
-                                // Opacity scales with count vs. the loudest pair so big
-                                // counts pop more than singletons.
-                                `linear-gradient(135deg, ${rowColor} 50%, ${colColor} 50%)`,
-                          opacity: count === 0 ? 1 : 0.55 + Math.min(count / Math.max(maxCount, 1), 1) * 0.45,
-                          color: '#FFFFFF',
-                          fontWeight: 700,
+                          background: cell.bg,
+                          color: cell.fg,
+                          fontWeight: count >= 2 ? 700 : 600,
                           fontSize: 12,
                           cursor: onClick ? 'pointer' : 'default',
-                          border:
-                            count > 0
-                              ? '1px solid rgba(255,255,255,0.10)'
-                              : '1px solid transparent',
-                          textShadow: count > 0 ? '0 0 4px rgba(0,0,0,0.6)' : 'none',
+                          border: `1px solid ${cell.border}`,
                         }}
                         onMouseEnter={(e) => {
                           if (onClick) (e.currentTarget as HTMLElement).style.transform = 'scale(1.05)';
@@ -600,6 +666,29 @@ function TradeMatrix({
                 })}
               </tr>
             ))}
+            {/* Per-team totals row at the bottom — sum of trades each team
+                has been involved in. Quick read of who's most/least active. */}
+            <tr style={{ borderTop: `1px solid ${BORDER}` }}>
+              <th
+                className="py-2 pr-3 text-right text-[10px] font-bold uppercase tracking-wider whitespace-nowrap"
+                style={{ color: TEXT_MUTED }}
+              >
+                Total
+              </th>
+              {TEAMS.map((t) => {
+                const total = totalByTeam.get(t.team_id) ?? 0;
+                return (
+                  <td key={t.team_id} className="px-1 py-2 text-center">
+                    <span
+                      className="text-sm font-bold tabular-nums"
+                      style={{ color: total === 0 ? TEXT_MUTED : TEXT }}
+                    >
+                      {total}
+                    </span>
+                  </td>
+                );
+              })}
+            </tr>
           </tbody>
         </table>
       </div>
