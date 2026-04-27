@@ -30,6 +30,8 @@ interface Props {
   players: ListPlayer[];
   latestProbability?: TradeProbability | null;
   probabilityHistory?: TradeProbability[];
+  /** Whether the current viewer is admin — gates v11 backfill nags. */
+  isAdmin?: boolean;
   onViewDetails: () => void;
 }
 
@@ -53,10 +55,18 @@ export default function TradeCard({
   players,
   latestProbability,
   probabilityHistory,
+  isAdmin = false,
   onViewDetails,
 }: Props) {
   const teamAPlayers = players.filter((p) => p.receiving_team_id === trade.team_a_id);
   const teamBPlayers = players.filter((p) => p.receiving_team_id === trade.team_b_id);
+
+  // v11 backfill nag: trade hasn't had expected tiers set on any player.
+  // Only surfaced to admins — coaches don't need to see incomplete data
+  // markers. Pure visual cue ("v2"), no click action — the action lives
+  // inside the trade detail page banner per v11 addendum §3.2.
+  const needsTierBackfill =
+    isAdmin && players.length > 0 && players.every((p) => !p.expected_tier);
 
   // Per-trade colours — green for positive side, cyan for negative
   const colorA = colorForTeam(trade.team_a_id, trade.positive_team_id);
@@ -142,13 +152,26 @@ export default function TradeCard({
             colorB={colorB}
             labels={labels}
           />
-          <p className="text-[11px] mt-3 uppercase tracking-[0.10em]" style={{ color: TEXT_MUTED }}>
-            R{trade.round_executed}
+          <p className="text-[11px] mt-3 uppercase tracking-[0.10em] flex items-center gap-2 flex-wrap" style={{ color: TEXT_MUTED }}>
+            <span>R{trade.round_executed}</span>
             {coachA && coachB && (
               <>
-                <span className="mx-2 normal-case" style={{ color: 'rgba(255,255,255,0.18)' }}>·</span>
+                <span className="normal-case" style={{ color: 'rgba(255,255,255,0.18)' }}>·</span>
                 <span className="normal-case">{coachA} vs {coachB}</span>
               </>
+            )}
+            {needsTierBackfill && (
+              <span
+                className="text-[9px] font-bold px-1.5 py-0.5 rounded normal-case tracking-normal"
+                style={{
+                  background: 'rgba(255,255,255,0.06)',
+                  color: TEXT_MUTED,
+                  border: `1px solid rgba(255,255,255,0.10)`,
+                }}
+                title="Expected tiers not set — using v2 fallback. Open the trade and click Edit to add."
+              >
+                v2 fallback
+              </span>
             )}
           </p>
         </div>

@@ -140,33 +140,39 @@ export default function TradeTrackingTab({ isAdmin = false }: { isAdmin?: boolea
       className="-mx-6 -my-8 px-6 py-8 min-h-screen space-y-5"
       style={{ background: BG, color: TEXT }}
     >
-      {/* Action row */}
-      <div className="flex justify-end">
-        <button
-          onClick={() => setModalOpen(true)}
-          className="flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-md transition-colors"
-          style={{
-            background: 'transparent',
-            color: ACCENT,
-            border: `1px solid ${ACCENT}`,
-          }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.background = 'rgba(163,255,18,0.10)';
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.background = 'transparent';
-          }}
-        >
-          <Plus size={16} /> Log Trade
-        </button>
-      </div>
+      {/* Action row — Log Trade is admin-only (matches v11 gating on
+          Edit/Delete inside trade detail). Coaches in member-view see
+          a read-only homepage. */}
+      {isAdmin && (
+        <div className="flex justify-end">
+          <button
+            onClick={() => setModalOpen(true)}
+            className="flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-md transition-colors"
+            style={{
+              background: 'transparent',
+              color: ACCENT,
+              border: `1px solid ${ACCENT}`,
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.background = 'rgba(163,255,18,0.10)';
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = 'transparent';
+            }}
+          >
+            <Plus size={16} /> Log Trade
+          </button>
+        </div>
+      )}
 
       {loading ? (
         <div className="py-12 text-center" style={{ color: TEXT_MUTED }}>
           Loading trades...
         </div>
       ) : items.length === 0 ? (
-        <EmptyState onLog={() => setModalOpen(true)} />
+        <EmptyState
+          onLog={isAdmin ? () => setModalOpen(true) : null}
+        />
       ) : (
         <>
           <NarrativeStats items={items} onOpen={openTrade} />
@@ -190,12 +196,13 @@ export default function TradeTrackingTab({ isAdmin = false }: { isAdmin?: boolea
                   players={item.players}
                   latestProbability={item.latestProbability}
                   probabilityHistory={item.probabilityHistory}
+                  isAdmin={isAdmin}
                   onViewDetails={() => openTrade(item.trade.id)}
                 />
               ))}
             </div>
           ) : (
-            <GroupedByRound items={sortedItems} onOpen={openTrade} />
+            <GroupedByRound items={sortedItems} onOpen={openTrade} isAdmin={isAdmin} />
           )}
         </>
       )}
@@ -219,9 +226,11 @@ export default function TradeTrackingTab({ isAdmin = false }: { isAdmin?: boolea
 function GroupedByRound({
   items,
   onOpen,
+  isAdmin,
 }: {
   items: ListItem[];
   onOpen: (tradeId: string) => void;
+  isAdmin: boolean;
 }) {
   const groups = new Map<number, ListItem[]>();
   for (const it of items) {
@@ -242,6 +251,7 @@ function GroupedByRound({
                 players={item.players}
                 latestProbability={item.latestProbability}
                 probabilityHistory={item.probabilityHistory}
+                isAdmin={isAdmin}
                 onViewDetails={() => onOpen(item.trade.id)}
               />
             ))}
@@ -277,7 +287,7 @@ function RoundDivider({ round }: { round: number }) {
 // ============================================================
 // Empty state
 // ============================================================
-function EmptyState({ onLog }: { onLog: () => void }) {
+function EmptyState({ onLog }: { onLog: (() => void) | null }) {
   return (
     <div
       className="rounded-xl p-10 text-center"
@@ -293,19 +303,23 @@ function EmptyState({ onLog }: { onLog: () => void }) {
         No trades logged yet
       </h3>
       <p className="text-sm mt-1 mb-4" style={{ color: TEXT_BODY }}>
-        Log a trade and we&apos;ll start tracking the win probability over time.
+        {onLog
+          ? 'Log a trade and we’ll start tracking the win probability over time.'
+          : 'Once trades start landing, they’ll appear here.'}
       </p>
-      <button
-        onClick={onLog}
-        className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-md"
-        style={{
-          background: 'transparent',
-          color: ACCENT,
-          border: `1px solid ${ACCENT}`,
-        }}
-      >
-        <Plus size={16} /> Log your first trade
-      </button>
+      {onLog && (
+        <button
+          onClick={onLog}
+          className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-md"
+          style={{
+            background: 'transparent',
+            color: ACCENT,
+            border: `1px solid ${ACCENT}`,
+          }}
+        >
+          <Plus size={16} /> Log your first trade
+        </button>
+      )}
     </div>
   );
 }
