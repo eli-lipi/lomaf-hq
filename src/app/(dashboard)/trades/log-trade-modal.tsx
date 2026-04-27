@@ -226,6 +226,10 @@ function TradeForm(props: TradeFormProps) {
   } = props;
 
   const firstPostTradeRound = timing === 'after' ? roundPicked + 1 : roundPicked;
+  // Round number at which OLD rosters last applied. Same logic as the
+  // parent's effectiveRoundExecuted; recomputed locally so the player-
+  // expectations panels can compute max-games-available reactively.
+  const effectiveRoundExecuted = timing === 'after' ? roundPicked : Math.max(0, roundPicked - 1);
 
   return (
     <div className="space-y-4">
@@ -280,6 +284,7 @@ function TradeForm(props: TradeFormProps) {
           sourceTeamId={teamBId}
           receivingTeamId={teamAId}
           players={players.filter((p) => p.receiving_team_id === teamAId)}
+          executedRound={effectiveRoundExecuted}
           onChange={(newList) => {
             const others = players.filter((p) => p.receiving_team_id !== teamAId);
             setPlayers([...others, ...newList]);
@@ -292,6 +297,7 @@ function TradeForm(props: TradeFormProps) {
           sourceTeamId={teamAId}
           receivingTeamId={teamBId}
           players={players.filter((p) => p.receiving_team_id === teamBId)}
+          executedRound={effectiveRoundExecuted}
           onChange={(newList) => {
             const others = players.filter((p) => p.receiving_team_id !== teamBId);
             setPlayers([...others, ...newList]);
@@ -451,16 +457,46 @@ function TeamSelect({
 // v11 — per-player expectations panel (Expected tier, Expected games,
 // per-player context). Renders inline beneath each chosen player chip.
 // ============================================================
+const SEASON_END_ROUND = 24;
+
+/** Best-guess byes left in the post-trade window. Without per-team bye data
+ *  populated yet (team_byes table awaits manual entry), we assume 1 bye if
+ *  the trade is executed before the bye block ends (R15), else 0. */
+function estimatedByesInWindow(executedRound: number): number {
+  return executedRound < 15 ? 1 : 0;
+}
+
+function maxGamesAvailable(executedRound: number): number {
+  return Math.max(0, SEASON_END_ROUND - executedRound - estimatedByesInWindow(executedRound));
+}
+
 function PlayerExpectations({
   player,
+  executedRound,
   onChange,
 }: {
   player: DraftPlayer;
+  executedRound: number;
   onChange: (patch: Partial<DraftPlayer>) => void;
 }) {
   // Resolve the player's position via DPP fallback (FWD > DEF > RUC > MID).
   const resolved = resolvePlayerPosition(player.pos);
   const tierOpts = resolved ? tierOptionsFor(resolved) : null;
+  const maxGames = maxGamesAvailable(executedRound);
+
+  // Default expected_games_remaining to the max once we know the executed
+  // round. Honours any value the user already typed.
+  useEffect(() => {
+    if (player.expected_games_remaining == null) {
+      onChange({
+        expected_games_remaining: maxGames,
+        expected_games_max: maxGames,
+      });
+    } else if (player.expected_games_max !== maxGames) {
+      onChange({ expected_games_max: maxGames });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [maxGames]);
 
   return (
     <div className="px-3 py-3 border-t border-border/60 bg-card/40">
@@ -498,25 +534,25 @@ function PlayerExpectations({
         </div>
         <div>
           <label className="text-[11px] font-semibold text-muted-foreground block mb-1">
-            Expected Games (rest of season)
+            Expected Games <span className="font-normal">(out of {maxGames} remaining)</span>
           </label>
-          <input
-            type="number"
-            min={0}
-            max={30}
-            placeholder="default = max available"
-            value={player.expected_games_remaining ?? ''}
-            onChange={(e) =>
-              onChange({
-                expected_games_remaining:
-                  e.target.value === '' ? null : Number(e.target.value),
-              })
-            }
-            className="w-full border border-border rounded px-2 py-1.5 text-sm bg-white"
-          />
+          <div className="flex items-baseline gap-2">
+            <input
+              type="number"
+              min={0}
+              max={maxGames}
+              value={player.expected_games_remaining ?? maxGames}
+              onChange={(e) => {
+                const n = e.target.value === '' ? maxGames : Math.max(0, Math.min(maxGames, Number(e.target.value)));
+                onChange({ expected_games_remaining: n });
+              }}
+              className="w-20 border border-border rounded px-2 py-1.5 text-sm bg-white tabular-nums"
+            />
+            <span className="text-sm text-muted-foreground">/ {maxGames}</span>
+          </div>
           <p className="text-[10px] text-muted-foreground mt-1">
-            Defaults to all games through R24 minus byes. Drop only if you knew
-            something at trade time (suspension, injury return timeline).
+            R{executedRound + 1}–R{SEASON_END_ROUND} = {SEASON_END_ROUND - executedRound} rounds, minus {estimatedByesInWindow(executedRound)} bye = <span className="font-semibold">{maxGames} max</span>.
+            Drop only if you knew something at trade time (suspension, injury return).
           </p>
         </div>
       </div>
@@ -541,12 +577,14 @@ function PlayerPicker({
   sourceTeamId,
   receivingTeamId,
   players,
+  executedRound,
   onChange,
 }: {
   label: string;
   sourceTeamId: number | null; // players come FROM this team (sourceTeam's roster)
   receivingTeamId: number;
   players: DraftPlayer[];
+  executedRound: number;
   onChange: (list: DraftPlayer[]) => void;
 }) {
   const [roster, setRoster] = useState<PlayerOption[]>([]);
@@ -672,6 +710,7 @@ function PlayerPicker({
               {p.player_id > 0 && (
                 <PlayerExpectations
                   player={p}
+                  executedRound={executedRound}
                   onChange={(patch) => {
                     const next = players.slice();
                     next[idx] = { ...next[idx], ...patch };
