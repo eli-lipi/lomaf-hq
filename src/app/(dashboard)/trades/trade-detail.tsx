@@ -1259,11 +1259,13 @@ function parseAnalysisNarrative(narrative: string): { headline: string; bullets:
   return { headline, bullets };
 }
 
-/** Trim a headline to the first 12 words, preserving terminal punctuation. */
+/**
+ * Pass through the headline as-is. The AI prompt requests ≤12 words; client-
+ * side truncation made things worse by cutting mid-thought. If the model
+ * goes over, we'd rather render a slightly long sentence than half a one.
+ */
 function tightenHeadline(s: string): string {
-  const words = s.trim().split(/\s+/);
-  if (words.length <= 12) return s.trim();
-  return words.slice(0, 12).join(' ').replace(/[,;:]+$/, '') + '…';
+  return s.trim();
 }
 
 // ============================================================
@@ -1717,19 +1719,18 @@ function PlayerVerdictRow({
           <DeltaPill delta={preDelta} teamColor={teamColor} />
         </td>
         {/* Expected (Δ vs Avg Since) */}
-        <td className="pl-2 text-right text-[18px] tabular-nums" style={{ color: TEXT }}>
-          <span className="inline-flex items-center gap-1 justify-end">
-            {expectedAvg != null ? Math.round(expectedAvg) : '—'}
-            {expectedAvg != null && (
-              <InfoTip>
-                <strong style={{ color: TEXT }}>Expected: {Math.round(expectedAvg)}</strong>
-                <br />
-                {expectedSourceLabel}
-                <br />
-                Locked at trade execution — cannot be edited.
-              </InfoTip>
-            )}
-          </span>
+        <td
+          className="pl-2 text-right text-[18px] tabular-nums"
+          style={{ color: TEXT }}
+          // Per-row ⓘ removed in v10.4 — the column header carries the
+          // explanation. Hover the row to inspect via the title attr if needed.
+          title={
+            expectedAvg != null
+              ? `Expected ${Math.round(expectedAvg)} · ${expectedSourceLabel}`
+              : undefined
+          }
+        >
+          {expectedAvg != null ? Math.round(expectedAvg) : '—'}
           <DeltaPill delta={sinceDelta} teamColor={teamColor} />
         </td>
       </tr>
