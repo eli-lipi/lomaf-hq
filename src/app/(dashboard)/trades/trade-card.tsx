@@ -5,8 +5,9 @@ import {
   snap5,
   buildDisplayLabels,
   colorForTeam,
+  probabilityFromAdvantage,
 } from '@/lib/trades/scale';
-import { getTradeColorPair } from '@/lib/team-colors';
+import { getTradeColorPair, getCoachByTeam } from '@/lib/team-colors';
 import { cleanPositionDisplay } from '@/lib/trades/positions';
 import type { Trade, TradePlayer, TradeProbability } from '@/lib/trades/types';
 
@@ -36,13 +37,14 @@ function coachFor(teamId: number): string {
   return TEAMS.find((t) => t.team_id === teamId)?.coach ?? '';
 }
 
-/** Verdict label for the homepage card — short version. */
-function shortVerdict(adv: number): string {
-  const abs = Math.abs(adv);
-  if (abs <= 10) return 'COIN FLIP';
-  if (abs <= 30) return 'SLIGHT EDGE';
-  if (abs <= 55) return 'EDGE';
-  if (abs <= 80) return 'BIG EDGE';
+/** Short verdict label for the homepage card, on the v8 0..100 prob scale. */
+function shortVerdict(probability: number): string {
+  // Probability of the LEADING coach is always >= 50.
+  const leader = probability >= 50 ? probability : 100 - probability;
+  if (leader <= 50) return 'COIN FLIP';
+  if (leader <= 65) return 'SLIGHT EDGE';
+  if (leader <= 80) return 'EDGE';
+  if (leader <= 95) return 'BIG EDGE';
   return 'ROBBERY';
 }
 
@@ -91,8 +93,10 @@ export default function TradeCard({
   const sortedHistory = [...(probabilityHistory ?? [])].sort(
     (a, b) => a.round_number - b.round_number
   );
+  // v8 — sparkline points on the 0..100 probability scale, anchored at 50.
+  // The Sparkline component renders the same shape; only the y-baseline shifts.
   const sparkPoints: { x: number; y: number }[] = [];
-  sparkPoints.push({ x: trade.round_executed, y: 0 });
+  sparkPoints.push({ x: trade.round_executed, y: 50 });
   for (const p of sortedHistory) {
     if (p.round_number === trade.round_executed) continue;
     let adv: number;
@@ -101,7 +105,7 @@ export default function TradeCard({
       const aEdge = (snap5(Number(p.team_a_probability)) - 50) * 2;
       adv = positiveIsA ? aEdge : -aEdge;
     }
-    sparkPoints.push({ x: p.round_number, y: adv });
+    sparkPoints.push({ x: p.round_number, y: probabilityFromAdvantage(adv) });
   }
 
   const winningName =
@@ -149,26 +153,68 @@ export default function TradeCard({
           </p>
         </div>
 
-        {/* RIGHT — sparkline + price + verdict */}
+        {/* RIGHT — sparkline + two-coach price tag + verdict.
+            v8: probabilities are coach-keyed, sum to 100, leader rendered first. */}
         {showProb && advantage != null ? (
-          <div className="flex flex-col items-end gap-1 shrink-0 min-w-[140px]">
-            <Sparkline points={sparkPoints} colorPositive={pair.positive} colorNegative={pair.negative} />
-            <div
-              className="text-2xl font-bold leading-none tabular-nums"
-              style={{ color: winningColor }}
-            >
-              {Math.abs(advantage)}%
-            </div>
-            <div
-              className="text-[10px] font-bold uppercase tracking-[0.10em] truncate max-w-[160px]"
-              style={{ color: winningColor }}
-            >
-              {shortVerdict(advantage)}
-            </div>
-            <div className="text-[10px] truncate max-w-[180px]" style={{ color: TEXT_MUTED }}>
-              {trade.team_a_name} ⇄ {trade.team_b_name}
-            </div>
-          </div>
+          (() => {
+            const probability = probabilityFromAdvantage(advantage);
+            const positiveCoach = getCoachByTeam(
+              positiveIsA ? trade.team_a_id : trade.team_b_id
+            );
+            const negativeCoach = getCoachByTeam(
+              positiveIsA ? trade.team_b_id : trade.team_a_id
+            );
+            const positiveLeading = probability >= 50;
+            const leader = positiveLeading
+              ? { coach: positiveCoach, pct: probability, color: pair.positive }
+              : { coach: negativeCoach, pct: 100 - probability, color: pair.negative };
+            const trailer = positiveLeading
+              ? { coach: negativeCoach, pct: 100 - probability, color: pair.negative }
+              : { coach: positiveCoach, pct: probability, color: pair.positive };
+            return (
+              <div className="flex flex-col items-end gap-1 shrink-0 min-w-[150px]">
+                <Sparkline
+                  points={sparkPoints}
+                  colorPositive={pair.positive}
+                  colorNegative={pair.negative}
+                />
+                <div className="flex items-baseline justify-end gap-2 mt-1">
+                  <span
+                    className="text-[11px] uppercase tracking-[0.10em] font-semibold leading-tight truncate"
+                    style={{ color: leader.color, maxWidth: 90 }}
+                  >
+                    {leader.coach}
+                  </span>
+                  <span
+                    className="text-2xl font-bold leading-none tabular-nums"
+                    style={{ color: leader.color }}
+                  >
+                    {leader.pct}%
+                  </span>
+                </div>
+                <div className="flex items-baseline justify-end gap-2 opacity-80">
+                  <span
+                    className="text-[10px] uppercase tracking-[0.10em] font-medium leading-tight truncate"
+                    style={{ color: trailer.color, maxWidth: 90 }}
+                  >
+                    {trailer.coach}
+                  </span>
+                  <span
+                    className="text-sm leading-none tabular-nums"
+                    style={{ color: trailer.color }}
+                  >
+                    {trailer.pct}%
+                  </span>
+                </div>
+                <div
+                  className="text-[10px] font-bold uppercase tracking-[0.10em] mt-0.5"
+                  style={{ color: leader.color }}
+                >
+                  {shortVerdict(probability)}
+                </div>
+              </div>
+            );
+          })()
         ) : (
           <div className="text-[10px] italic shrink-0" style={{ color: TEXT_MUTED }}>
             tracking…
@@ -295,7 +341,8 @@ function Sparkline({
   const xRange = Math.max(1, maxX - minX);
 
   // Y axis fixed −100..+100 to match the detail chart
-  const yMin = -100;
+  // v8 — y axis is now probability 0..100 with 50 as wash baseline.
+  const yMin = 0;
   const yMax = 100;
   const yRange = yMax - yMin;
 
@@ -306,9 +353,9 @@ function Sparkline({
     .map((p, i) => `${i === 0 ? 'M' : 'L'} ${toX(p.x).toFixed(1)} ${toY(p.y).toFixed(1)}`)
     .join(' ');
 
-  const baselineY = toY(0);
+  const baselineY = toY(50);
   const last = points[points.length - 1];
-  const lastColor = last.y > 0 ? colorPositive : last.y < 0 ? colorNegative : TEXT;
+  const lastColor = last.y > 50 ? colorPositive : last.y < 50 ? colorNegative : TEXT;
   const gradientId = `spark-${Math.random().toString(36).slice(2, 8)}`;
 
   return (

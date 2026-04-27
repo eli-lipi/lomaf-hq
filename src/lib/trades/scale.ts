@@ -183,14 +183,55 @@ export interface Verdict {
   isFlip: boolean;
 }
 
+// ──────────────────────────────────────────────────────────────────
+// v8 — Probability-scale conversion + coach-keyed verdict thresholds
+// ──────────────────────────────────────────────────────────────────
+
+/**
+ * Convert a signed advantage (-100..+100) into a positive-coach probability
+ * (0..100). 50% = wash. Snapped to 5%.
+ *
+ *   advantage = 0   → 50  (wash)
+ *   advantage = +30 → 65  (positive coach winning)
+ *   advantage = -30 → 35  (negative coach winning)
+ *   advantage = +100 → 100
+ *   advantage = -100 → 0
+ */
+export function probabilityFromAdvantage(advantage: number): number {
+  return snap5(50 + advantage / 2);
+}
+
+/**
+ * v8 verdict — keyed on the LEADING coach's probability (always ≥ 50).
+ * Bands match the published spec exactly:
+ *   exactly 50  → coin flip
+ *   55..65      → slight edge
+ *   70..80      → edge
+ *   85..95      → big edge
+ *   100         → robbery
+ */
+export function verdictForProb(
+  positiveProb: number,
+  positiveCoachName: string,
+  negativeCoachName: string
+): Verdict {
+  const positiveLeading = positiveProb >= 50;
+  const leaderProb = positiveLeading ? positiveProb : 100 - positiveProb;
+  const leaderName = positiveLeading ? positiveCoachName : negativeCoachName;
+
+  if (leaderProb <= 50) return { level: 'flip', text: 'Coin flip', isFlip: true };
+  if (leaderProb <= 65) return { level: 'slight', text: `Slight edge — ${leaderName}`, isFlip: false };
+  if (leaderProb <= 80) return { level: 'edge', text: `Edge — ${leaderName}`, isFlip: false };
+  if (leaderProb <= 95) return { level: 'big', text: `Big edge — ${leaderName}`, isFlip: false };
+  return { level: 'robbery', text: `Robbery — ${leaderName}`, isFlip: false };
+}
+
+/**
+ * Legacy v6 verdict — kept for any caller still working in the ±100
+ * advantage space. Converts to probability and delegates.
+ */
 export function verdictFor(advantage: number, positiveTeamName: string, negativeTeamName: string): Verdict {
-  const abs = Math.abs(advantage);
-  const winner = advantage >= 0 ? positiveTeamName : negativeTeamName;
-  if (abs <= 10) return { level: 'flip', text: 'Coin flip', isFlip: true };
-  if (abs <= 30) return { level: 'slight', text: `Slight edge — ${winner}`, isFlip: false };
-  if (abs <= 55) return { level: 'edge', text: `Edge — ${winner}`, isFlip: false };
-  if (abs <= 80) return { level: 'big', text: `Big edge — ${winner}`, isFlip: false };
-  return { level: 'robbery', text: `Robbery — ${winner}`, isFlip: false };
+  return verdictForProb(probabilityFromAdvantage(advantage), positiveTeamName, negativeTeamName);
 }
 
 /** Per-player verdict (resolution criteria) thresholds. */

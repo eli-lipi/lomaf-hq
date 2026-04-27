@@ -25,7 +25,8 @@ import {
 import { cleanPositionDisplay } from '@/lib/trades/positions';
 import {
   snap5,
-  verdictFor,
+  verdictForProb,
+  probabilityFromAdvantage,
   playerVerdictFor,
   colorForTeam,
   buildDisplayLabels,
@@ -34,6 +35,7 @@ import {
   getTradeColorPair,
   getContrastingTextColor,
   hexWithOpacity,
+  getCoachByTeam,
 } from '@/lib/team-colors';
 import type {
   PlayerPerformance,
@@ -128,33 +130,32 @@ export default function TradeDetail({ tradeId, onBack, onDeleted }: Props) {
     onDeleted();
   };
 
-  // v2 chart data — signed advantage on the ±100 scale, polarized to
-  // positive_team_id. Falls back to deriving from team_a_probability for
-  // legacy rows that haven't been re-computed yet.
+  // v8 chart data — POSITIVE COACH'S PROBABILITY on the 0..100 scale, with
+  // 50 as the wash baseline. The signed-advantage ±100 scale is preserved
+  // internally then transformed once via probabilityFromAdvantage().
+  // Two coaches' probabilities always sum to 100 (Polymarket Yes/No logic).
   const chartData = useMemo(() => {
-    if (!data) return [] as { round: string; roundNum: number; advantage: number; deltaPct: number | null }[];
+    if (!data) return [] as { round: string; roundNum: number; probability: number; deltaPct: number | null }[];
     const positiveIsA = data.trade.positive_team_id == null
       ? true
       : data.trade.positive_team_id === data.trade.team_a_id;
     const advFromRow = (p: TradeProbability): number => {
       if (p.advantage != null) return snap5(Number(p.advantage));
-      // Legacy fallback: derive from team_a_probability (0-100 → ±100)
       const aEdge = (Number(p.team_a_probability) - 50) * 2;
       return snap5(positiveIsA ? aEdge : -aEdge);
     };
-    const map = new Map<number, number>();
-    map.set(data.trade.round_executed, 0); // anchor at neutral
+    const map = new Map<number, number>(); // round → probability (0..100)
+    map.set(data.trade.round_executed, 50); // anchor at wash
     for (const p of data.probabilityHistory) {
       if (p.round_number === data.trade.round_executed) continue;
-      map.set(p.round_number, advFromRow(p));
+      map.set(p.round_number, probabilityFromAdvantage(advFromRow(p)));
     }
     const sorted = Array.from(map.entries()).sort(([a], [b]) => a - b);
-    return sorted.map(([round, adv], idx) => ({
+    return sorted.map(([round, prob], idx) => ({
       round: `R${round}`,
       roundNum: round,
-      advantage: adv,
-      // Delta vs prior round, computed between snapped values per spec.
-      deltaPct: idx === 0 ? null : adv - sorted[idx - 1][1],
+      probability: prob,
+      deltaPct: idx === 0 ? null : prob - sorted[idx - 1][1],
     }));
   }, [data]);
 
@@ -198,19 +199,24 @@ export default function TradeDetail({ tradeId, onBack, onDeleted }: Props) {
   const positiveTeamName = positiveIsA ? trade.team_a_name : trade.team_b_name;
   const negativeTeamName = positiveIsA ? trade.team_b_name : trade.team_a_name;
 
-  // Latest snapped advantage. Uses the stored `advantage` field; falls back
-  // to deriving from team_a_probability for legacy rows.
+  // v8 — work in POSITIVE COACH'S PROBABILITY (0..100). Internally the
+  // signed advantage still drives polarity; transformed once via
+  // probabilityFromAdvantage().
   const advantage: number = (() => {
     if (latestProbability?.advantage != null) return snap5(Number(latestProbability.advantage));
     const aEdge = (snap5(Number(latestProbability?.team_a_probability ?? 50)) - 50) * 2;
     return positiveIsA ? aEdge : -aEdge;
   })();
+  const probability = probabilityFromAdvantage(advantage); // 0..100, snapped to 5
 
-  const verdict = verdictFor(advantage, positiveTeamName, negativeTeamName);
+  const positiveCoach = getCoachByTeam(positiveIsA ? trade.team_a_id : trade.team_b_id);
+  const negativeCoach = getCoachByTeam(positiveIsA ? trade.team_b_id : trade.team_a_id);
+
+  const verdict = verdictForProb(probability, positiveCoach, negativeCoach);
+  // Winning team name kept for legacy callers (chart corner labels, etc.)
   const winningTeamName = advantage >= 0 ? positiveTeamName : negativeTeamName;
 
-  // Delta vs prior round — computed between snapped values per spec, so a
-  // round where nothing changed shows 0% (no fake movement).
+  // Delta vs prior round, expressed in probability points (0..100 scale).
   let heroDelta: number | null = null;
   if (chartData.length >= 2) {
     heroDelta = chartData[chartData.length - 1].deltaPct ?? null;
@@ -290,7 +296,7 @@ export default function TradeDetail({ tradeId, onBack, onDeleted }: Props) {
               <h2 className="text-[10px] font-bold uppercase tracking-[0.15em] flex items-center gap-1.5" style={{ color: TEXT_MUTED }}>
                 Win Probability
                 <InfoTip>
-                  Performance vs. each player&apos;s expected average (~70%) blended with availability vs. expected games (~30%). Snapped to nearest 5%. Polarity locked at trade execution to whichever team had the better ladder position.
+                  This is a relative-advantage score scaled as a probability for readability. <strong style={{ color: TEXT }}>50% means both coaches have equal claim to winning the trade. 100% means one coach is maximally winning.</strong> The score blends performance vs expected average (~70%) and availability vs expected games (~30%), and snaps to the nearest 5% to avoid noise.
                 </InfoTip>
               </h2>
             </div>
@@ -309,23 +315,16 @@ export default function TradeDetail({ tradeId, onBack, onDeleted }: Props) {
                   The dashed vertical line stays as a subtle anchor. */}
               <ResponsiveContainer width="100%" height={360}>
                 <ComposedChart data={chartData} margin={{ top: 30, right: 16, bottom: 6, left: 8 }}>
-                  <defs>
-                    {/* Vertical gradient — green above 0%, cyan below. Hard stop at y=0 (50% of −100..+100 axis). */}
-                    <linearGradient id="lineColorSplit" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor={colorPositive} />
-                      <stop offset="50%" stopColor={colorPositive} />
-                      <stop offset="50%" stopColor={colorNegative} />
-                      <stop offset="100%" stopColor={colorNegative} />
-                    </linearGradient>
-                    {/* v6's areaFillSplit gradient is gone in v7 — replaced by
-                        the two-zone background shading below. The zones make
-                        the area-under-curve fill redundant. */}
-                  </defs>
+                  {/* v8 — line gradient gone, line is now plain white.
+                      Team identity flows through zone shading + dot colours. */}
                   {/* v7 — Permanent territorial zones. Positive team's colour
                       tints the upper half, negative tints the lower. The line
                       runs across both zones, switching colour at the 0% line. */}
+                  {/* v8 — zones remap to the 0..100 probability scale.
+                      Upper half (50..100) = positive coach's territory.
+                      Lower half (0..50) = negative coach's territory. */}
                   <ReferenceArea
-                    y1={0}
+                    y1={50}
                     y2={100}
                     fill={colorPositive}
                     fillOpacity={0.10}
@@ -333,8 +332,8 @@ export default function TradeDetail({ tradeId, onBack, onDeleted }: Props) {
                     ifOverflow="extendDomain"
                   />
                   <ReferenceArea
-                    y1={-100}
-                    y2={0}
+                    y1={0}
+                    y2={50}
                     fill={colorNegative}
                     fillOpacity={0.10}
                     stroke="none"
@@ -348,9 +347,9 @@ export default function TradeDetail({ tradeId, onBack, onDeleted }: Props) {
                     tickLine={false}
                   />
                   <YAxis
-                    domain={[-100, 100]}
-                    ticks={[-100, -50, 0, 50, 100]}
-                    tickFormatter={(v) => `${v > 0 ? '+' : ''}${v}%`}
+                    domain={[0, 100]}
+                    ticks={[0, 25, 50, 75, 100]}
+                    tickFormatter={(v) => `${v}%`}
                     tick={{ fontSize: 11, fill: TEXT_MUTED }}
                     axisLine={false}
                     tickLine={false}
@@ -362,36 +361,39 @@ export default function TradeDetail({ tradeId, onBack, onDeleted }: Props) {
                     content={(props: any) => (
                       <ChartTooltip
                         {...props}
-                        positiveTeamName={positiveTeamName}
-                        negativeTeamName={negativeTeamName}
+                        positiveCoach={positiveCoach}
+                        negativeCoach={negativeCoach}
                       />
                     )}
                   />
-                  {/* Vertical anchor — no label here, the flag above handles it */}
+                  {/* Vertical anchor at trade-executed round */}
                   <ReferenceLine
                     x={`R${trade.round_executed}`}
                     stroke="rgba(255,255,255,0.30)"
                     strokeDasharray="2 4"
                   />
-                  {/* Wash baseline — solid white at 0%, separates the two zones */}
-                  <ReferenceLine y={0} stroke="rgba(255,255,255,0.45)" strokeWidth={1.5} />
-                  {/* v7 — area-under-curve fill removed. Permanent zones above
-                      handle the colour story; an area fill on top would
-                      double-layer and muddy the chart. */}
-                  {/* The advantage line — gradient stroke = positive-team colour above 0, negative below */}
+                  {/* v8 — Wash baseline at 50%. Same visual position as v7's 0
+                      line, just relabelled. Solid white, full opacity. */}
+                  <ReferenceLine y={50} stroke="rgba(255,255,255,0.45)" strokeWidth={1.5} />
+                  {/* v8 — Single white line trace. Team identity is carried by
+                      the zone shading + per-point coloured dots; making the
+                      line itself team-coloured was creating contrast issues
+                      where the line matched its own zone. */}
                   <Line
                     type="monotone"
-                    dataKey="advantage"
-                    stroke="url(#lineColorSplit)"
-                    strokeWidth={2.5}
+                    dataKey="probability"
+                    stroke="rgba(255,255,255,0.85)"
+                    strokeWidth={2}
                     dot={((dotProps: Record<string, unknown>) => {
                       const cx = dotProps.cx as number | undefined;
                       const cy = dotProps.cy as number | undefined;
                       const index = dotProps.index as number | undefined;
-                      const payload = dotProps.payload as { advantage?: number } | undefined;
+                      const payload = dotProps.payload as { probability?: number } | undefined;
                       const k = String(dotProps.key ?? index ?? '');
                       if (cx == null || cy == null) return <g key={k} />;
-                      const dotColor = (payload?.advantage ?? 0) >= 0 ? colorPositive : colorNegative;
+                      // Team colour by which zone the dot sits in.
+                      const dotColor =
+                        (payload?.probability ?? 50) >= 50 ? colorPositive : colorNegative;
                       const isLast = index === chartData.length - 1;
                       if (isLast) {
                         return (
@@ -414,12 +416,24 @@ export default function TradeDetail({ tradeId, onBack, onDeleted }: Props) {
                   ABOVE and BELOW the chart (rendered as siblings around the
                   ResponsiveContainer, see the wrapping JSX). */}
 
-              {/* Price tag — top-right of chart. v6 — quieter element:
-                  team name above, big % below, no box, always positive. */}
-              <div className="absolute top-2 right-3 pointer-events-none">
+              {/* v8 — Two-coach Yes/No price tag. Sits in the leading
+                  coach's zone (upper if probability > 50, lower if < 50,
+                  centre if exactly 50). Both coaches' probabilities visible. */}
+              <div
+                className="absolute right-3 pointer-events-none"
+                style={{
+                  // Vertical placement based on the leading zone.
+                  ...(probability > 50
+                    ? { top: 12 }
+                    : probability < 50
+                      ? { bottom: 32 }
+                      : { top: '50%', transform: 'translateY(-50%)' }),
+                }}
+              >
                 <PriceTag
-                  advantage={advantage}
-                  winningTeamName={winningTeamName}
+                  probability={probability}
+                  positiveCoach={positiveCoach}
+                  negativeCoach={negativeCoach}
                   colorPositive={colorPositive}
                   colorNegative={colorNegative}
                 />
@@ -887,44 +901,83 @@ function QuadrantLabel({
 }
 
 // ============================================================
-// Right-edge price tag — v6 quiet two-line element, no box.
-// Always shows a positive percentage; team name carries the polarity.
+// v8 price tag — both coaches' probabilities, Polymarket-style.
+// Leader rendered first. Two rows, no box, sits in the leader's zone.
 // ============================================================
 function PriceTag({
-  advantage,
-  winningTeamName,
+  probability,
+  positiveCoach,
+  negativeCoach,
   colorPositive,
   colorNegative,
 }: {
-  advantage: number;
-  winningTeamName: string;
+  probability: number; // 0..100, positive coach's probability
+  positiveCoach: string;
+  negativeCoach: string;
   colorPositive: string;
   colorNegative: string;
 }) {
-  if (advantage === 0) {
+  // Wash — both 50/50, neutral coin-flip caption
+  if (probability === 50) {
     return (
       <div className="text-right">
-        <div className="text-[13px] font-semibold uppercase tracking-wider" style={{ color: TEXT }}>
-          WASH
-        </div>
-        <div className="text-[32px] font-medium leading-none tabular-nums mt-1" style={{ color: TEXT }}>
-          0%
+        <Row coach={positiveCoach} pct={50} color={colorPositive} />
+        <Row coach={negativeCoach} pct={50} color={colorNegative} />
+        <div
+          className="text-[10px] uppercase tracking-[0.20em] mt-1.5 font-semibold"
+          style={{ color: TEXT_MUTED }}
+        >
+          Coin flip
         </div>
       </div>
     );
   }
-  const winnerColor = advantage > 0 ? colorPositive : colorNegative;
+
+  const positiveLeading = probability > 50;
+  const leaderRow = positiveLeading
+    ? { coach: positiveCoach, pct: probability, color: colorPositive }
+    : { coach: negativeCoach, pct: 100 - probability, color: colorNegative };
+  const trailerRow = positiveLeading
+    ? { coach: negativeCoach, pct: 100 - probability, color: colorNegative }
+    : { coach: positiveCoach, pct: probability, color: colorPositive };
+
   return (
     <div className="text-right">
-      <div
-        className="text-[13px] font-semibold leading-tight truncate"
-        style={{ color: winnerColor, maxWidth: 180 }}
+      <Row {...leaderRow} leader />
+      <Row {...trailerRow} />
+    </div>
+  );
+}
+
+function Row({
+  coach,
+  pct,
+  color,
+  leader,
+}: {
+  coach: string;
+  pct: number;
+  color: string;
+  leader?: boolean;
+}) {
+  return (
+    <div className="flex items-baseline justify-end gap-3">
+      <span
+        className="text-[12px] uppercase tracking-[0.10em] font-semibold leading-tight truncate"
+        style={{ color, maxWidth: 140, opacity: leader ? 1 : 0.85 }}
       >
-        {winningTeamName}
-      </div>
-      <div className="text-[34px] font-medium leading-none tabular-nums" style={{ color: winnerColor }}>
-        {Math.abs(advantage)}%
-      </div>
+        {coach}
+      </span>
+      <span
+        className="font-medium leading-none tabular-nums"
+        style={{
+          color,
+          fontSize: leader ? 26 : 18,
+          opacity: leader ? 1 : 0.85,
+        }}
+      >
+        {pct}%
+      </span>
     </div>
   );
 }
@@ -937,14 +990,16 @@ function ChartTooltip(props: {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   payload?: any[];
   label?: string;
-  positiveTeamName: string;
-  negativeTeamName: string;
+  positiveCoach: string;
+  negativeCoach: string;
 }) {
   if (!props.active || !props.payload?.length) return null;
-  const p = props.payload[0]?.payload as { advantage: number; deltaPct: number | null; round: string } | undefined;
+  const p = props.payload[0]?.payload as
+    | { probability: number; deltaPct: number | null; round: string }
+    | undefined;
   if (!p) return null;
-  const winName = p.advantage >= 0 ? props.positiveTeamName : props.negativeTeamName;
-  const sign = p.advantage >= 0 ? '+' : '';
+  const posProb = p.probability;
+  const negProb = 100 - posProb;
   return (
     <div
       style={{
@@ -952,24 +1007,28 @@ function ChartTooltip(props: {
         border: `1px solid ${BORDER}`,
         borderRadius: 8,
         padding: '8px 10px',
-        minWidth: 150,
+        minWidth: 170,
         boxShadow: '0 4px 24px rgba(0,0,0,0.4)',
       }}
     >
-      <div className="text-[10px] uppercase tracking-wider mb-1" style={{ color: TEXT_MUTED }}>
+      <div className="text-[10px] uppercase tracking-wider mb-1.5" style={{ color: TEXT_MUTED }}>
         Round {String(p.round).replace('R', '')}
       </div>
-      <div className="text-sm font-semibold" style={{ color: ACCENT }}>
-        {sign}
-        {p.advantage}% · {winName}
+      <div className="flex items-baseline justify-between text-sm font-medium" style={{ color: TEXT }}>
+        <span className="truncate mr-2">{props.positiveCoach}</span>
+        <span className="tabular-nums">{posProb}%</span>
+      </div>
+      <div
+        className="flex items-baseline justify-between text-sm font-medium mt-0.5"
+        style={{ color: TEXT_BODY }}
+      >
+        <span className="truncate mr-2">{props.negativeCoach}</span>
+        <span className="tabular-nums">{negProb}%</span>
       </div>
       {p.deltaPct != null && Math.abs(p.deltaPct) >= 5 && (
-        <div
-          className="text-[10px] mt-0.5 tabular-nums"
-          style={{ color: p.deltaPct >= 0 ? ACCENT : STATUS_INJURED }}
-        >
+        <div className="text-[10px] mt-1.5 tabular-nums" style={{ color: TEXT_MUTED }}>
           {p.deltaPct >= 0 ? '+' : ''}
-          {p.deltaPct}% vs prev round
+          {p.deltaPct}pp shift since prev round
         </div>
       )}
     </div>

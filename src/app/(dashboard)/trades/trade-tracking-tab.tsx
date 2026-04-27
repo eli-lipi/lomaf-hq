@@ -6,7 +6,8 @@ import TradeCard from './trade-card';
 import TradeDetail from './trade-detail';
 import LogTradeModal from './log-trade-modal';
 import { TEAMS } from '@/lib/constants';
-import { snap5, colorForTeam, COLOR_POSITIVE } from '@/lib/trades/scale';
+import { snap5, colorForTeam, probabilityFromAdvantage, COLOR_POSITIVE } from '@/lib/trades/scale';
+import { getCoachByTeam } from '@/lib/team-colors';
 import type { Trade, TradePlayer, TradeProbability } from '@/lib/trades/types';
 
 // ── Design tokens (kept in sync with detail page + cards) ─────────
@@ -396,7 +397,12 @@ function NarrativeStats({
       />
       <StatCard
         label="Most Lopsided Trade"
-        value={lopsided ? formatSignedPct(lopsided.adv) : '—'}
+        // v8 — show as leading coach's probability (0..100 scale).
+        value={
+          lopsided
+            ? `${probabilityFromAdvantage(Math.abs(lopsided.adv))}% ${getCoachByTeam(lopsided.winningTeamId)}`
+            : '—'
+        }
         valueColor={
           lopsided
             ? colorForTeam(lopsided.winningTeamId, lopsided.item.trade.positive_team_id)
@@ -404,7 +410,7 @@ function NarrativeStats({
         }
         sub={
           lopsided
-            ? `${lopsided.item.trade.team_a_name} ⇄ ${lopsided.item.trade.team_b_name} · R${lopsided.item.trade.round_executed}`
+            ? `vs ${getCoachByTeam(lopsided.winningTeamId === lopsided.item.trade.team_a_id ? lopsided.item.trade.team_b_id : lopsided.item.trade.team_a_id)} · R${lopsided.item.trade.round_executed}`
             : undefined
         }
         onClick={lopsided ? () => onOpen(lopsided.item.trade.id) : undefined}
@@ -412,7 +418,14 @@ function NarrativeStats({
       />
       <StatCard
         label="Biggest Swing This Week"
-        value={biggestSwing ? formatSignedPct(biggestSwing.signed) : '—'}
+        // v8 — swing on the probability scale is half the magnitude of the
+        // advantage swing (because adv → prob halves the units). Display
+        // as ±N pp toward the leading coach.
+        value={
+          biggestSwing
+            ? `${formatSignedPct(biggestSwing.signed / 2)} → ${getCoachByTeam(biggestSwing.winningTeamId)}`
+            : '—'
+        }
         valueColor={
           biggestSwing
             ? colorForTeam(biggestSwing.winningTeamId, biggestSwing.item.trade.positive_team_id)

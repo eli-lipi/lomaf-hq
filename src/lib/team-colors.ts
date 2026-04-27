@@ -81,6 +81,42 @@ export function getContrastingTextColor(teamId: number): string {
   return yiq >= 150 ? '#0A0F1C' : '#FFFFFF';
 }
 
+// ──────────────────────────────────────────────────────────────────
+// Coach-name lookup — v8 introduces coach-keyed probabilities so the
+// price tag, verdict pill, and homepage cards all need fast first-name
+// access.
+// ──────────────────────────────────────────────────────────────────
+const COACH_FIRST_NAME: Record<number, string> = {
+  3194002: 'Tim',
+  3194005: 'Jacob',
+  3194009: 'Shir & Coby',
+  3194003: 'Lipi',
+  3194006: 'Gadi',
+  3194010: 'Daniel',
+  3194008: 'Alon',
+  3194001: 'Ronen',
+  3194004: 'Josh',
+  3194007: 'Lior',
+};
+const COACH_FULL_NAME: Record<number, string> = {
+  3194002: 'Tim Freed',
+  3194005: 'Jacob Wytwornik',
+  3194009: 'Shir & Coby',
+  3194003: 'Lipi',
+  3194006: 'Gadi Herskovitz',
+  3194010: 'Daniel Penso',
+  3194008: 'Alon Esterman',
+  3194001: 'Ronen Slonim',
+  3194004: 'Josh Sacks',
+  3194007: 'Lior Davis',
+};
+
+export function getCoachByTeam(teamId: number, full = false): string {
+  return full
+    ? (COACH_FULL_NAME[teamId] ?? '')
+    : (COACH_FIRST_NAME[teamId] ?? '');
+}
+
 /**
  * Per-trade two-colour pair. Returns the positive team's colour and the
  * negative team's colour, with a defensive fallback if both teams happen
