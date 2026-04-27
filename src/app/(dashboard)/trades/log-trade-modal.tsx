@@ -114,8 +114,11 @@ export default function LogTradeModal({ onClose, onCreated, initial }: Props) {
       className="fixed inset-0 z-50 bg-black/50 flex items-start justify-center overflow-y-auto p-4"
       onClick={onClose}
     >
+      {/* The trades page wrapper sets color:#fff for the dark theme, which
+          cascades into this portal-rendered modal. Pin to the foreground
+          token so inputs show dark text on the white panel background. */}
       <div
-        className="bg-white rounded-lg shadow-xl w-full max-w-2xl my-8"
+        className="bg-white text-foreground rounded-lg shadow-xl w-full max-w-2xl my-8"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between px-5 py-4 border-b border-border">
