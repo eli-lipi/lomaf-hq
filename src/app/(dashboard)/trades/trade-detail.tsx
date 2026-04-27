@@ -284,8 +284,10 @@ export default function TradeDetail({ tradeId, onBack, onDeleted }: Props) {
         teamBPlayers={teamBPlayers}
       />
 
-      {/* ── Tier-1: the chart, FULL BLEED, no card ────────────── */}
-      <div className="px-1">
+      {/* ── Tier-1: the chart, FULL BLEED, no card.
+          v8.1 — Bumped vertical padding above and below so the chart
+          breathes against neighbouring sections. */}
+      <div className="px-1 pt-6 pb-6">
         {chartData.length < 2 ? (
           <p className="text-sm py-16 text-center" style={{ color: TEXT_MUTED }}>
             No round data yet — probabilities will appear after the next round&apos;s scores are uploaded.
@@ -313,8 +315,10 @@ export default function TradeDetail({ tradeId, onBack, onDeleted }: Props) {
               {/* v6 — 'Trade Executed' flag deleted. The chart's X-axis starts
                   at the trade-executed round, which makes the marker redundant.
                   The dashed vertical line stays as a subtle anchor. */}
-              <ResponsiveContainer width="100%" height={360}>
-                <ComposedChart data={chartData} margin={{ top: 30, right: 16, bottom: 6, left: 8 }}>
+              {/* v8.1 — wider right margin gives the endpoint label room.
+                  Top and bottom margins bumped for breathing space. */}
+              <ResponsiveContainer width="100%" height={420}>
+                <ComposedChart data={chartData} margin={{ top: 48, right: 220, bottom: 28, left: 8 }}>
                   {/* v8 — line gradient gone, line is now plain white.
                       Team identity flows through zone shading + dot colours. */}
                   {/* v7 — Permanent territorial zones. Positive team's colour
@@ -416,28 +420,20 @@ export default function TradeDetail({ tradeId, onBack, onDeleted }: Props) {
                   ABOVE and BELOW the chart (rendered as siblings around the
                   ResponsiveContainer, see the wrapping JSX). */}
 
-              {/* v8 — Two-coach Yes/No price tag. Sits in the leading
-                  coach's zone (upper if probability > 50, lower if < 50,
-                  centre if exactly 50). Both coaches' probabilities visible. */}
-              <div
-                className="absolute right-3 pointer-events-none"
-                style={{
-                  // Vertical placement based on the leading zone.
-                  ...(probability > 50
-                    ? { top: 12 }
-                    : probability < 50
-                      ? { bottom: 32 }
-                      : { top: '50%', transform: 'translateY(-50%)' }),
-                }}
-              >
-                <PriceTag
-                  probability={probability}
-                  positiveCoach={positiveCoach}
-                  negativeCoach={negativeCoach}
-                  colorPositive={colorPositive}
-                  colorNegative={colorNegative}
-                />
-              </div>
+              {/* v8.1 — Endpoint label. Anchored vertically to the last data
+                  point on the line, sitting in the wide right-margin space.
+                  Reads as a sentence: '65% chance of Doge Bombers winning the
+                  trade.' */}
+              <EndpointLabel
+                probability={probability}
+                positiveTeamName={positiveTeamName}
+                negativeTeamName={negativeTeamName}
+                colorPositive={colorPositive}
+                colorNegative={colorNegative}
+                chartHeight={420}
+                topMargin={48}
+                bottomMargin={28}
+              />
             </div>
 
             {/* v6 — Loud team label BELOW the chart, ▼ glyph, full saturation. */}
@@ -885,7 +881,8 @@ function QuadrantLabel({
   color: string;
 }) {
   const glyph = direction === 'up' ? '▲' : '▼';
-  const className = direction === 'up' ? 'mb-2' : 'mt-2';
+  // v8.1 — more breathing room around the chart
+  const className = direction === 'up' ? 'mb-4' : 'mt-4';
   return (
     <div className={`flex items-center gap-3 ${className}`}>
       <span
@@ -901,83 +898,89 @@ function QuadrantLabel({
 }
 
 // ============================================================
-// v8 price tag — both coaches' probabilities, Polymarket-style.
-// Leader rendered first. Two rows, no box, sits in the leader's zone.
+// v8.1 endpoint label — sits in the wide right-margin space, anchored
+// vertically to where the latest data point lands on the chart line.
+// Reads as a sentence: "65% chance of Doge Bombers winning the trade."
 // ============================================================
-function PriceTag({
+function EndpointLabel({
   probability,
-  positiveCoach,
-  negativeCoach,
+  positiveTeamName,
+  negativeTeamName,
   colorPositive,
   colorNegative,
+  chartHeight,
+  topMargin,
+  bottomMargin,
 }: {
-  probability: number; // 0..100, positive coach's probability
-  positiveCoach: string;
-  negativeCoach: string;
+  probability: number;
+  positiveTeamName: string;
+  negativeTeamName: string;
   colorPositive: string;
   colorNegative: string;
+  chartHeight: number;
+  topMargin: number;
+  bottomMargin: number;
 }) {
-  // Wash — both 50/50, neutral coin-flip caption
+  // Wash — neither side leading
   if (probability === 50) {
+    // Vertically centre the label
+    const top = topMargin + (chartHeight - topMargin - bottomMargin) / 2 - 16;
     return (
-      <div className="text-right">
-        <Row coach={positiveCoach} pct={50} color={colorPositive} />
-        <Row coach={negativeCoach} pct={50} color={colorNegative} />
+      <div
+        className="absolute pointer-events-none"
+        style={{
+          right: 16,
+          top,
+          maxWidth: 200,
+        }}
+      >
         <div
-          className="text-[10px] uppercase tracking-[0.20em] mt-1.5 font-semibold"
+          className="text-[12px] uppercase tracking-[0.20em] font-semibold"
           style={{ color: TEXT_MUTED }}
         >
           Coin flip
+        </div>
+        <div className="text-[14px] mt-1" style={{ color: TEXT_BODY }}>
+          neither side leading
         </div>
       </div>
     );
   }
 
   const positiveLeading = probability > 50;
-  const leaderRow = positiveLeading
-    ? { coach: positiveCoach, pct: probability, color: colorPositive }
-    : { coach: negativeCoach, pct: 100 - probability, color: colorNegative };
-  const trailerRow = positiveLeading
-    ? { coach: negativeCoach, pct: 100 - probability, color: colorNegative }
-    : { coach: positiveCoach, pct: probability, color: colorPositive };
+  const leaderPct = positiveLeading ? probability : 100 - probability;
+  const leaderName = positiveLeading ? positiveTeamName : negativeTeamName;
+  const leaderColor = positiveLeading ? colorPositive : colorNegative;
+
+  // Vertical position: invert prob (since SVG Y grows downward) and map into
+  // the plot area. The line endpoint sits at this y; the label hugs it.
+  const innerHeight = chartHeight - topMargin - bottomMargin;
+  const lineY = topMargin + (1 - probability / 100) * innerHeight;
+  // Centre the label vertically against that point — roughly 28px of label
+  // height gives a good visual anchor.
+  const labelTop = Math.max(8, Math.min(chartHeight - 56, lineY - 24));
 
   return (
-    <div className="text-right">
-      <Row {...leaderRow} leader />
-      <Row {...trailerRow} />
-    </div>
-  );
-}
-
-function Row({
-  coach,
-  pct,
-  color,
-  leader,
-}: {
-  coach: string;
-  pct: number;
-  color: string;
-  leader?: boolean;
-}) {
-  return (
-    <div className="flex items-baseline justify-end gap-3">
-      <span
-        className="text-[12px] uppercase tracking-[0.10em] font-semibold leading-tight truncate"
-        style={{ color, maxWidth: 140, opacity: leader ? 1 : 0.85 }}
+    <div
+      className="absolute pointer-events-none"
+      style={{
+        right: 16,
+        top: labelTop,
+        maxWidth: 200,
+      }}
+    >
+      <div
+        className="text-[36px] font-bold leading-none tabular-nums"
+        style={{ color: leaderColor }}
       >
-        {coach}
-      </span>
-      <span
-        className="font-medium leading-none tabular-nums"
-        style={{
-          color,
-          fontSize: leader ? 26 : 18,
-          opacity: leader ? 1 : 0.85,
-        }}
+        {leaderPct}%
+      </div>
+      <div
+        className="text-[12px] mt-1.5 leading-snug"
+        style={{ color: TEXT_BODY }}
       >
-        {pct}%
-      </span>
+        chance of <span style={{ color: leaderColor, fontWeight: 600 }}>{leaderName}</span> winning the trade.
+      </div>
     </div>
   );
 }
