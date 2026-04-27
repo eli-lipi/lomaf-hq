@@ -1564,7 +1564,7 @@ function PlayerVerdictTable({
               <span className="inline-flex items-center gap-1 justify-end">
                 Avg Before
                 <InfoTip>
-                  Pre-trade season average. The delta in parentheses compares it to the Expected Avg.
+                  Pre-trade season average. The delta in parentheses compares it to Avg Since — i.e. how the player&apos;s output has changed since the trade.
                 </InfoTip>
               </span>
             </th>
@@ -1679,8 +1679,12 @@ function PlayerVerdictRow({
   const actualGames = performance?.rounds_played ?? 0;
   const avgSince = actualGames > 0 ? performance!.post_trade_avg : null;
 
+  // v11.2 — the delta in the Avg Before cell now compares pre-trade avg to
+  // POST-trade avg (avg_since − avg_before). Reads as "how the player's
+  // output changed since the trade." Previously compared to Expected, but
+  // that duplicated what the Expected column itself shows in its delta.
   const preDelta =
-    computedPreAvg != null && expectedAvg != null ? computedPreAvg - expectedAvg : null;
+    computedPreAvg != null && avgSince != null ? avgSince - computedPreAvg : null;
 
   // v11 — Tier-relative verdict when the trade carries an expected_tier.
   // Otherwise fall back to v2's delta-based verdict (per addendum: existing
