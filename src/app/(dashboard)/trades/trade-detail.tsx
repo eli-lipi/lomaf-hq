@@ -290,17 +290,11 @@ export default function TradeDetail({ tradeId, onBack, onDeleted }: Props) {
         }
       >
         <div className="text-center">
-          {/* v10.1 — small 'After', big 'Round N'. Round number is the
-              prominent dateline; the preposition fades back. */}
+          {/* v10.2 — 'After' dropped per Lipi's call. The round number alone
+              is enough; the trade is implicitly after the round shown. */}
           <p className="mb-6 leading-none">
             <span
-              className="uppercase tracking-[0.18em]"
-              style={{ color: TEXT_MUTED, fontSize: 12, fontWeight: 500 }}
-            >
-              After
-            </span>
-            <span
-              className="ml-2 font-semibold tracking-[0.04em]"
+              className="font-semibold tracking-[0.04em]"
               style={{ color: TEXT, fontSize: 36 }}
             >
               Round {trade.round_executed}
