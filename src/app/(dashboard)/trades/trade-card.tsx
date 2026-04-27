@@ -99,12 +99,12 @@ export default function TradeCard({
   const positiveTeamName = positiveIsA ? trade.team_a_name : trade.team_b_name;
   const negativeTeamName = positiveIsA ? trade.team_b_name : trade.team_a_name;
 
-  // Sparkline points: signed advantage over time
+  // Sparkline points: probability over time on the 0..100 scale (anchored
+  // at 50 = wash). Kept on the home card; the two-coach stack underneath
+  // collapses in v11.4 to a single subtle 'chance of winning' label.
   const sortedHistory = [...(probabilityHistory ?? [])].sort(
     (a, b) => a.round_number - b.round_number
   );
-  // v8 — sparkline points on the 0..100 probability scale, anchored at 50.
-  // The Sparkline component renders the same shape; only the y-baseline shifts.
   const sparkPoints: { x: number; y: number }[] = [];
   sparkPoints.push({ x: trade.round_executed, y: 50 });
   for (const p of sortedHistory) {
@@ -117,10 +117,7 @@ export default function TradeCard({
     }
     sparkPoints.push({ x: p.round_number, y: probabilityFromAdvantage(adv) });
   }
-
-  const winningName =
-    advantage != null && advantage >= 0 ? positiveTeamName : negativeTeamName;
-  const winningColor = advantage != null && advantage > 0 ? colorForTeam(trade.positive_team_id ?? trade.team_a_id, trade.positive_team_id) : advantage != null && advantage < 0 ? colorForTeam(trade.negative_team_id ?? trade.team_b_id, trade.positive_team_id) : TEXT;
+  void negativeTeamName;
 
   const coachA = coachFor(trade.team_a_id);
   const coachB = coachFor(trade.team_b_id);
@@ -176,64 +173,41 @@ export default function TradeCard({
           </p>
         </div>
 
-        {/* RIGHT — sparkline + two-coach price tag + verdict.
-            v8: probabilities are coach-keyed, sum to 100, leader rendered first. */}
+        {/* RIGHT — sparkline + single subtle 'chance of winning' label.
+            v11.4: replaces the two-coach stack. Mirrors the detail page's
+            endpoint label, just smaller and without the dominant team-name
+            highlight. The card remains a glance-read; the deep view lives
+            on the trade detail page. */}
         {showProb && advantage != null ? (
           (() => {
             const probability = probabilityFromAdvantage(advantage);
-            const positiveCoach = getCoachByTeam(
-              positiveIsA ? trade.team_a_id : trade.team_b_id
-            );
-            const negativeCoach = getCoachByTeam(
-              positiveIsA ? trade.team_b_id : trade.team_a_id
-            );
             const positiveLeading = probability >= 50;
-            const leader = positiveLeading
-              ? { coach: positiveCoach, pct: probability, color: pair.positive }
-              : { coach: negativeCoach, pct: 100 - probability, color: pair.negative };
-            const trailer = positiveLeading
-              ? { coach: negativeCoach, pct: 100 - probability, color: pair.negative }
-              : { coach: positiveCoach, pct: probability, color: pair.positive };
+            const leaderPct = positiveLeading ? probability : 100 - probability;
+            const positiveTeam = positiveIsA ? trade.team_a_name : trade.team_b_name;
+            const negativeTeam = positiveIsA ? trade.team_b_name : trade.team_a_name;
+            const leaderTeamName = positiveLeading ? positiveTeam : negativeTeam;
+            const leaderColor = positiveLeading ? pair.positive : pair.negative;
             return (
-              <div className="flex flex-col items-end gap-1 shrink-0 min-w-[150px]">
+              <div className="flex flex-col items-end gap-2 shrink-0 min-w-[200px] max-w-[260px]">
                 <Sparkline
                   points={sparkPoints}
                   colorPositive={pair.positive}
                   colorNegative={pair.negative}
                 />
-                <div className="flex items-baseline justify-end gap-2 mt-1">
+                <div className="text-right">
                   <span
-                    className="text-[11px] uppercase tracking-[0.10em] font-semibold leading-tight truncate"
-                    style={{ color: leader.color, maxWidth: 90 }}
+                    className="text-[20px] font-bold tabular-nums leading-none"
+                    style={{ color: leaderColor }}
                   >
-                    {leader.coach}
+                    {leaderPct}%
                   </span>
-                  <span
-                    className="text-2xl font-bold leading-none tabular-nums"
-                    style={{ color: leader.color }}
-                  >
-                    {leader.pct}%
-                  </span>
-                </div>
-                <div className="flex items-baseline justify-end gap-2 opacity-80">
-                  <span
-                    className="text-[10px] uppercase tracking-[0.10em] font-medium leading-tight truncate"
-                    style={{ color: trailer.color, maxWidth: 90 }}
-                  >
-                    {trailer.coach}
-                  </span>
-                  <span
-                    className="text-sm leading-none tabular-nums"
-                    style={{ color: trailer.color }}
-                  >
-                    {trailer.pct}%
-                  </span>
-                </div>
-                <div
-                  className="text-[10px] font-bold uppercase tracking-[0.10em] mt-0.5"
-                  style={{ color: leader.color }}
-                >
-                  {shortVerdict(probability)}
+                  <p className="text-[11px] mt-1 leading-snug" style={{ color: TEXT_BODY }}>
+                    chance of{' '}
+                    <span style={{ color: leaderColor, fontWeight: 600 }}>
+                      {leaderTeamName}
+                    </span>{' '}
+                    winning the trade.
+                  </p>
                 </div>
               </div>
             );
