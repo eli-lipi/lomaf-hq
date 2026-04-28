@@ -45,6 +45,7 @@ import {
   getContrastingTextColor,
   hexWithOpacity,
   getCoachByTeam,
+  getTeamColor,
 } from '@/lib/team-colors';
 import type {
   PlayerPerformance,
@@ -471,6 +472,8 @@ export default function TradeDetail({ tradeId, isAdmin = false, onBack, onDelete
                 probability={probability}
                 positiveTeamName={positiveTeamName}
                 negativeTeamName={negativeTeamName}
+                positiveTeamId={positiveIsA ? trade.team_a_id : trade.team_b_id}
+                negativeTeamId={positiveIsA ? trade.team_b_id : trade.team_a_id}
                 colorPositive={colorPositive}
                 colorNegative={colorNegative}
                 chartHeight={420}
@@ -1095,8 +1098,10 @@ function EndpointLabel({
   probability,
   positiveTeamName,
   negativeTeamName,
-  colorPositive,
-  colorNegative,
+  positiveTeamId,
+  negativeTeamId,
+  colorPositive: _colorPositive,
+  colorNegative: _colorNegative,
   chartHeight,
   topMargin,
   bottomMargin,
@@ -1104,6 +1109,8 @@ function EndpointLabel({
   probability: number;
   positiveTeamName: string;
   negativeTeamName: string;
+  positiveTeamId: number;
+  negativeTeamId: number;
   colorPositive: string;
   colorNegative: string;
   chartHeight: number;
@@ -1139,7 +1146,10 @@ function EndpointLabel({
   const positiveLeading = probability > 50;
   const leaderPct = positiveLeading ? probability : 100 - probability;
   const leaderName = positiveLeading ? positiveTeamName : negativeTeamName;
-  const leaderColor = positiveLeading ? colorPositive : colorNegative;
+  // v12 — colour the leader by the leading TEAM's actual palette colour
+  // (not the positive/negative slot — that uses an abstract fallback for
+  // legacy trades without polarity, which leaves the leader's accent wrong).
+  const leaderColor = getTeamColor(positiveLeading ? positiveTeamId : negativeTeamId);
 
   // Vertical position: invert prob (since SVG Y grows downward) and map into
   // the plot area. The line endpoint sits at this y; the label hugs it.

@@ -7,7 +7,7 @@ import {
   colorForTeam,
   probabilityFromAdvantage,
 } from '@/lib/trades/scale';
-import { getTradeColorPair, getCoachByTeam } from '@/lib/team-colors';
+import { getTradeColorPair, getCoachByTeam, getTeamColor } from '@/lib/team-colors';
 import { cleanPositionDisplay } from '@/lib/trades/positions';
 import type { Trade, TradePlayer, TradeProbability } from '@/lib/trades/types';
 
@@ -181,12 +181,20 @@ export default function TradeCard({
         {showProb && advantage != null ? (
           (() => {
             const probability = probabilityFromAdvantage(advantage);
+            const isEven = probability === 50;
             const positiveLeading = probability >= 50;
             const leaderPct = positiveLeading ? probability : 100 - probability;
-            const positiveTeam = positiveIsA ? trade.team_a_name : trade.team_b_name;
-            const negativeTeam = positiveIsA ? trade.team_b_name : trade.team_a_name;
-            const leaderTeamName = positiveLeading ? positiveTeam : negativeTeam;
-            const leaderColor = positiveLeading ? pair.positive : pair.negative;
+            // v12 — colour the leader by the leading TEAM's actual palette
+            // colour (not by positive/negative slot). Legacy trades without
+            // a stored polarity were falling back to abstract orange/blue,
+            // which made the leader's accent unrecognisable.
+            const leaderTeamId = positiveLeading
+              ? (positiveIsA ? trade.team_a_id : trade.team_b_id)
+              : (positiveIsA ? trade.team_b_id : trade.team_a_id);
+            const leaderTeamName = positiveLeading
+              ? (positiveIsA ? trade.team_a_name : trade.team_b_name)
+              : (positiveIsA ? trade.team_b_name : trade.team_a_name);
+            const leaderColor = getTeamColor(leaderTeamId);
             return (
               <div className="flex flex-col items-end gap-2 shrink-0 min-w-[200px] max-w-[260px]">
                 <Sparkline
@@ -195,19 +203,35 @@ export default function TradeCard({
                   colorNegative={pair.negative}
                 />
                 <div className="text-right">
-                  <span
-                    className="text-[20px] font-bold tabular-nums leading-none"
-                    style={{ color: leaderColor }}
-                  >
-                    {leaderPct}%
-                  </span>
-                  <p className="text-[11px] mt-1 leading-snug" style={{ color: TEXT_BODY }}>
-                    chance of{' '}
-                    <span style={{ color: leaderColor, fontWeight: 600 }}>
-                      {leaderTeamName}
-                    </span>{' '}
-                    winning the trade.
-                  </p>
+                  {isEven ? (
+                    <>
+                      <span
+                        className="text-[20px] font-bold tabular-nums leading-none"
+                        style={{ color: TEXT }}
+                      >
+                        50/50
+                      </span>
+                      <p className="text-[11px] mt-1 leading-snug" style={{ color: TEXT_BODY }}>
+                        Too close to call — neither side ahead yet.
+                      </p>
+                    </>
+                  ) : (
+                    <>
+                      <span
+                        className="text-[20px] font-bold tabular-nums leading-none"
+                        style={{ color: leaderColor }}
+                      >
+                        {leaderPct}%
+                      </span>
+                      <p className="text-[11px] mt-1 leading-snug" style={{ color: TEXT_BODY }}>
+                        chance of{' '}
+                        <span style={{ color: leaderColor, fontWeight: 600 }}>
+                          {leaderTeamName}
+                        </span>{' '}
+                        winning the trade.
+                      </p>
+                    </>
+                  )}
                 </div>
               </div>
             );
