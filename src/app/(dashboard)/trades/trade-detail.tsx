@@ -1581,7 +1581,7 @@ function PlayerVerdictTable({
             <th className="text-right font-medium pl-2 pb-3 whitespace-nowrap">
               <span className="inline-flex items-center gap-1 justify-end">
                 Expected
-                <InfoTip>
+                <InfoTip placement="bottom-right">
                   <strong style={{ color: TEXT }}>Expected average:</strong> the bar this player needed to clear for the trade to make sense. Locked at trade execution. Auto-derived from a position-tier baseline blended 60/40 with last-3-rounds form. The delta in parentheses compares Avg Since to Expected.
                 </InfoTip>
               </span>
@@ -1965,9 +1965,26 @@ function shortName(name: string): string {
   return name.split(' ')[0];
 }
 
-/** Small ⓘ icon with a hover tooltip — used for methodology disclosures. */
-function InfoTip({ children }: { children: React.ReactNode }) {
+/** Small ⓘ icon with a hover tooltip — used for methodology disclosures.
+ *  v12 — accepts a `placement` so the rightmost column's tooltip can
+ *  anchor to the right edge of the icon (growing leftward), avoiding
+ *  the horizontal-scroll overflow we saw on the Expected column. */
+function InfoTip({
+  children,
+  placement = 'bottom-center',
+}: {
+  children: React.ReactNode;
+  placement?: 'bottom-center' | 'bottom-right' | 'bottom-left';
+}) {
   const [show, setShow] = useState(false);
+
+  const anchorClasses =
+    placement === 'bottom-right'
+      ? 'right-0 top-full mt-2'
+      : placement === 'bottom-left'
+        ? 'left-0 top-full mt-2'
+        : 'left-1/2 top-full mt-2 -translate-x-1/2';
+
   return (
     <span
       className="relative inline-flex items-center"
@@ -1989,7 +2006,7 @@ function InfoTip({ children }: { children: React.ReactNode }) {
       {show && (
         <span
           role="tooltip"
-          className="absolute left-1/2 top-full z-50 mt-2 -translate-x-1/2 normal-case tracking-normal"
+          className={`absolute z-50 normal-case tracking-normal ${anchorClasses}`}
           style={{
             background: BG,
             color: TEXT_BODY,
