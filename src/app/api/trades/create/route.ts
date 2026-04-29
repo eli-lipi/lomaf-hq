@@ -107,24 +107,47 @@ export async function POST(request: Request) {
       countBReceived
     );
 
-    // 1. Insert trade with polarity + ladder snapshot baked in
-    const { data: tradeRow, error: tradeErr } = await supabase
-      .from('trades')
-      .insert({
-        team_a_id: teamA.team_id,
-        team_a_name: teamA.team_name,
-        team_b_id: teamB.team_id,
-        team_b_name: teamB.team_name,
-        round_executed: body.round_executed,
-        context_notes: body.context_notes || null,
-        screenshot_url: body.screenshot_url || null,
-        positive_team_id: positive,
-        negative_team_id: negative,
-        team_a_ladder_at_trade: ladderA,
-        team_b_ladder_at_trade: ladderB,
-      })
-      .select()
-      .single();
+    // 1. Insert trade with polarity + ladder snapshot baked in.
+    // v12 — resilient pattern: on legacy schemas without the v2 columns,
+    // strip and retry so trade creation still works pre-migration.
+    const fullInsert = {
+      team_a_id: teamA.team_id,
+      team_a_name: teamA.team_name,
+      team_b_id: teamB.team_id,
+      team_b_name: teamB.team_name,
+      round_executed: body.round_executed,
+      context_notes: body.context_notes || null,
+      screenshot_url: body.screenshot_url || null,
+      positive_team_id: positive,
+      negative_team_id: negative,
+      team_a_ladder_at_trade: ladderA,
+      team_b_ladder_at_trade: ladderB,
+    };
+    let tradeRow: { id: string } | null = null;
+    let tradeErr: { message?: string } | null = null;
+    {
+      const r = await supabase.from('trades').insert(fullInsert).select().single();
+      tradeRow = r.data as { id: string } | null;
+      tradeErr = r.error;
+    }
+    if (
+      tradeErr &&
+      /positive_team_id|negative_team_id|team_a_ladder_at_trade|team_b_ladder_at_trade|column .* does not exist|schema cache/i.test(
+        tradeErr.message ?? ''
+      )
+    ) {
+      const {
+        positive_team_id: _p,
+        negative_team_id: _n,
+        team_a_ladder_at_trade: _la,
+        team_b_ladder_at_trade: _lb,
+        ...legacyInsert
+      } = fullInsert;
+      void _p; void _n; void _la; void _lb;
+      const r = await supabase.from('trades').insert(legacyInsert).select().single();
+      tradeRow = r.data as { id: string } | null;
+      tradeErr = r.error;
+    }
 
     if (tradeErr || !tradeRow) throw tradeErr ?? new Error('Insert failed');
 

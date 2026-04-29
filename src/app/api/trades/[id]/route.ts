@@ -223,21 +223,46 @@ export async function PATCH(request: Request, ctx: { params: Promise<{ id: strin
     }
 
     // 3. Update trade row
-    const { error: updateErr } = await supabase
+    // v12 — resilient pattern: try with v2 polarity + ladder cols; if DB
+    // is missing them (older deploy that hasn't run the v2 migration),
+    // strip and retry. Keeps Edit working on legacy schemas; the polarity
+    // simply won't persist until the migration is run.
+    const fullUpdate = {
+      team_a_id: teamA.team_id,
+      team_a_name: teamA.team_name,
+      team_b_id: teamB.team_id,
+      team_b_name: teamB.team_name,
+      round_executed: nextRound,
+      context_notes: body.context_notes !== undefined ? body.context_notes : existing.context_notes,
+      positive_team_id,
+      negative_team_id,
+      team_a_ladder_at_trade,
+      team_b_ladder_at_trade,
+    };
+    let { error: updateErr } = await supabase
       .from('trades')
-      .update({
-        team_a_id: teamA.team_id,
-        team_a_name: teamA.team_name,
-        team_b_id: teamB.team_id,
-        team_b_name: teamB.team_name,
-        round_executed: nextRound,
-        context_notes: body.context_notes !== undefined ? body.context_notes : existing.context_notes,
-        positive_team_id,
-        negative_team_id,
-        team_a_ladder_at_trade,
-        team_b_ladder_at_trade,
-      })
+      .update(fullUpdate)
       .eq('id', id);
+    if (
+      updateErr &&
+      /positive_team_id|negative_team_id|team_a_ladder_at_trade|team_b_ladder_at_trade|column .* does not exist|schema cache/i.test(
+        updateErr.message ?? ''
+      )
+    ) {
+      // Strip v2 cols and retry on legacy schema
+      const {
+        positive_team_id: _p,
+        negative_team_id: _n,
+        team_a_ladder_at_trade: _la,
+        team_b_ladder_at_trade: _lb,
+        ...legacyUpdate
+      } = fullUpdate;
+      void _p; void _n; void _la; void _lb;
+      ({ error: updateErr } = await supabase
+        .from('trades')
+        .update(legacyUpdate)
+        .eq('id', id));
+    }
     if (updateErr) throw updateErr;
 
     // 4. If players changed, fully replace them (easier than diffing)
