@@ -22,9 +22,10 @@ ALTER TABLE trades
 -- and any future tier work read a stable identity even when the player
 -- has been dropped, picked up on waivers, etc.
 ALTER TABLE trade_players
-  ADD COLUMN IF NOT EXISTS draft_position TEXT;
+  ADD COLUMN IF NOT EXISTS draft_position TEXT,
+  ADD COLUMN IF NOT EXISTS draft_pick INT;
 
--- Backfill from draft_picks so existing trades pick up the column right
+-- Backfill from draft_picks so existing trades pick up the columns right
 -- away without an Edit-pass.
 UPDATE trade_players tp
 SET draft_position = dp.position
@@ -32,3 +33,11 @@ FROM draft_picks dp
 WHERE tp.player_id = dp.player_id
   AND tp.draft_position IS NULL
   AND dp.position IS NOT NULL;
+
+UPDATE trade_players tp
+SET draft_pick = dp.overall_pick
+FROM draft_picks dp
+WHERE tp.player_id = dp.player_id
+  AND tp.draft_pick IS NULL
+  AND dp.overall_pick IS NOT NULL
+  AND dp.overall_pick > 0;

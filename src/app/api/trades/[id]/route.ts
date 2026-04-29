@@ -316,14 +316,20 @@ export async function PATCH(request: Request, ctx: { params: Promise<{ id: strin
         if (cleaned && !posByPlayer.has(r.player_id)) posByPlayer.set(r.player_id, cleaned);
       }
 
-      // Draft positions for tier-baseline lookup
+      // Draft positions + pick numbers for tier-baseline lookup
       const { data: draftPicks } = await supabase
         .from('draft_picks')
-        .select('player_id, position')
+        .select('player_id, position, overall_pick')
         .in('player_id', playerIds);
       const draftPosByPlayer = new Map<number, string>();
-      for (const d of (draftPicks ?? []) as { player_id: number; position: string | null }[]) {
+      const draftPickByPlayer = new Map<number, number>();
+      for (const d of (draftPicks ?? []) as {
+        player_id: number;
+        position: string | null;
+        overall_pick: number | null;
+      }[]) {
         if (d.position) draftPosByPlayer.set(d.player_id, d.position);
+        if (d.overall_pick && d.overall_pick > 0) draftPickByPlayer.set(d.player_id, d.overall_pick);
       }
 
       const playerRows = body.players.map((p) => {
@@ -332,6 +338,7 @@ export async function PATCH(request: Request, ctx: { params: Promise<{ id: strin
         const preAvg = scores.length > 0 ? scores.reduce((a, b) => a + b, 0) / scores.length : null;
         const rawPos = p.raw_position || posByPlayer.get(p.player_id) || null;
         const draftPos = draftPosByPlayer.get(p.player_id) ?? null;
+        const draftPick = draftPickByPlayer.get(p.player_id) ?? null;
         const priorRounds = rawScoresByPlayer.get(p.player_id) ?? [];
 
         let expected_avg: number;
@@ -359,8 +366,10 @@ export async function PATCH(request: Request, ctx: { params: Promise<{ id: strin
           player_name: p.player_name,
           player_position: normalizePosition(rawPos),
           raw_position: rawPos,
-          // v12 — persist draft_position so player identity locks on the row.
+          // v12 — persist draft_position + draft_pick so player identity
+          // locks on the row.
           draft_position: draftPos,
+          draft_pick: draftPick,
           receiving_team_id: receivingTeam.team_id,
           receiving_team_name: receivingTeam.team_name,
           pre_trade_avg: preAvg,
@@ -382,7 +391,7 @@ export async function PATCH(request: Request, ctx: { params: Promise<{ id: strin
       insertErr = tryFirst.error as { message?: string; code?: string } | null;
       if (
         insertErr &&
-        /column .* does not exist|expected_tier|expected_games_remaining|expected_games_max|player_context|draft_position/i.test(
+        /column .* does not exist|expected_tier|expected_games_remaining|expected_games_max|player_context|draft_position|draft_pick/i.test(
           insertErr.message ?? ''
         )
       ) {
@@ -390,8 +399,8 @@ export async function PATCH(request: Request, ctx: { params: Promise<{ id: strin
           '[trades/[id] PATCH] v11/v12 columns missing — retrying without them. Run migration-trades-v11.sql and migration-trades-v12.sql to enable.'
         );
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const stripped = (playerRows as any[]).map(({ expected_tier, expected_games_remaining, expected_games_max, player_context, draft_position, ...rest }) => {
-          void expected_tier; void expected_games_remaining; void expected_games_max; void player_context; void draft_position;
+        const stripped = (playerRows as any[]).map(({ expected_tier, expected_games_remaining, expected_games_max, player_context, draft_position, draft_pick, ...rest }) => {
+          void expected_tier; void expected_games_remaining; void expected_games_max; void player_context; void draft_position; void draft_pick;
           return rest;
         });
         const retry = await supabase.from('trade_players').insert(stripped);
@@ -434,6 +443,7 @@ export async function PATCH(request: Request, ctx: { params: Promise<{ id: strin
           raw_position: r.raw_position,
           position: r.player_position,
           draft_position: r.draft_position ?? null,
+          draft_pick: r.draft_pick ?? null,
           receiving_team_id: r.receiving_team_id,
           receiving_team_name: r.receiving_team_name,
           expected_avg: r.expected_avg,

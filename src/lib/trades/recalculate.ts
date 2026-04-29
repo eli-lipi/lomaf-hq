@@ -180,7 +180,12 @@ export async function recalculateTradeForRound(
     // league identity (drafted as DEF, drafted as MID, etc.).
     const tradePlayerById = new Map<
       number,
-      { tier?: string | null; ctx?: string | null; draftPos?: string | null }
+      {
+        tier?: string | null;
+        ctx?: string | null;
+        draftPos?: string | null;
+        draftPick?: number | null;
+      }
     >();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     for (const tp of (players as unknown as any[])) {
@@ -188,6 +193,7 @@ export async function recalculateTradeForRound(
         tier: tp.expected_tier ?? null,
         ctx: tp.player_context ?? null,
         draftPos: tp.draft_position ?? null,
+        draftPick: tp.draft_pick ?? null,
       });
     }
 
@@ -215,10 +221,13 @@ export async function recalculateTradeForRound(
       const tierStr = tradeMeta?.tier ? ` · expected tier: ${tradeMeta.tier}` : '';
       const ctxStr = tradeMeta?.ctx ? `\n    trader's note: "${tradeMeta.ctx}"` : '';
       const draftPos = tradeMeta?.draftPos;
+      const draftPick = tradeMeta?.draftPick;
       const livePos = cleanPositionDisplay(p.raw_position) ?? p.position ?? '?';
-      const posStr = draftPos && draftPos !== livePos
+      const posPart = draftPos && draftPos !== livePos
         ? `${livePos}, drafted ${draftPos}`
         : livePos;
+      const pickPart = draftPick && draftPick > 0 ? ` · Pick #${draftPick}` : '';
+      const posStr = `${posPart}${pickPart}`;
       return `- ${p.player_name} (${posStr}) → ${p.receiving_team_name}: predicted avg ${preStr}, actual avg ${post}${gapStr}, ${p.rounds_played}/${p.rounds_possible} rounds, ${status}${tierStr}\n    scores: ${perRound}${ctxStr}`;
     });
 

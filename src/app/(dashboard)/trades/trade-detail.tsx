@@ -260,7 +260,16 @@ export default function TradeDetail({ tradeId, isAdmin = false, onBack, onDelete
         );
       })(),
       receiving_team_id: p.receiving_team_id,
-      // v11 — pre-populate the new fields when editing an existing trade.
+      // v12 — pass through the locked numeric expected_avg so the Edit
+      // modal pre-selects what was previously chosen instead of reverting
+      // to "Auto-suggest". Snap to the nearest 5 so legacy auto-derived
+      // values (e.g. 87) match a real dropdown option (85).
+      expected_avg:
+        p.expected_avg != null
+          ? Math.max(50, Math.min(130, Math.round(p.expected_avg / 5) * 5))
+          : null,
+      expected_games: p.expected_games != null ? Math.round(p.expected_games) : null,
+      // v11 — pre-populate the tier-system fields when editing.
       expected_tier: p.expected_tier ?? null,
       expected_games_remaining: p.expected_games_remaining ?? null,
       expected_games_max: p.expected_games_max ?? null,
@@ -1812,7 +1821,16 @@ function PlayerVerdictRow({
               {displayLabel}
             </span>
             <span className="text-[13px] shrink-0" style={{ color: TEXT_MUTED }}>
-              ({pos})
+              ({pos}
+              {tradePlayer.draft_pick != null && tradePlayer.draft_pick > 0 ? (
+                <>
+                  <span aria-hidden> · </span>
+                  <span title={`Drafted at overall pick #${tradePlayer.draft_pick}`}>
+                    Pick #{tradePlayer.draft_pick}
+                  </span>
+                </>
+              ) : null}
+              )
             </span>
           </div>
         </td>
