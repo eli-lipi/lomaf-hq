@@ -243,14 +243,17 @@ export default function TradeDetail({ tradeId, isAdmin = false, onBack, onDelete
       player_id: p.player_id,
       player_name: p.player_name,
       // v12 — fallback chain: raw_position (as-recorded) → player_position
-      // (normalised, often DEF/MID/FWD/RUC) → draft_position (looked up
-      // from draft_picks). Legacy rows where raw_position was null and
-      // player_position somehow didn't backfill still resolve via the
-      // draft_picks lookup so the expected-average dropdown stays usable.
-      pos:
-        p.raw_position ??
-        p.player_position ??
-        (perfById.get(p.player_id)?.draft_position ?? null),
+      // (normalised) → draft_position (draft_picks lookup). ?? alone won't
+      // skip past empty-strings, so use a helper that also drops ''.
+      pos: (() => {
+        const pick = (...vals: (string | null | undefined)[]) =>
+          vals.find((v) => typeof v === 'string' && v.trim().length > 0) ?? null;
+        return pick(
+          p.raw_position,
+          p.player_position,
+          perfById.get(p.player_id)?.draft_position
+        );
+      })(),
       receiving_team_id: p.receiving_team_id,
       // v11 — pre-populate the new fields when editing an existing trade.
       expected_tier: p.expected_tier ?? null,
