@@ -20,6 +20,11 @@ export interface Trade {
   negative_team_id: number | null;
   team_a_ladder_at_trade: number | null;
   team_b_ladder_at_trade: number | null;
+  // v12 — AI-written justification of WHY the trade made sense (locked
+  // at execution time, regenerated only on edit). Format: 'headline\n-
+  // bullet\n- bullet'. Null on legacy trades that haven't been edited
+  // since v12 shipped, or when AI is unavailable.
+  ai_justification?: string | null;
 }
 
 export interface TradePlayer {

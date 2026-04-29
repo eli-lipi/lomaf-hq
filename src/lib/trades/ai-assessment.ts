@@ -254,3 +254,93 @@ Assess the edge and magnitude, and write the narrative.`;
     return { edge: 'even', magnitude: 0, narrative: text.text.slice(0, 1000) };
   }
 }
+
+// ============================================================
+// 3. Trade Justification (v12)
+// ============================================================
+// Locked at trade-execution time. Reads the WHY: line ranks, position
+// needs, expected averages, the admin context note. Output is a
+// "headline + bullets" string in the same shape as the analysis so the
+// detail page renders it with the same component.
+
+export interface TradeJustificationInputs {
+  teamA: { name: string; ladder: number | null; record: string; preTradeLines: LineRanks };
+  teamB: { name: string; ladder: number | null; record: string; preTradeLines: LineRanks };
+  // Pre-formatted player block: per-player position, expected avg/tier,
+  // pre-trade avg, per-player context note. Built by the caller.
+  playerBreakdown: string;
+  roundExecuted: number;
+  contextNotes: string | null;
+}
+
+const JUSTIFICATION_SYSTEM_PROMPT = `You are the trade analyst for LOMAF, a fantasy AFL draft league. You write the "Trade Justification" — the WHY of a trade at the moment it was made. This is locked at trade-execution time and does NOT update with future round results.
+
+You are given:
+- Each team's record + ladder position at trade time
+- Each team's line rankings at trade time (DEF / MID / FWD / RUC — lower rank = stronger line, 1 = best in league, 10 = worst)
+- Each player moved: position, the EXPECTED AVERAGE the receiving coach is betting on (not the player's prior avg — the bet), pre-trade season avg, and any per-player context the trader recorded ("injured at trade time", "selling high", etc.)
+- The admin's free-text context note (if present)
+
+WRITE A SHARP, DATA-GROUNDED JUSTIFICATION OF WHY THIS TRADE MAKES SENSE FOR EACH SIDE. Use the actual numbers. Cite line ranks ("MID line ranked 8th — desperate for a top-tier mid"), expected averages ("betting Mills delivers 95+/rd"), positions, and the trader's stated reasoning if it's there. Read the trade as a coach would — what hole is each side plugging, what edge are they buying, what risk are they tolerating.
+
+Format: a tight headline (≤14 words) followed by 3–5 bullets. Each bullet is one punchy sentence (max ~22 words), grounded in a specific number or position need. Cover:
+- What each team gives up vs. gets (output bet, position, tier shift)
+- What weakness the trade plugs (line ranks, ladder pressure, finals window)
+- Any explicit risk the per-player context flags (injury, hot-streak risk, suspension)
+- A finals/ladder framing where relevant
+
+Render the output as a single string — headline on the first line, then each bullet prefixed with '- ' on its own line. Example:
+
+Mansion buys ruck stability and Doge bets on Bontempelli's ceiling.
+- Mansion's ruck line was ranked 9th (worst in league bar one); Witts plugs it with a Good 85+ avg expectation.
+- Doge gives up a steady ruck to chase Bontempelli's 110+ ceiling — pure upside play with finals two months out.
+- Trader flagged Bontempelli's calf history; Doge knew the injury risk and priced it into the bet.
+- Mansion sits 6th and needs week-to-week consistency; Witts delivers floor over upside.
+
+Return ONLY valid JSON (no markdown fences):
+{
+  "justification": "string — headline on first line then 3-5 bullets each prefixed with '- '"
+}`;
+
+export async function generateTradeJustification(
+  inputs: TradeJustificationInputs,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  supabase: any
+): Promise<string> {
+  const client = getAnthropicClient();
+  if (!client) return '';
+
+  const userMsg = `Trade executed in Round ${inputs.roundExecuted}.
+
+${inputs.teamA.name} (${inputs.teamA.record}, Ladder: ${inputs.teamA.ladder ?? '?'})
+  Line ranks at trade: ${lineRanksStr(inputs.teamA.preTradeLines)}
+
+${inputs.teamB.name} (${inputs.teamB.record}, Ladder: ${inputs.teamB.ladder ?? '?'})
+  Line ranks at trade: ${lineRanksStr(inputs.teamB.preTradeLines)}
+
+Admin context: "${inputs.contextNotes ?? 'None provided'}"
+
+Players moved (with the bet each receiving coach is making):
+${inputs.playerBreakdown}
+
+Write the justification.`;
+
+  const response = await client.messages.create({
+    model: AI_MODEL,
+    max_tokens: 600,
+    system: JUSTIFICATION_SYSTEM_PROMPT,
+    messages: [{ role: 'user', content: userMsg }],
+  });
+
+  logAIUsage(supabase, 'trades.justification', inputs.roundExecuted, response.usage.input_tokens, response.usage.output_tokens).catch(() => {});
+
+  const text = response.content.find((c) => c.type === 'text');
+  if (!text || text.type !== 'text') return '';
+
+  try {
+    const parsed = parseAIJson<{ justification: string }>(text.text);
+    return parsed.justification || '';
+  } catch {
+    return text.text.slice(0, 1200);
+  }
+}

@@ -269,6 +269,51 @@ export async function POST(request: Request) {
       console.error('[trades/create] Initial recalc failed', e);
     }
 
+    // 5. v12 — Generate the Trade Justification (locked at execution time).
+    // Reads ladder + line ranks, expected averages, positions, context note;
+    // produces a headline + bullet-list justification. Failure here must not
+    // break the create flow.
+    try {
+      const { buildAndGenerateJustification } = await import('@/lib/trades/justify');
+      const justification = await buildAndGenerateJustification(supabase, {
+        teamAId: teamA.team_id,
+        teamAName: teamA.team_name,
+        teamBId: teamB.team_id,
+        teamBName: teamB.team_name,
+        roundExecuted: body.round_executed,
+        contextNotes: body.context_notes,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        players: (playerRows as any[]).map((r) => ({
+          player_id: r.player_id,
+          player_name: r.player_name,
+          raw_position: r.raw_position,
+          position: r.player_position,
+          receiving_team_id: r.receiving_team_id,
+          receiving_team_name: r.receiving_team_name,
+          expected_avg: r.expected_avg,
+          expected_tier: r.expected_tier,
+          pre_trade_avg: r.pre_trade_avg,
+          player_context: r.player_context,
+        })),
+      });
+      if (justification) {
+        const upd = await supabase
+          .from('trades')
+          .update({ ai_justification: justification })
+          .eq('id', tradeRow.id);
+        if (
+          upd.error &&
+          /ai_justification|column .* does not exist|schema cache/i.test(upd.error.message ?? '')
+        ) {
+          console.warn('[trades/create] ai_justification column missing — skipping persist. Run migration-trades-v12.sql.');
+        } else if (upd.error) {
+          throw upd.error;
+        }
+      }
+    } catch (e) {
+      console.error('[trades/create] Justification generation failed', e);
+    }
+
     return NextResponse.json({ trade: tradeRow, players: playerRows });
   } catch (err) {
     console.error('[trades/create]', err);

@@ -495,12 +495,38 @@ export default function TradeDetail({ tradeId, isAdmin = false, onBack, onDelete
       {/* Section 3 — Trade Justification. Holds the trader's rationale
           captured at trade-logging time. Empty state when no rationale. */}
       <TradeSection title="Trade Justification">
-        {trade.context_notes ? (
+        {/* v12 — Justification is now an AI-written headline + bullet list
+            grounded in line ranks, expected averages, and position needs.
+            Locked at trade execution; regenerated on edit. The admin's raw
+            context note (if present) is shown below the bullets as
+            "Trader's note" so the original quote is preserved. */}
+        {trade.ai_justification ? (
+          <>
+            <AnalysisBody narrative={trade.ai_justification} />
+            {trade.context_notes && (
+              <div
+                className="mt-5 pl-4 text-[12px] italic leading-relaxed"
+                style={{
+                  color: TEXT_MUTED,
+                  borderLeft: `2px solid ${colorForTeam(3194003, trade.positive_team_id)}`,
+                  fontFamily: 'Georgia, "Times New Roman", serif',
+                  maxWidth: 880,
+                }}
+              >
+                <span className="not-italic font-semibold uppercase tracking-[0.18em] text-[10px] block mb-1" style={{ color: TEXT_MUTED, fontFamily: 'inherit' }}>
+                  Trader&apos;s note
+                </span>
+                &ldquo;{trade.context_notes}&rdquo;
+              </div>
+            )}
+          </>
+        ) : trade.context_notes ? (
+          // Fallback for trades created before v12 OR when AI generation
+          // failed — show the raw context as a pull-quote.
           <p
             className="text-sm italic pl-4 leading-relaxed"
             style={{
               color: TEXT_BODY,
-              // Pull-quote left border in the trade-logger's (LIPI) team colour.
               borderLeft: `2px solid ${colorForTeam(3194003, trade.positive_team_id)}`,
               fontFamily: 'Georgia, "Times New Roman", serif',
             }}

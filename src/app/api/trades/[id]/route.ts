@@ -383,6 +383,56 @@ export async function PATCH(request: Request, ctx: { params: Promise<{ id: strin
       console.error('[trades/[id] PATCH] Recalc failed', e);
     }
 
+    // 6. v12 — Regenerate Trade Justification on every successful edit. The
+    // justification reads ladder + line ranks + each player's expected
+    // average / position / context, so any non-trivial edit can change it.
+    try {
+      const { buildAndGenerateJustification } = await import('@/lib/trades/justify');
+      // Re-fetch trade_players because they were just rewritten above.
+      const { data: freshPlayers } = await supabase
+        .from('trade_players')
+        .select('*')
+        .eq('trade_id', id);
+      const justification = await buildAndGenerateJustification(supabase, {
+        teamAId: teamA.team_id,
+        teamAName: teamA.team_name,
+        teamBId: teamB.team_id,
+        teamBName: teamB.team_name,
+        roundExecuted: nextRound,
+        contextNotes:
+          body.context_notes !== undefined ? body.context_notes : (existing.context_notes ?? null),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        players: ((freshPlayers ?? []) as any[]).map((r) => ({
+          player_id: r.player_id,
+          player_name: r.player_name,
+          raw_position: r.raw_position,
+          position: r.player_position,
+          receiving_team_id: r.receiving_team_id,
+          receiving_team_name: r.receiving_team_name,
+          expected_avg: r.expected_avg,
+          expected_tier: r.expected_tier,
+          pre_trade_avg: r.pre_trade_avg,
+          player_context: r.player_context,
+        })),
+      });
+      if (justification) {
+        const upd = await supabase
+          .from('trades')
+          .update({ ai_justification: justification })
+          .eq('id', id);
+        if (
+          upd.error &&
+          /ai_justification|column .* does not exist|schema cache/i.test(upd.error.message ?? '')
+        ) {
+          console.warn('[trades/[id] PATCH] ai_justification column missing — run migration-trades-v12.sql.');
+        } else if (upd.error) {
+          throw upd.error;
+        }
+      }
+    } catch (e) {
+      console.error('[trades/[id] PATCH] Justification regen failed', e);
+    }
+
     return NextResponse.json({ success: true });
   } catch (err) {
     console.error('[trades/[id] PATCH]', err);

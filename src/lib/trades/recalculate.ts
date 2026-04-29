@@ -417,6 +417,10 @@ interface Snapshot {
   ruc_rank: number;
 }
 
+// v12 — exported so the create/PATCH endpoints can build justification
+// inputs without duplicating snapshot logic.
+export { fetchSnapshot, snapshotToLines };
+
 async function fetchSnapshot(
   supabase: SupabaseClient,
   teamId: number,
