@@ -1245,11 +1245,15 @@ function ChartTooltip(props: {
 function AnalysisBody({ narrative }: { narrative: string }) {
   const { headline, bullets } = parseAnalysisNarrative(narrative);
   return (
-    <div style={{ maxWidth: 800 }}>
+    <div style={{ maxWidth: 880 }}>
       {headline && (
+        // v12 — text-wrap: balance distributes the headline across lines
+        // evenly instead of leaving an orphan word ("...slightly /
+        // underperforming their predicted averages."). Falls back to
+        // normal wrapping in browsers that don't support it.
         <p
           className="text-[18px] md:text-[20px] font-medium leading-snug"
-          style={{ color: TEXT }}
+          style={{ color: TEXT, textWrap: 'balance' as 'balance' }}
         >
           {headline}
         </p>
@@ -1265,7 +1269,9 @@ function AnalysisBody({ narrative }: { narrative: string }) {
               <span className="shrink-0 mt-2" style={{ color: TEXT_MUTED }}>
                 •
               </span>
-              <span style={{ color: TEXT_BODY }}>{b}</span>
+              {/* text-wrap: pretty avoids single-word orphans on the last
+                  line of each bullet (e.g. lone 'dramatically.'). */}
+              <span style={{ color: TEXT_BODY, textWrap: 'pretty' as 'pretty' }}>{b}</span>
             </li>
           ))}
         </ul>
