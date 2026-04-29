@@ -54,9 +54,20 @@ export async function GET(_request: Request, ctx: { params: Promise<{ id: string
     const playerIds = players.map((p) => p.player_id);
     const { data: playerRoundsAll } = await supabase
       .from('player_rounds')
-      .select('player_id, team_id, round_number, points')
+      .select('player_id, team_id, round_number, points, pos')
       .in('player_id', playerIds)
       .lte('round_number', latestRound);
+
+    // v12 — fallback position lookup from any round we have for the
+    // player. Used when raw_position / player_position / draft_position
+    // are all empty on the trade row (waiver pickups with no draft entry).
+    const roundsPosByPlayer = new Map<number, string>();
+    for (const r of (playerRoundsAll ?? []) as { player_id: number; pos: string | null }[]) {
+      if (r.pos && !roundsPosByPlayer.has(r.player_id)) {
+        const cleaned = cleanPositionDisplay(r.pos);
+        if (cleaned) roundsPosByPlayer.set(r.player_id, cleaned);
+      }
+    }
 
     // Post-trade scores (on receiving team only) — used for post averages,
     // injury detection, the chart, etc.
@@ -114,9 +125,23 @@ export async function GET(_request: Request, ctx: { params: Promise<{ id: string
       };
     });
 
+    // v12 — augment each trade-player row with a fallback position so the
+    // edit modal can resolve the expected-average dropdown for waiver
+    // pickups / legacy rows where raw_position is null. This is layered on
+    // top of the DB row, not persisted.
+    const playersWithFallback = players.map((p) => ({
+      ...p,
+      _fallback_position:
+        p.raw_position?.trim() ||
+        p.player_position ||
+        draftPosByPlayer.get(p.player_id) ||
+        roundsPosByPlayer.get(p.player_id) ||
+        null,
+    }));
+
     return NextResponse.json({
       trade,
-      players,
+      players: playersWithFallback,
       latestProbability: probs.length > 0 ? probs[probs.length - 1] : null,
       probabilityHistory: probs,
       playerPerformance,

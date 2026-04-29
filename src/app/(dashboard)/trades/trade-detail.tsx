@@ -242,16 +242,19 @@ export default function TradeDetail({ tradeId, isAdmin = false, onBack, onDelete
     players: players.map((p) => ({
       player_id: p.player_id,
       player_name: p.player_name,
-      // v12 — fallback chain: raw_position (as-recorded) → player_position
-      // (normalised) → draft_position (draft_picks lookup). ?? alone won't
-      // skip past empty-strings, so use a helper that also drops ''.
+      // v12 — server attaches `_fallback_position` per player (server-side
+      // chain: raw_position → player_position → draft_position →
+      // player_rounds.pos), so this just reads that.
       pos: (() => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const fallback = (p as any)._fallback_position as string | null | undefined;
         const pick = (...vals: (string | null | undefined)[]) =>
           vals.find((v) => typeof v === 'string' && v.trim().length > 0) ?? null;
         return pick(
           p.raw_position,
           p.player_position,
-          perfById.get(p.player_id)?.draft_position
+          perfById.get(p.player_id)?.draft_position,
+          fallback
         );
       })(),
       receiving_team_id: p.receiving_team_id,
