@@ -102,25 +102,28 @@ export function autoExpectedAvg(args: {
   };
 }
 
-/** Default expected_games_in_window. Reduces by detected unavailability. */
+/** Default expected_games_in_window. Reduces by detected unavailability.
+ *  v12 — always returns a WHOLE number. Half-game accounting (the old
+ *  "managed-load = -0.5" rule) leaked into the UI as "2/3.5 played", which
+ *  isn't a meaningful count in fantasy AFL: a player either suits up or
+ *  doesn't. We now require two prior DNPs to dock a game, three+ to dock
+ *  two, etc.
+ */
 export function autoExpectedGames(args: {
   prior_round_scores: { round: number; points: number | null }[];
-  upcoming_byes_in_window?: number; // count of byes in the next 4 rounds
+  upcoming_byes_in_window?: number;
 }): number {
-  // Default full availability for the 4-round window
   let games = 4;
-
-  // Penalize "managed" / "late out" patterns: count recent DNPs/zeros
   const sorted = [...args.prior_round_scores].sort((a, b) => b.round - a.round);
   const recent = sorted.slice(0, 4);
   const recentDnps = recent.filter((s) => s.points == null || s.points === 0).length;
-  if (recentDnps === 1) games -= 0.5;       // managed-load type pattern
-  else if (recentDnps === 2) games -= 1;     // injury-ish
+  if (recentDnps === 2) games -= 1;          // injury-ish
   else if (recentDnps >= 3) games -= 2;      // likely out
+  // One stray DNP no longer pulls the bar down a fractional half-game.
 
   if (args.upcoming_byes_in_window) {
     games -= args.upcoming_byes_in_window;
   }
 
-  return Math.max(0, Math.min(4, games));
+  return Math.max(0, Math.min(4, Math.round(games)));
 }

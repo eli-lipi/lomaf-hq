@@ -1725,7 +1725,12 @@ function PlayerVerdictRow({
   // Dynamic post-trade window. The stored expected_games (default 4 from v2)
   // is treated as a CAP — if the user explicitly said "expect 0" at trade
   // time, that overrides. Otherwise the window is current_round - executed.
-  const storedExpected = tradePlayer.expected_games;
+  // v12 — round defensively so legacy rows that stored 3.5 (old half-game
+  // managed-load heuristic) read as a whole number in the UI.
+  const storedExpected =
+    tradePlayer.expected_games != null
+      ? Math.round(tradePlayer.expected_games)
+      : null;
   const isUserExplicit = storedExpected != null && storedExpected !== 4;
   const expectedGames = isUserExplicit
     ? Math.min(postTradeWindow, storedExpected as number)
