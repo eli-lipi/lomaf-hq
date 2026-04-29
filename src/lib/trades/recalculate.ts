@@ -161,6 +161,18 @@ export async function recalculateTradeForRound(
     }
   }
 
+  // v12.1 — invalidate any narrative that mentions 'predicted' or
+  // 'prediction' next to a number. The old prompt told the AI to call
+  // pre-trade season-to-date avg the prediction, which is wrong.
+  // Regenerating against the new prompt produces a cleaner read framed
+  // around expected_avg.
+  if (cacheValid && existingProb?.ai_assessment) {
+    const txt = (existingProb.ai_assessment as string).toLowerCase();
+    if (/predicted|prediction/.test(txt)) {
+      cacheValid = false;
+    }
+  }
+
   if (!force && cacheValid && existingProb?.ai_assessment && cachedFactors) {
     aiNarrative = existingProb.ai_assessment;
     aiEdge = cachedFactors.aiEdge ?? 'even';
@@ -185,6 +197,7 @@ export async function recalculateTradeForRound(
         ctx?: string | null;
         draftPos?: string | null;
         draftPick?: number | null;
+        expectedAvg?: number | null;
       }
     >();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -194,30 +207,38 @@ export async function recalculateTradeForRound(
         ctx: tp.player_context ?? null,
         draftPos: tp.draft_position ?? null,
         draftPick: tp.draft_pick ?? null,
+        expectedAvg: tp.expected_avg ?? null,
       });
     }
 
     const playerBreakdownLines = performance.map((p) => {
       const status = p.injured ? '🔴 Injured' : '✅ Active';
+      const tradeMeta = tradePlayerById.get(p.player_id);
+      // v12.1 — the AI must reason against the EXPECTED AVERAGE (the
+      // explicit bet locked at trade time), NOT the pre-trade season
+      // average. Pre-trade avg is a noisy, often-tiny sample and is a
+      // poor predictor for the rest of the season — especially for
+      // trades made in the first few rounds.
+      const expected = tradeMeta?.expectedAvg ?? null;
+      const expectedStr = expected != null ? expected.toFixed(0) : '?';
       const pre = p.pre_trade_avg ?? null;
       const preStr = pre != null ? pre.toFixed(0) : '?';
       const post = p.rounds_played > 0 ? p.post_trade_avg.toFixed(0) : '—';
       const gap =
-        pre != null && p.rounds_played > 0
-          ? p.post_trade_avg - pre
+        expected != null && p.rounds_played > 0
+          ? p.post_trade_avg - expected
           : null;
       const gapStr =
         gap == null
           ? ''
           : gap >= 0
-            ? ` (+${gap.toFixed(0)} vs predicted)`
-            : ` (${gap.toFixed(0)} vs predicted)`;
+            ? ` (+${gap.toFixed(0)} vs expected)`
+            : ` (${gap.toFixed(0)} vs expected)`;
       const perRound = p.round_scores.length > 0
         ? p.round_scores
             .map((s) => `R${s.round}:${s.points == null ? 'DNP' : s.points}`)
             .join(', ')
         : '(no rounds played since trade)';
-      const tradeMeta = tradePlayerById.get(p.player_id);
       const tierStr = tradeMeta?.tier ? ` · expected tier: ${tradeMeta.tier}` : '';
       const ctxStr = tradeMeta?.ctx ? `\n    trader's note: "${tradeMeta.ctx}"` : '';
       const draftPos = tradeMeta?.draftPos;
@@ -228,7 +249,7 @@ export async function recalculateTradeForRound(
         : livePos;
       const pickPart = draftPick && draftPick > 0 ? ` · Pick #${draftPick}` : '';
       const posStr = `${posPart}${pickPart}`;
-      return `- ${p.player_name} (${posStr}) → ${p.receiving_team_name}: predicted avg ${preStr}, actual avg ${post}${gapStr}, ${p.rounds_played}/${p.rounds_possible} rounds, ${status}${tierStr}\n    scores: ${perRound}${ctxStr}`;
+      return `- ${p.player_name} (${posStr}) → ${p.receiving_team_name}: expected avg ${expectedStr}${tierStr}, pre-trade season-to-date avg ${preStr} (small-sample, NOT a prediction), actual avg ${post}${gapStr}, ${p.rounds_played}/${p.rounds_possible} rounds, ${status}\n    scores: ${perRound}${ctxStr}`;
     });
 
     const teamAReceives = teamA.map((p) => p.player_name);
