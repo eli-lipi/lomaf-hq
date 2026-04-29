@@ -15,3 +15,20 @@
 
 ALTER TABLE trades
   ADD COLUMN IF NOT EXISTS ai_justification TEXT;
+
+-- Persist each player's draft_position on the trade_players row so the
+-- player's identity in the league (drafted as a MID, drafted as a DEF,
+-- etc.) travels with the trade. Lets the edit form, the AI analysis,
+-- and any future tier work read a stable identity even when the player
+-- has been dropped, picked up on waivers, etc.
+ALTER TABLE trade_players
+  ADD COLUMN IF NOT EXISTS draft_position TEXT;
+
+-- Backfill from draft_picks so existing trades pick up the column right
+-- away without an Edit-pass.
+UPDATE trade_players tp
+SET draft_position = dp.position
+FROM draft_picks dp
+WHERE tp.player_id = dp.player_id
+  AND tp.draft_position IS NULL
+  AND dp.position IS NOT NULL;

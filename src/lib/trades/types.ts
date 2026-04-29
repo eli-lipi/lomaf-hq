@@ -34,6 +34,10 @@ export interface TradePlayer {
   player_name: string;
   player_position: NormalizedPosition | null;
   raw_position: string | null;
+  // v12 — locked draft position (DEF/MID/FWD/RUC, possibly DPP). Pulled
+  // from draft_picks at trade time so the player's league identity travels
+  // with the trade row even after they're dropped/picked up.
+  draft_position?: string | null;
   receiving_team_id: number;
   receiving_team_name: string;
   pre_trade_avg: number | null;

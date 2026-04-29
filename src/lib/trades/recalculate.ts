@@ -176,12 +176,18 @@ export async function recalculateTradeForRound(
 
     // v11 — fold expected_tier and per-player context into the AI breakdown
     // so the analysis can reference them when explaining underperformance.
-    const tradePlayerById = new Map<number, { tier?: string | null; ctx?: string | null }>();
+    // v12 — also fold draft_position so the analysis knows the player's
+    // league identity (drafted as DEF, drafted as MID, etc.).
+    const tradePlayerById = new Map<
+      number,
+      { tier?: string | null; ctx?: string | null; draftPos?: string | null }
+    >();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     for (const tp of (players as unknown as any[])) {
       tradePlayerById.set(tp.player_id, {
         tier: tp.expected_tier ?? null,
         ctx: tp.player_context ?? null,
+        draftPos: tp.draft_position ?? null,
       });
     }
 
@@ -208,7 +214,12 @@ export async function recalculateTradeForRound(
       const tradeMeta = tradePlayerById.get(p.player_id);
       const tierStr = tradeMeta?.tier ? ` · expected tier: ${tradeMeta.tier}` : '';
       const ctxStr = tradeMeta?.ctx ? `\n    trader's note: "${tradeMeta.ctx}"` : '';
-      return `- ${p.player_name} (${cleanPositionDisplay(p.raw_position) ?? p.position ?? '?'}) → ${p.receiving_team_name}: predicted avg ${preStr}, actual avg ${post}${gapStr}, ${p.rounds_played}/${p.rounds_possible} rounds, ${status}${tierStr}\n    scores: ${perRound}${ctxStr}`;
+      const draftPos = tradeMeta?.draftPos;
+      const livePos = cleanPositionDisplay(p.raw_position) ?? p.position ?? '?';
+      const posStr = draftPos && draftPos !== livePos
+        ? `${livePos}, drafted ${draftPos}`
+        : livePos;
+      return `- ${p.player_name} (${posStr}) → ${p.receiving_team_name}: predicted avg ${preStr}, actual avg ${post}${gapStr}, ${p.rounds_played}/${p.rounds_possible} rounds, ${status}${tierStr}\n    scores: ${perRound}${ctxStr}`;
     });
 
     const teamAReceives = teamA.map((p) => p.player_name);

@@ -21,6 +21,7 @@ interface PlayerForJustification {
   player_name: string;
   raw_position: string | null;
   position: string | null; // normalised
+  draft_position?: string | null; // v12 — locked league identity
   receiving_team_id: number;
   receiving_team_name: string;
   expected_avg: number | null | undefined;
@@ -72,12 +73,19 @@ export async function buildAndGenerateJustification(
   }
 
   const formatPlayer = (p: PlayerForJustification) => {
-    const pos = cleanPositionDisplay(p.raw_position) ?? p.position ?? '?';
+    const livePos = cleanPositionDisplay(p.raw_position) ?? p.position ?? '?';
+    const draftPos = p.draft_position;
+    // v12 — surface drafted-as identity when it differs from current pos
+    // (e.g. drafted MID but slotted FWD). Tells the AI to factor in
+    // position-pivot value, scarcity, the role this player owns.
+    const posStr = draftPos && draftPos !== livePos
+      ? `${livePos}, drafted ${draftPos}`
+      : livePos;
     const expected = p.expected_avg != null ? `${Math.round(p.expected_avg)} avg` : '?';
     const tier = p.expected_tier ? ` (${p.expected_tier})` : '';
     const pre = p.pre_trade_avg != null ? Math.round(p.pre_trade_avg).toString() : '?';
     const note = p.player_context ? `\n      trader's note: "${p.player_context}"` : '';
-    return `  - ${p.player_name} (${pos}) → ${p.receiving_team_name}: bet ${expected}${tier}, pre-trade season avg ${pre}${note}`;
+    return `  - ${p.player_name} (${posStr}) → ${p.receiving_team_name}: bet ${expected}${tier}, pre-trade season avg ${pre}${note}`;
   };
 
   const playerBreakdown = inputs.players.map(formatPlayer).join('\n');

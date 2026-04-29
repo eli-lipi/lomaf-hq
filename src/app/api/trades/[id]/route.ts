@@ -359,6 +359,8 @@ export async function PATCH(request: Request, ctx: { params: Promise<{ id: strin
           player_name: p.player_name,
           player_position: normalizePosition(rawPos),
           raw_position: rawPos,
+          // v12 — persist draft_position so player identity locks on the row.
+          draft_position: draftPos,
           receiving_team_id: receivingTeam.team_id,
           receiving_team_name: receivingTeam.team_name,
           pre_trade_avg: preAvg,
@@ -373,24 +375,23 @@ export async function PATCH(request: Request, ctx: { params: Promise<{ id: strin
         };
       });
 
-      // Try insert with v11 columns; if the schema hasn't been migrated yet
-      // (column does not exist), strip the v11 fields and retry. Keeps Edit
-      // working even when the admin hasn't run migration-trades-v11.sql yet.
+      // Try insert with v11/v12 columns; if the schema hasn't been
+      // migrated yet, strip the new fields and retry.
       let insertErr: { message?: string; code?: string } | null = null;
       const tryFirst = await supabase.from('trade_players').insert(playerRows);
       insertErr = tryFirst.error as { message?: string; code?: string } | null;
       if (
         insertErr &&
-        /column .* does not exist|expected_tier|expected_games_remaining|expected_games_max|player_context/i.test(
+        /column .* does not exist|expected_tier|expected_games_remaining|expected_games_max|player_context|draft_position/i.test(
           insertErr.message ?? ''
         )
       ) {
         console.warn(
-          '[trades/[id] PATCH] v11 columns missing — retrying without them. Run migration-trades-v11.sql to enable.'
+          '[trades/[id] PATCH] v11/v12 columns missing — retrying without them. Run migration-trades-v11.sql and migration-trades-v12.sql to enable.'
         );
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const stripped = (playerRows as any[]).map(({ expected_tier, expected_games_remaining, expected_games_max, player_context, ...rest }) => {
-          void expected_tier; void expected_games_remaining; void expected_games_max; void player_context;
+        const stripped = (playerRows as any[]).map(({ expected_tier, expected_games_remaining, expected_games_max, player_context, draft_position, ...rest }) => {
+          void expected_tier; void expected_games_remaining; void expected_games_max; void player_context; void draft_position;
           return rest;
         });
         const retry = await supabase.from('trade_players').insert(stripped);
@@ -432,6 +433,7 @@ export async function PATCH(request: Request, ctx: { params: Promise<{ id: strin
           player_name: r.player_name,
           raw_position: r.raw_position,
           position: r.player_position,
+          draft_position: r.draft_position ?? null,
           receiving_team_id: r.receiving_team_id,
           receiving_team_name: r.receiving_team_name,
           expected_avg: r.expected_avg,

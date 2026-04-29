@@ -226,6 +226,9 @@ export async function POST(request: Request) {
         player_name: p.player_name,
         player_position: normalizePosition(rawPos),
         raw_position: rawPos,
+        // v12 — persist draft_position so the player's identity in the
+        // league (drafted as a DEF, MID, etc.) is locked on the trade row.
+        draft_position: draftPos,
         receiving_team_id: receivingTeam.team_id,
         receiving_team_name: receivingTeam.team_name,
         pre_trade_avg: preAvgByPlayer.get(p.player_id) ?? null,
@@ -240,21 +243,21 @@ export async function POST(request: Request) {
       };
     });
 
-    // Try insert with v11 columns; if the schema isn't migrated yet, strip
-    // them and retry so trade-creation still works.
+    // Try insert with v11/v12 columns; if the schema isn't migrated yet,
+    // strip them and retry so trade-creation still works.
     let playersErr: { message?: string; code?: string } | null = null;
     const tryFirst = await supabase.from('trade_players').insert(playerRows);
     playersErr = tryFirst.error as { message?: string; code?: string } | null;
     if (
       playersErr &&
-      /column .* does not exist|expected_tier|expected_games_remaining|expected_games_max|player_context/i.test(
+      /column .* does not exist|expected_tier|expected_games_remaining|expected_games_max|player_context|draft_position/i.test(
         playersErr.message ?? ''
       )
     ) {
-      console.warn('[trades/create] v11 columns missing — retrying without them.');
+      console.warn('[trades/create] v11/v12 columns missing — retrying without them.');
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const stripped = (playerRows as any[]).map(({ expected_tier, expected_games_remaining, expected_games_max, player_context, ...rest }) => {
-        void expected_tier; void expected_games_remaining; void expected_games_max; void player_context;
+      const stripped = (playerRows as any[]).map(({ expected_tier, expected_games_remaining, expected_games_max, player_context, draft_position, ...rest }) => {
+        void expected_tier; void expected_games_remaining; void expected_games_max; void player_context; void draft_position;
         return rest;
       });
       const retry = await supabase.from('trade_players').insert(stripped);
@@ -288,6 +291,7 @@ export async function POST(request: Request) {
           player_name: r.player_name,
           raw_position: r.raw_position,
           position: r.player_position,
+          draft_position: r.draft_position ?? null,
           receiving_team_id: r.receiving_team_id,
           receiving_team_name: r.receiving_team_name,
           expected_avg: r.expected_avg,
