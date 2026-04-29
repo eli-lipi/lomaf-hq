@@ -242,12 +242,15 @@ export default function TradeDetail({ tradeId, isAdmin = false, onBack, onDelete
     players: players.map((p) => ({
       player_id: p.player_id,
       player_name: p.player_name,
-      // v12 — fall back to the normalised player_position (DEF/MID/FWD/RUC)
-      // when raw_position is null on legacy rows. Without this fallback the
-      // edit modal's expected-average dropdown reads "Position unresolved"
-      // and the coach can't update the bet for a player whose raw position
-      // wasn't captured at original log time.
-      pos: p.raw_position ?? p.player_position ?? null,
+      // v12 — fallback chain: raw_position (as-recorded) → player_position
+      // (normalised, often DEF/MID/FWD/RUC) → draft_position (looked up
+      // from draft_picks). Legacy rows where raw_position was null and
+      // player_position somehow didn't backfill still resolve via the
+      // draft_picks lookup so the expected-average dropdown stays usable.
+      pos:
+        p.raw_position ??
+        p.player_position ??
+        (perfById.get(p.player_id)?.draft_position ?? null),
       receiving_team_id: p.receiving_team_id,
       // v11 — pre-populate the new fields when editing an existing trade.
       expected_tier: p.expected_tier ?? null,
