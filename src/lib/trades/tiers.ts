@@ -97,6 +97,46 @@ export function tierToExpectedAvg(tier: Tier, position: NormalizedPosition): num
   return t.average;
 }
 
+/**
+ * v12 — Expected-average dropdown options. Returns the full 50..130 ladder
+ * in 5-pt increments, partitioned into the position's tier groups so the
+ * <select> can render <optgroup>s for visual separation. The ranges adapt
+ * per position (a FWD's 'Good' starts at 75, a MID's at 85).
+ *
+ * Buckets:
+ *   Below average  — under T.average
+ *   Average        — T.average .. T.good - 1
+ *   Good           — T.good .. T.elite - 1
+ *   Elite          — T.elite .. T.elite + 14
+ *   Superstar      — T.elite + 15 .. 130
+ */
+export interface ExpectedAvgGroup {
+  label: string;
+  tier: Tier;
+  values: number[];
+}
+export function expectedAvgOptionsFor(position: NormalizedPosition): ExpectedAvgGroup[] {
+  const t = TIER_THRESHOLDS[position];
+  const min = 50;
+  const max = 130;
+  const ladder: number[] = [];
+  for (let v = min; v <= max; v += 5) ladder.push(v);
+
+  const groups: ExpectedAvgGroup[] = [];
+  const below = ladder.filter((v) => v < t.average);
+  if (below.length) groups.push({ label: `Below average (under ${t.average})`, tier: 'unrated', values: below });
+  const avg = ladder.filter((v) => v >= t.average && v < t.good);
+  if (avg.length) groups.push({ label: `Average (${t.average}–${t.good - 1})`, tier: 'average', values: avg });
+  const good = ladder.filter((v) => v >= t.good && v < t.elite);
+  if (good.length) groups.push({ label: `Good (${t.good}–${t.elite - 1})`, tier: 'good', values: good });
+  const eliteCutoff = t.elite + 15;
+  const elite = ladder.filter((v) => v >= t.elite && v < eliteCutoff);
+  if (elite.length) groups.push({ label: `Elite (${t.elite}–${eliteCutoff - 1})`, tier: 'elite', values: elite });
+  const superstar = ladder.filter((v) => v >= eliteCutoff);
+  if (superstar.length) groups.push({ label: `Superstar (${eliteCutoff}+)`, tier: 'superstar', values: superstar });
+  return groups;
+}
+
 /** Friendly tier label, capitalised. */
 export function tierDisplay(tier: Tier): string {
   return tier === 'superstar'

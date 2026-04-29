@@ -6,7 +6,8 @@ import { TEAMS } from '@/lib/constants';
 import { cleanPositionDisplay } from '@/lib/trades/positions';
 import {
   resolvePlayerPosition,
-  tierOptionsFor,
+  expectedAvgOptionsFor,
+  tierFromAvg,
   type Tier,
 } from '@/lib/trades/tiers';
 
@@ -484,7 +485,10 @@ function PlayerExpectations({
 }) {
   // Resolve the player's position via DPP fallback (FWD > DEF > RUC > MID).
   const resolved = resolvePlayerPosition(player.pos);
-  const tierOpts = resolved ? tierOptionsFor(resolved) : null;
+  // v12 — replace the 4-tier dropdown with a 5-pt-increment ladder grouped
+  // visually by tier. Selecting a number gives the probability calc tighter
+  // resolution while the optgroups still convey the tier semantics.
+  const expectedGroups = resolved ? expectedAvgOptionsFor(resolved) : null;
   const maxGames = maxGamesAvailable(executedRound);
 
   // Default expected_games_remaining to the max once we know the executed
@@ -508,30 +512,43 @@ function PlayerExpectations({
           <label className="text-[11px] font-semibold text-muted-foreground block mb-1">
             Expected Average
           </label>
-          {resolved && tierOpts ? (
+          {resolved && expectedGroups ? (
             <>
               <select
-                value={player.expected_tier ?? ''}
-                onChange={(e) =>
-                  onChange({ expected_tier: (e.target.value || null) as Tier | null })
-                }
+                value={player.expected_avg ?? ''}
+                onChange={(e) => {
+                  const raw = e.target.value;
+                  if (raw === '') {
+                    onChange({ expected_avg: null, expected_tier: null });
+                    return;
+                  }
+                  const n = Number(raw);
+                  // Set both expected_avg (numeric, used by probability calc)
+                  // and expected_tier (kept in sync so verdict/back-compat code
+                  // that still reads the tier keeps working).
+                  onChange({ expected_avg: n, expected_tier: tierFromAvg(n, resolved) });
+                }}
                 className="w-full border border-border rounded px-2 py-1.5 text-sm bg-white"
               >
                 <option value="">— Auto-suggest from current form —</option>
-                {tierOpts.map((o) => (
-                  <option key={o.tier} value={o.tier}>
-                    {o.label} ({o.hint})
-                  </option>
+                {expectedGroups.map((g) => (
+                  <optgroup key={g.label} label={g.label}>
+                    {g.values.map((v) => (
+                      <option key={v} value={v}>
+                        {v} avg
+                      </option>
+                    ))}
+                  </optgroup>
                 ))}
               </select>
               <p className="text-[10px] text-muted-foreground mt-1">
                 Position resolved as <span className="font-semibold">{resolved}</span>.
-                Auto-suggested from R-to-date data unless changed.
+                5-pt increments grouped by tier. Auto-suggested from R-to-date data unless changed.
               </p>
             </>
           ) : (
             <p className="text-[11px] text-muted-foreground italic">
-              Position unresolved — tier dropdown unavailable.
+              Position unresolved — expected-average dropdown unavailable.
             </p>
           )}
         </div>
