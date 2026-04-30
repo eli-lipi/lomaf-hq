@@ -102,9 +102,18 @@ export async function GET(_request: Request, ctx: { params: Promise<{ id: string
       const key = `${p.player_id}-${p.receiving_team_id}`;
       const rounds = (scoresByKey.get(key) ?? []).sort((a, b) => a.round - b.round);
       const preRounds = (preScoresByPlayer.get(p.player_id) ?? []).sort((a, b) => a.round - b.round);
-      const roundsPlayed = rounds.filter((r) => r.points !== null).length;
-      const sum = rounds.reduce((s, r) => s + (r.points ?? 0), 0);
-      const postAvg = rounds.length > 0 ? sum / rounds.length : 0;
+      // v12.1 — Avg Since must be computed over PLAYED rounds only.
+      // Counting DNPs/0s in the denominator drags the average down (e.g.
+      // Humphrey playing 100, 50 and missing two would otherwise read
+      // 37 instead of his true 75 when he suited up). The availability
+      // story is told separately by the rounds_played / rounds_possible
+      // ratio in the Games column.
+      const playedRounds = rounds.filter(
+        (r) => r.points !== null && r.points !== undefined && r.points > 0
+      );
+      const roundsPlayed = playedRounds.length;
+      const sum = playedRounds.reduce((s, r) => s + (r.points ?? 0), 0);
+      const postAvg = roundsPlayed > 0 ? sum / roundsPlayed : 0;
       const injury = detectInjury(rounds.map((r) => r.points), p.pre_trade_avg);
       return {
         player_id: p.player_id,
