@@ -58,13 +58,15 @@ const NAV_ITEMS: NavItem[] = [
     ],
   },
   {
+    // v12.1 — Trades opened to all coaches. Read access only; write
+    // actions (Log Trade / Edit / Delete / Recalculate) are still gated
+    // to admin via the isAdmin prop threaded through the page tree.
     href: '/trades',
     label: 'Trades',
     icon: ArrowLeftRight,
-    adminOnly: true,
     children: [
-      { href: '/trades?tab=tracking', label: 'Trade Tracking', adminOnly: true },
-      { href: '/trades?tab=recommendations', label: 'Trade Recommendations', adminOnly: true },
+      { href: '/trades?tab=tracking', label: 'Trade Tracking' },
+      { href: '/trades?tab=recommendations', label: 'Trade Recommendations' },
     ],
   },
   {

@@ -3,7 +3,9 @@ import { createServerClient } from '@supabase/ssr';
 
 // Paths that only admins should see/use. Middleware enforces redirects/403s here.
 // Actual role check happens via a quick Supabase query below.
-const ADMIN_PAGE_PREFIXES = ['/upload', '/settings', '/trades'];
+// v12.1 — /trades opened to all coaches (read). Page route is no longer
+// admin-gated; write API actions are gated by HTTP method below.
+const ADMIN_PAGE_PREFIXES = ['/upload', '/settings'];
 const ADMIN_API_PREFIXES = [
   '/api/upload',
   '/api/rankings',
@@ -11,8 +13,10 @@ const ADMIN_API_PREFIXES = [
   '/api/ai/intelligence-brief',
   '/api/ai/writeup-draft',
   '/api/users',
-  '/api/trades',
 ];
+
+// /api/trades — GET open to all coaches; POST/PATCH/DELETE admin-only.
+const TRADES_API_PREFIX = '/api/trades';
 
 // Public paths (no auth required).
 const PUBLIC_PATHS = ['/login', '/auth/callback'];
@@ -61,10 +65,18 @@ export async function middleware(request: NextRequest) {
     return NextResponse.redirect(url);
   }
 
+  // /api/trades is special: GET (read) is open to all coaches, but any
+  // mutating method (POST/PATCH/DELETE) still requires admin. The
+  // recalculate sub-route and upload-screenshot sub-route are POSTs and
+  // therefore correctly captured.
+  const isTradesApi = path === TRADES_API_PREFIX || path.startsWith(TRADES_API_PREFIX + '/');
+  const tradesNeedsAdmin = isTradesApi && request.method !== 'GET';
+
   // Admin-gated routes: look up role.
   const needsAdmin =
     ADMIN_PAGE_PREFIXES.some((p) => path === p || path.startsWith(p + '/')) ||
-    ADMIN_API_PREFIXES.some((p) => path === p || path.startsWith(p + '/'));
+    ADMIN_API_PREFIXES.some((p) => path === p || path.startsWith(p + '/')) ||
+    tradesNeedsAdmin;
 
   if (user && needsAdmin) {
     // Role is cached in a cookie at login (see /auth/callback) to avoid
