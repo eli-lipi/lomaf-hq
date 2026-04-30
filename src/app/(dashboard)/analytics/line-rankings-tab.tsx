@@ -155,6 +155,19 @@ export default function LineRankingsTab() {
     // All appearances in this pos slot (for building player averages)
     const allPosData = allData.filter(r => r.pos === activePos && validRounds.includes(r.round_number));
 
+    // v12.1 — current roster per team. A player is "currently on the
+    // list" if they appear on this team in the most-recent round we have
+    // data for. Without this filter the depth panel was including
+    // players who'd been traded away or dropped weeks ago, since they
+    // still had historical FWD appearances on this team.
+    const latestRound = Math.max(...validRounds);
+    const currentRosterByTeam = new Map<number, Set<number>>();
+    for (const r of allData) {
+      if (r.round_number !== latestRound) continue;
+      if (!currentRosterByTeam.has(r.team_id)) currentRosterByTeam.set(r.team_id, new Set());
+      currentRosterByTeam.get(r.team_id)!.add(r.player_id);
+    }
+
     const teamStats: TeamLineStat[] = TEAMS.map(team => {
       // Line totals per round (on-field only, with adjustments)
       const roundScores = validRounds.map(round => {
@@ -172,11 +185,20 @@ export default function LineRankingsTab() {
       // === Player breakdown by average (top N by avg = "best", rest = "depth") ===
       const slots = POSITIONS.find(p => p.id === activePos)?.slots || 1;
       const playerMap: Record<number, { name: string; scores: number[]; player_id: number }> = {};
-      // Collect all players who have appeared in this position slot for this team
-      allPosData.filter(r => r.team_id === team.team_id && r.points != null).forEach(r => {
-        if (!playerMap[r.player_id]) playerMap[r.player_id] = { name: r.player_name, scores: [], player_id: r.player_id };
-        playerMap[r.player_id].scores.push(Number(r.points));
-      });
+      // v12.1 — only include players currently rostered to this team. A
+      // historical FWD appearance with this team isn't enough — if the
+      // player has been traded/dropped, they shouldn't surface in this
+      // team's depth panel.
+      const currentRoster = currentRosterByTeam.get(team.team_id) ?? new Set<number>();
+      // Collect appearances at this position, but only for current
+      // roster members. Their full historical avg at this position on
+      // this team still counts — that's a fair read of their depth value.
+      allPosData
+        .filter(r => r.team_id === team.team_id && r.points != null && currentRoster.has(r.player_id))
+        .forEach(r => {
+          if (!playerMap[r.player_id]) playerMap[r.player_id] = { name: r.player_name, scores: [], player_id: r.player_id };
+          playerMap[r.player_id].scores.push(Number(r.points));
+        });
 
       const allPlayers: PlayerBreakdown[] = Object.values(playerMap)
         .filter(p => p.scores.length > 0)
