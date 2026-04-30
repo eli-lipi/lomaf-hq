@@ -25,6 +25,20 @@ function formatRelative(iso: string | null): string {
   return date.toLocaleDateString();
 }
 
+/** Format a YYYY-MM-DD activity date as "Today" / "Yesterday" / "Nd ago". */
+function formatActivityDay(ymd: string | null): string {
+  if (!ymd) return 'Never';
+  const today = new Date().toISOString().slice(0, 10);
+  if (ymd === today) return 'Today';
+  // Compare as date-only at UTC midnight to avoid TZ drift.
+  const a = new Date(ymd + 'T00:00:00Z').getTime();
+  const t = new Date(today + 'T00:00:00Z').getTime();
+  const diffDay = Math.round((t - a) / 86_400_000);
+  if (diffDay === 1) return 'Yesterday';
+  if (diffDay < 30) return `${diffDay}d ago`;
+  return new Date(ymd).toLocaleDateString();
+}
+
 function formatCost(usd: number): string {
   if (usd === 0) return '—';
   if (usd < 0.01) return '<$0.01';
@@ -83,6 +97,7 @@ export default function UsageTab() {
               <tr>
                 <th className="text-left font-medium px-4 py-2.5">Coach</th>
                 <th className="text-left font-medium px-4 py-2.5">Last login</th>
+                <th className="text-left font-medium px-4 py-2.5">Last active</th>
                 <th className="text-right font-medium px-4 py-2.5">Active (30d)</th>
                 <th className="text-right font-medium px-4 py-2.5">Active (all-time)</th>
                 <th className="text-right font-medium px-4 py-2.5">AI calls</th>
@@ -111,6 +126,7 @@ export default function UsageTab() {
                     </div>
                   </td>
                   <td className="px-4 py-2.5 text-muted-foreground tabular-nums">{formatRelative(r.last_login)}</td>
+                  <td className="px-4 py-2.5 text-muted-foreground tabular-nums">{formatActivityDay(r.last_active)}</td>
                   <td className="px-4 py-2.5 text-right tabular-nums">{formatMinutes(r.minutes_30d)}</td>
                   <td className="px-4 py-2.5 text-right tabular-nums">{formatMinutes(r.minutes_total)}</td>
                   <td className="px-4 py-2.5 text-right tabular-nums">{r.ai_calls || '—'}</td>

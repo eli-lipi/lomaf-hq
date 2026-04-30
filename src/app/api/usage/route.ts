@@ -10,6 +10,10 @@ export interface UsageRow {
   team_name: string | null;
   role: string;
   last_login: string | null;
+  // v12.1 — most recent date a heartbeat landed (i.e. the last day this
+  // user had a tab open on the portal). Stored as a YYYY-MM-DD string
+  // since user_activity.activity_date is a DATE.
+  last_active: string | null;
   minutes_30d: number;
   minutes_total: number;
   ai_calls: number;
@@ -80,10 +84,18 @@ export async function GET() {
   const cutoff30d = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
   const minutes30 = new Map<string, number>();
   const minutesTotal = new Map<string, number>();
+  // v12.1 — track the most recent activity_date per user for the
+  // "Last active" column. activity_date is YYYY-MM-DD so string-max is
+  // the same as date-max.
+  const lastActive = new Map<string, string>();
   for (const a of activityRows) {
     minutesTotal.set(a.user_id, (minutesTotal.get(a.user_id) ?? 0) + a.minutes_active);
     if (a.activity_date >= cutoff30d) {
       minutes30.set(a.user_id, (minutes30.get(a.user_id) ?? 0) + a.minutes_active);
+    }
+    const prev = lastActive.get(a.user_id);
+    if (!prev || a.activity_date > prev) {
+      lastActive.set(a.user_id, a.activity_date);
     }
   }
 
@@ -114,6 +126,7 @@ export async function GET() {
     team_name: u.team_name,
     role: u.role,
     last_login: u.last_login,
+    last_active: lastActive.get(u.id) ?? null,
     minutes_30d: minutes30.get(u.id) ?? 0,
     minutes_total: minutesTotal.get(u.id) ?? 0,
     ai_calls: aiCalls.get(u.id) ?? 0,
