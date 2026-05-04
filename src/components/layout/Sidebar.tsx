@@ -83,6 +83,11 @@ const NAV_ITEMS: NavItem[] = [
     label: 'Byes',
     icon: CalendarOff,
     adminOnly: true,
+    children: [
+      { href: '/byes?tab=overview', label: 'Overview', adminOnly: true },
+      { href: '/byes?tab=fixture', label: 'Fixture', adminOnly: true },
+      { href: '/byes?tab=my-team', label: 'My Team', adminOnly: true },
+    ],
   },
   {
     href: '/settings',

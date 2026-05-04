@@ -44,9 +44,12 @@ export function getMinPlayable(rule: ByeRule): number {
 // Coach bye-impact grading
 // =====================================================================
 // Five-tier severity scale applied to each LOMAF coach's roster, given
-// how many of their players bye in a round and the round's scoring rule.
-// "Can't Field a Team" is hard-defined: roster minus byes < the rule's
-// minimum playable count. Below that, severity ramps with raw bye count.
+// how many of their players are unavailable in a round (byed OR
+// predicted injured) and the round's scoring rule.
+//
+// "Can't Field a Team" is hard-defined: roster minus unavailable players
+// drops below the rule's minimum playable count (16 for best-16 rounds,
+// 18 for normal rounds). Below that, severity ramps with raw count.
 // =====================================================================
 
 export type ImpactGrade = 'none' | 'low' | 'medium' | 'serious' | 'cannot-field';
@@ -76,12 +79,16 @@ export const IMPACT_GRADES_ORDERED: ImpactGrade[] = [
   'cannot-field', 'serious', 'medium', 'low', 'none',
 ];
 
-export function getImpactGrade(byedCount: number, rosterSize: number, rule: ByeRule): ImpactGrade {
-  if (byedCount === 0) return 'none';
-  const remaining = rosterSize - byedCount;
+export function getImpactGrade(
+  unavailableCount: number,
+  rosterSize: number,
+  rule: ByeRule,
+): ImpactGrade {
+  if (unavailableCount === 0) return 'none';
+  const remaining = rosterSize - unavailableCount;
   if (remaining < getMinPlayable(rule)) return 'cannot-field';
-  if (byedCount <= 2) return 'low';
-  if (byedCount <= 4) return 'medium';
+  if (unavailableCount <= 3) return 'low';
+  if (unavailableCount <= 6) return 'medium';
   return 'serious';
 }
 

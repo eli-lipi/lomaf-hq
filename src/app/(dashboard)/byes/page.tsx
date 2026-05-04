@@ -10,5 +10,5 @@ export default async function ByesPage() {
   // Admin-only for phase 1 — drop this gate once the user approves opening
   // Byes to all coaches.
   if (user.role !== 'admin') redirect('/');
-  return <ByesClient />;
+  return <ByesClient userTeamId={user.team_id ?? null} />;
 }
