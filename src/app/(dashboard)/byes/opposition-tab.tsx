@@ -15,12 +15,13 @@ import {
 import { cn } from '@/lib/utils';
 import type { ByeData } from './use-bye-data';
 
+type RoundMetricKey = `r${ByeRound}-players` | `r${ByeRound}-pts`;
 type SortKey =
   | 'team'
   | 'totalOpp'
   | 'totalPts'
   | 'edge'
-  | 'r12' | 'r13' | 'r14' | 'r15' | 'r16';
+  | RoundMetricKey;
 type SortDir = 'asc' | 'desc';
 
 interface PerRoundCell {
@@ -46,9 +47,12 @@ interface OppositionRow {
   perRound: Record<ByeRound, PerRoundCell | null>;
 }
 
-const ROUND_KEYS: Record<ByeRound, Extract<SortKey, `r${number}`>> = {
-  12: 'r12', 13: 'r13', 14: 'r14', 15: 'r15', 16: 'r16',
-};
+function roundPlayersKey(round: ByeRound): `r${ByeRound}-players` {
+  return `r${round}-players`;
+}
+function roundPtsKey(round: ByeRound): `r${ByeRound}-pts` {
+  return `r${round}-pts`;
+}
 
 export default function OppositionTab({ data }: { data: ByeData }) {
   // Default sort: most opp pain first — this is the "best case for me" lens.
@@ -120,12 +124,19 @@ export default function OppositionTab({ data }: { data: ByeData }) {
           primary = a.edgeRounds - b.edgeRounds;
           break;
         default: {
-          // r12..r16 — sort by opp pointsLost (more meaningful than raw count
-          // for the per-round columns, since a star bye matters more).
-          const round = Number(sortKey.slice(1)) as ByeRound;
-          const ac = a.perRound[round]?.pointsLost ?? -1;
-          const bc = b.perRound[round]?.pointsLost ?? -1;
-          primary = ac - bc;
+          // Per-round sort key shape: `r{round}-{players|pts}`.
+          const m = /^r(\d+)-(players|pts)$/.exec(sortKey);
+          if (m) {
+            const round = Number(m[1]) as ByeRound;
+            const metric = m[2] as 'players' | 'pts';
+            const av = metric === 'players'
+              ? (a.perRound[round]?.count ?? -1)
+              : (a.perRound[round]?.pointsLost ?? -1);
+            const bv = metric === 'players'
+              ? (b.perRound[round]?.count ?? -1)
+              : (b.perRound[round]?.pointsLost ?? -1);
+            primary = av - bv;
+          }
         }
       }
       if (primary !== 0) return primary * direction;
@@ -162,8 +173,11 @@ export default function OppositionTab({ data }: { data: ByeData }) {
       <div className="bg-card border border-border rounded-lg shadow-sm overflow-x-auto">
         <table className="w-full text-sm border-collapse">
           <thead>
-            <tr className="border-b border-border bg-muted/30">
-              <Th label="Coach" sortKey="team" current={sortKey} dir={sortDir} onClick={toggleSort} align="left" />
+            {/* Top row: round group labels (each spans two sub-cells).
+                The non-round columns rowSpan=2 so they reach into the
+                second header row. */}
+            <tr className="border-b border-border/50 bg-muted/30">
+              <Th label="Coach" sortKey="team" current={sortKey} dir={sortDir} onClick={toggleSort} align="left" rowSpan={2} />
               <Th
                 label="Total Opp Out"
                 sublabel="players · all 5 byes"
@@ -173,6 +187,7 @@ export default function OppositionTab({ data }: { data: ByeData }) {
                 dir={sortDir}
                 onClick={toggleSort}
                 align="center"
+                rowSpan={2}
               />
               <Th
                 label="Total Pts Lost"
@@ -183,6 +198,7 @@ export default function OppositionTab({ data }: { data: ByeData }) {
                 dir={sortDir}
                 onClick={toggleSort}
                 align="center"
+                rowSpan={2}
               />
               <Th
                 label="Edge Rounds"
@@ -193,17 +209,27 @@ export default function OppositionTab({ data }: { data: ByeData }) {
                 dir={sortDir}
                 onClick={toggleSort}
                 align="center"
+                rowSpan={2}
               />
               {BYE_ROUNDS.map((round) => (
-                <Th
+                <th
                   key={round}
-                  label={`R${round}`}
-                  sublabel="players · pts"
-                  sortKey={ROUND_KEYS[round]}
+                  colSpan={2}
+                  className="px-2 pt-2.5 pb-1 text-center text-[12px] font-bold text-foreground border-l border-border/40"
+                >
+                  R{round}
+                </th>
+              ))}
+            </tr>
+            {/* Sub-row: per-round Players / Pts sort buttons. */}
+            <tr className="border-b border-border bg-muted/30">
+              {BYE_ROUNDS.map((round) => (
+                <RoundSubHeaders
+                  key={round}
+                  round={round}
                   current={sortKey}
                   dir={sortDir}
                   onClick={toggleSort}
-                  align="center"
                 />
               ))}
             </tr>
@@ -254,48 +280,34 @@ export default function OppositionTab({ data }: { data: ByeData }) {
                     </span>
                   </td>
 
-                  {/* Per-round opp counts — cell colour follows the
-                      points-grade (more meaningful than count alone since
-                      it weights starpower). Cell shows: opp player count
-                      on top, opp avg lost beneath, opp short name below. */}
+                  {/* Per-round: two adjacent colored cells (Players + Pts),
+                      each independently sortable. The Players cell carries
+                      the small "vs X" label so the opponent context is
+                      preserved without doubling up. Cell colours: Players
+                      uses the count-grade, Pts uses the points-grade. */}
                   {BYE_ROUNDS.map((round) => {
                     const cell = row.perRound[round];
                     if (!cell) {
                       return (
-                        <td key={round} className="px-2 py-3 text-center text-muted-foreground">
+                        <td
+                          key={`${round}-empty`}
+                          colSpan={2}
+                          className="px-2 py-3 text-center text-muted-foreground border-l border-border/40"
+                        >
                           —
                         </td>
                       );
                     }
-                    const ptsMeta = POINTS_META[cell.pointsGrade];
                     const countMeta = IMPACT_META[cell.grade];
+                    const ptsMeta = POINTS_META[cell.pointsGrade];
                     return (
-                      <td
+                      <RoundDataCells
                         key={round}
-                        className="px-2 py-2 text-center align-middle"
-                        title={
-                          `R${round}: vs ${cell.oppShortName}\n` +
-                          `Roster: ${countMeta.label} (${cell.count} out)\n` +
-                          `Scoring: ${ptsMeta.label} (${cell.pointsLost} avg lost)`
-                        }
-                      >
-                        <div
-                          className="rounded-md py-1.5 px-1 leading-tight font-bold"
-                          style={{ background: ptsMeta.bg, color: ptsMeta.fg }}
-                        >
-                          <div className="flex items-center justify-center gap-1 text-sm tabular-nums">
-                            <span>{cell.count}</span>
-                            <span className="opacity-60 text-[10px]">·</span>
-                            <span>{cell.pointsLost}</span>
-                          </div>
-                          <div className="text-[8px] uppercase tracking-wider opacity-80 truncate font-medium">
-                            players · pts
-                          </div>
-                          <div className="text-[9px] uppercase tracking-wider opacity-80 truncate">
-                            vs {cell.oppShortName}
-                          </div>
-                        </div>
-                      </td>
+                        round={round}
+                        cell={cell}
+                        countMeta={countMeta}
+                        ptsMeta={ptsMeta}
+                      />
                     );
                   })}
                 </tr>
@@ -306,12 +318,119 @@ export default function OppositionTab({ data }: { data: ByeData }) {
       </div>
 
       <p className="text-[10px] text-muted-foreground px-1">
-        Per-round cells: <strong>players</strong> unavailable on the left, <strong>avg points lost</strong> on the right.
-        Cell colour follows the points-weighted grade (No Hit · Light · Medium · Big · Crippling), so a 2-player cell
-        with a star going down stays red. Edge Rounds counts bye rounds where you&apos;re strictly more available than your
-        opponent (ties don&apos;t count).
+        Per-round group: <strong>Players</strong> cell (count-graded) on the left,
+        <strong> Pts</strong> cell (points-graded) on the right — sort either independently.
+        A 2-player cell with a star going down may show Low Players but Big Hit pts.
+        Edge Rounds counts bye rounds where you&apos;re strictly more available than your opponent
+        (ties don&apos;t count).
       </p>
     </div>
+  );
+}
+
+/** Two sub-headers for a single round group: "Players" and "Pts", both
+ *  independently sortable. Rendered as part of the second header row. */
+function RoundSubHeaders({
+  round,
+  current,
+  dir,
+  onClick,
+}: {
+  round: ByeRound;
+  current: SortKey;
+  dir: SortDir;
+  onClick: (key: SortKey) => void;
+}) {
+  const playersKey = roundPlayersKey(round);
+  const ptsKey = roundPtsKey(round);
+  return (
+    <>
+      <th className="px-2 pb-2 text-center border-l border-border/40">
+        <SortBtn label="Players" sortKey={playersKey} current={current} dir={dir} onClick={onClick} />
+      </th>
+      <th className="px-2 pb-2 text-center">
+        <SortBtn label="Pts" sortKey={ptsKey} current={current} dir={dir} onClick={onClick} />
+      </th>
+    </>
+  );
+}
+
+/** A pair of body cells for one round: count-graded Players cell + points-graded Pts cell. */
+function RoundDataCells({
+  round,
+  cell,
+  countMeta,
+  ptsMeta,
+}: {
+  round: ByeRound;
+  cell: PerRoundCell;
+  countMeta: { bg: string; fg: string; label: string };
+  ptsMeta: { bg: string; fg: string; label: string };
+}) {
+  return (
+    <>
+      <td
+        className="px-2 py-2 text-center align-middle border-l border-border/40"
+        title={`R${round}: vs ${cell.oppShortName} — ${countMeta.label} (${cell.count} unavailable)`}
+      >
+        <div
+          className="rounded-md py-1.5 px-1 leading-tight font-bold"
+          style={{ background: countMeta.bg, color: countMeta.fg }}
+        >
+          <div className="text-base tabular-nums">{cell.count}</div>
+          <div className="text-[9px] uppercase tracking-wider opacity-80 truncate">
+            vs {cell.oppShortName}
+          </div>
+        </div>
+      </td>
+      <td
+        className="px-2 py-2 text-center align-middle"
+        title={`R${round}: vs ${cell.oppShortName} — ${ptsMeta.label} (${cell.pointsLost} avg lost)`}
+      >
+        <div
+          className="rounded-md py-1.5 px-1 leading-tight font-bold"
+          style={{ background: ptsMeta.bg, color: ptsMeta.fg }}
+        >
+          <div className="text-base tabular-nums">{cell.pointsLost}</div>
+          <div className="text-[9px] uppercase tracking-wider opacity-80 truncate">
+            avg lost
+          </div>
+        </div>
+      </td>
+    </>
+  );
+}
+
+/** Compact sort button used inside the per-round sub-header cells. */
+function SortBtn({
+  label,
+  sortKey,
+  current,
+  dir,
+  onClick,
+}: {
+  label: string;
+  sortKey: SortKey;
+  current: SortKey;
+  dir: SortDir;
+  onClick: (key: SortKey) => void;
+}) {
+  const isActive = current === sortKey;
+  return (
+    <button
+      onClick={() => onClick(sortKey)}
+      className={cn(
+        'inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider hover:text-foreground transition-colors',
+        isActive ? 'text-foreground' : 'text-muted-foreground'
+      )}
+    >
+      <span>{label}</span>
+      {isActive ? (
+        dir === 'asc' ? <ArrowUp size={10} /> : <ArrowDown size={10} />
+      ) : (
+        <ArrowUpDown size={10} className="opacity-40" />
+      )}
+    </button>
   );
 }
 
@@ -324,6 +443,7 @@ function Th({
   dir,
   onClick,
   align,
+  rowSpan,
 }: {
   label: string;
   sublabel?: string;
@@ -333,12 +453,16 @@ function Th({
   dir: SortDir;
   onClick: (key: SortKey) => void;
   align: 'left' | 'center';
+  /** When provided, the cell spans both header rows so it sits beside the
+   *  per-round grouped columns. */
+  rowSpan?: number;
 }) {
   const isActive = current === sortKey;
   return (
     <th
+      rowSpan={rowSpan}
       className={cn(
-        'px-3 py-2.5 text-[11px] font-bold uppercase tracking-wider text-muted-foreground select-none',
+        'px-3 py-2.5 text-[11px] font-bold uppercase tracking-wider text-muted-foreground select-none align-middle',
         align === 'center' ? 'text-center' : 'text-left'
       )}
     >
