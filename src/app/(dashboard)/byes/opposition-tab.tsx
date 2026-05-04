@@ -212,7 +212,7 @@ export default function OppositionTab({ data }: { data: ByeData }) {
                 <th
                   key={round}
                   colSpan={2}
-                  className="px-2 pt-2.5 pb-1 text-center text-[12px] font-bold text-foreground border-l border-border/40"
+                  className="px-2 pt-2.5 pb-1 text-center text-[12px] font-bold text-foreground border-l-2 border-border"
                 >
                   R{round}
                 </th>
@@ -289,7 +289,7 @@ export default function OppositionTab({ data }: { data: ByeData }) {
                         <td
                           key={`${round}-empty`}
                           colSpan={2}
-                          className="px-2 py-3 text-center text-muted-foreground border-l border-border/40"
+                          className="px-2 py-3 text-center text-muted-foreground border-l-2 border-border"
                         >
                           —
                         </td>
@@ -337,7 +337,7 @@ function RoundSubHeaders({
   const ptsKey = roundPtsKey(round);
   return (
     <>
-      <th className="px-2 pb-2 text-center border-l border-border/40">
+      <th className="px-2 pb-2 text-center border-l-2 border-border">
         <SortBtn label="Players" sortKey={playersKey} current={current} dir={dir} onClick={onClick} />
       </th>
       <th className="px-2 pb-2 text-center">
@@ -355,11 +355,20 @@ function RoundDataCells({
   cell: PerRoundCell;
 }) {
   const meta = IMPACT_META[cell.grade];
+  // Subtle severity cue — tint both cells in the round group with the grade's
+  // ~10% alpha colour. 'none' stays fully neutral so empty/full-roster rounds
+  // don't add visual noise.
+  const tint = cell.grade === 'none' ? undefined : meta.bg;
+  const cellStyle = tint
+    ? { background: `color-mix(in srgb, ${tint} 8%, transparent)` }
+    : undefined;
+  const titleAttr = `R${round} vs ${cell.oppShortName} — ${meta.label} (${cell.count} out, ${cell.pointsLost} pts lost)`;
   return (
     <>
       <td
-        className="px-2 py-2.5 text-center align-middle border-l border-border/40"
-        title={`R${round} vs ${cell.oppShortName} — ${meta.label} (${cell.count} out, ${cell.pointsLost} pts lost)`}
+        className="px-2 py-2.5 text-center align-middle border-l-2 border-border"
+        style={cellStyle}
+        title={titleAttr}
       >
         <div className="text-sm font-bold tabular-nums">{cell.count}</div>
         <div className="text-[9px] text-muted-foreground/50 truncate">
@@ -368,7 +377,8 @@ function RoundDataCells({
       </td>
       <td
         className="px-2 py-2.5 text-center align-middle"
-        title={`R${round} vs ${cell.oppShortName} — ${meta.label} (${cell.count} out, ${cell.pointsLost} pts lost)`}
+        style={cellStyle}
+        title={titleAttr}
       >
         <div className="text-sm font-bold tabular-nums">{cell.pointsLost}</div>
       </td>
