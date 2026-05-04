@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getCurrentUser } from '@/lib/auth';
 import { createSupabaseServerClient } from '@/lib/supabase-server';
-import { computeInjuryTrend, type SnapshotPoint, type InjuryTrend } from '@/lib/afl-injuries';
+import { computeInjuryTrend, resolveInjuryPlayerIds, type SnapshotPoint, type InjuryTrend } from '@/lib/afl-injuries';
 import { getCurrentRound } from '@/lib/round';
 import { cleanPositionDisplay } from '@/lib/trades/positions';
 import { TEAMS } from '@/lib/constants';
@@ -71,7 +71,7 @@ export async function GET() {
     .order('club_code', { ascending: true })
     .order('player_name', { ascending: true });
 
-  const injuries = (rows ?? []) as Array<{
+  const injuriesRaw = (rows ?? []) as Array<{
     player_name: string;
     player_id: number | null;
     club_code: string;
@@ -82,6 +82,47 @@ export async function GET() {
     source_updated_at: string | null;
     scraped_at: string;
   }>;
+
+  // v12.3.4 — Re-resolve player_ids at query time using the live matcher
+  // so the display self-heals after matcher tightenings. Without this,
+  // afl_injuries rows still carry the player_id assigned by whatever
+  // matcher version was running when they were synced. Drift back into
+  // the DB so snapshots & other readers converge.
+  const fresh = await resolveInjuryPlayerIds(
+    supabase,
+    injuriesRaw.map((r) => ({ player_name: r.player_name, club_code: r.club_code }))
+  );
+  const corrections: Array<{ player_name: string; club_code: string; player_id: number | null }> = [];
+  const injuries = injuriesRaw.map((r) => {
+    const freshId = fresh.get(`${r.player_name}::${r.club_code}`) ?? null;
+    if (freshId !== r.player_id) {
+      corrections.push({ player_name: r.player_name, club_code: r.club_code, player_id: freshId });
+    }
+    return { ...r, player_id: freshId };
+  });
+  // Persist corrections in the background — non-blocking. UPDATE one row
+  // per drifted record; afl_injury_snapshots player_id is also corrected
+  // so the trend computer reads accurate history.
+  if (corrections.length > 0) {
+    Promise.all(
+      corrections.map((c) =>
+        supabase
+          .from('afl_injuries')
+          .update({ player_id: c.player_id })
+          .eq('player_name', c.player_name)
+          .eq('club_code', c.club_code)
+      )
+    ).catch((e) => console.error('[afl-injuries/list] correction write failed', e));
+    Promise.all(
+      corrections.map((c) =>
+        supabase
+          .from('afl_injury_snapshots')
+          .update({ player_id: c.player_id })
+          .eq('player_name', c.player_name)
+          .eq('club_code', c.club_code)
+      )
+    ).catch((e) => console.error('[afl-injuries/list] snapshot correction write failed', e));
+  }
 
   // v12.3.2 — Resolve LOMAF rosters from ONLY the most recent round.
   // Using historical player_rounds was matching players to whichever

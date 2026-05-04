@@ -648,6 +648,46 @@ export function formatTrendForPrompt(trend: InjuryTrend): string | null {
 }
 
 /**
+ * Re-resolve player_ids for a list of (player_name, club_code) pairs
+ * using the current strict matcher. Used by the /injuries query layer
+ * to self-heal stale player_id assignments — the matcher logic
+ * tightens over time, but afl_injuries rows only get re-resolved at
+ * sync. This way the displayed result always reflects the live matcher.
+ */
+export async function resolveInjuryPlayerIds(
+  supabase: SB,
+  pairs: Array<{ player_name: string; club_code: string }>
+): Promise<Map<string, number | null>> {
+  const out = new Map<string, number | null>();
+  if (pairs.length === 0) return out;
+
+  // Build the same byName lookup the sync uses.
+  const { data: prRows } = await supabase
+    .from('player_rounds')
+    .select('player_id, player_name, club, round_number')
+    .order('round_number', { ascending: false });
+  const seen = new Set<number>();
+  const byName = new Map<string, PlayerLookupRow[]>();
+  for (const r of (prRows ?? []) as Array<{
+    player_id: number;
+    player_name: string;
+    club: string | null;
+    round_number: number;
+  }>) {
+    if (seen.has(r.player_id)) continue;
+    seen.add(r.player_id);
+    const key = normaliseName(r.player_name);
+    if (!byName.has(key)) byName.set(key, []);
+    byName.get(key)!.push({ player_id: r.player_id, player_name: r.player_name, club: r.club });
+  }
+
+  for (const p of pairs) {
+    out.set(`${p.player_name}::${p.club_code}`, resolvePlayerId(p.player_name, p.club_code, byName));
+  }
+  return out;
+}
+
+/**
  * Pull all snapshots for a set of player_ids in one query. Caller
  * groups by player_id and runs computeInjuryTrend.
  */
