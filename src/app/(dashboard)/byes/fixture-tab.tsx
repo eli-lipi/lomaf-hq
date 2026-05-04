@@ -67,18 +67,37 @@ export default function FixtureTab({ data }: { data: ByeData }) {
   }
 
   return (
-    <div className="space-y-5">
-      {BYE_ROUNDS.map((round) => {
-        // Prefer DB-uploaded matchups so post-play data (with scores) wins
-        // once the matchups CSV is uploaded for these rounds. Fall back to
-        // the static LOMAF_BYE_FIXTURE so the tab is useful immediately.
-        const dbPairs = pairFromDb(fixtures[round], data.impactByRound[round]);
-        const pairs = dbPairs.length > 0
-          ? dbPairs
-          : pairFromStatic(round, data.impactByRound[round]);
-        return <FixtureRoundCard key={round} round={round} pairs={pairs} />;
-      })}
-    </div>
+    <>
+      {/* Quick-jump strip — anchors to each round so you can flip between
+          rounds without scrolling through the page. */}
+      <div className="sticky top-0 z-10 -mx-4 mb-4 px-4 py-2 bg-background/95 backdrop-blur border-b border-border flex flex-wrap gap-2">
+        <span className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground self-center">
+          Jump to:
+        </span>
+        {BYE_ROUNDS.map((round) => (
+          <a
+            key={round}
+            href={`#round-${round}`}
+            className="text-xs font-semibold px-2.5 py-1 rounded-full bg-muted text-foreground hover:bg-muted/70 transition-colors"
+          >
+            R{round}
+          </a>
+        ))}
+      </div>
+
+      <div className="space-y-6">
+        {BYE_ROUNDS.map((round) => {
+          // Prefer DB-uploaded matchups so post-play data (with scores) wins
+          // once the matchups CSV is uploaded for these rounds. Fall back to
+          // the static LOMAF_BYE_FIXTURE so the tab is useful immediately.
+          const dbPairs = pairFromDb(fixtures[round], data.impactByRound[round]);
+          const pairs = dbPairs.length > 0
+            ? dbPairs
+            : pairFromStatic(round, data.impactByRound[round]);
+          return <FixtureRoundCard key={round} round={round} pairs={pairs} />;
+        })}
+      </div>
+    </>
   );
 }
 
@@ -121,135 +140,187 @@ function FixtureRoundCard({ round, pairs }: { round: ByeRound; pairs: FixturePai
   const isBest16 = rule === 'best-16';
 
   return (
-    <section className="bg-card border border-border rounded-lg shadow-sm overflow-hidden">
-      <div className="px-5 py-4 border-b border-border flex flex-wrap items-center gap-3">
-        <div className="flex items-baseline gap-2">
-          <h2 className="text-xl font-bold tabular-nums">Round {round}</h2>
-          <span className="text-xs text-muted-foreground">
-            {clubs.length} {clubs.length === 1 ? 'club' : 'clubs'} on bye
-          </span>
-        </div>
+    <section
+      id={`round-${round}`}
+      className="bg-card border border-border rounded-lg shadow-sm overflow-hidden scroll-mt-20"
+    >
+      {/* Compact round header — round number, rule chip, bye clubs all on
+          one strip so the matchups dominate the card body. */}
+      <header className="px-5 py-3 border-b border-border bg-muted/10 flex flex-wrap items-center gap-x-4 gap-y-2">
+        <h2 className="text-lg font-bold tabular-nums">Round {round}</h2>
         <span
           className={cn(
-            'ml-auto text-xs font-semibold px-2.5 py-1 rounded-full',
+            'text-[11px] font-semibold px-2 py-0.5 rounded-full',
             isBest16 ? 'bg-[#1A56DB] text-white' : 'bg-muted text-muted-foreground'
           )}
         >
           {isBest16 ? 'Best 16' : 'Play normally'}
         </span>
-      </div>
-
-      <div className="px-5 py-4 border-b border-border bg-muted/10">
-        <p className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground mb-3">
-          Clubs on bye
-        </p>
-        <div className="flex flex-wrap gap-2">
+        <div className="flex items-center gap-1.5 ml-auto flex-wrap">
+          <span className="text-[11px] uppercase tracking-wider text-muted-foreground">
+            Bye:
+          </span>
           {clubs.map((code) => (
-            <div
+            <span
               key={code}
-              className="flex items-center gap-1.5 bg-card border border-border rounded-lg px-2 py-1"
+              className="inline-flex items-center gap-1 text-[11px] font-medium"
+              title={AFL_CLUBS[code]?.name ?? code}
             >
-              <ClubBadge code={code} size={20} />
-              <span className="text-xs font-medium">{AFL_CLUBS[code]?.name ?? code}</span>
-            </div>
+              <ClubBadge code={code} size={18} />
+            </span>
           ))}
         </div>
-      </div>
+      </header>
 
-      <div className="px-5 py-4">
-        <p className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground mb-3">
-          LOMAF fixture
-        </p>
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-          {pairs.map((pair) => (
-            <FixtureRow key={`${pair.a.team.team_id}-${pair.b.team.team_id}`} pair={pair} />
-          ))}
-        </div>
-      </div>
+      {/* Matchups — one wide row per matchup, no two-column squeeze. */}
+      <ul className="divide-y divide-border">
+        {pairs.map((pair) => (
+          <FixtureRow key={`${pair.a.team.team_id}-${pair.b.team.team_id}`} pair={pair} />
+        ))}
+      </ul>
     </section>
   );
 }
 
 function FixtureRow({ pair }: { pair: FixturePair }) {
   const [expanded, setExpanded] = useState(false);
-  const hasUnavailable = pair.a.unavailable.length + pair.b.unavailable.length > 0;
+  const totalUnavailable = pair.a.unavailable.length + pair.b.unavailable.length;
+  const canExpand = totalUnavailable > 0;
+
+  // Worse impact gets visual weight in the divider so coaches can scan
+  // for one-sided matchups at a glance.
+  const delta = Math.abs(pair.a.unavailable.length - pair.b.unavailable.length);
+  const heavier =
+    pair.a.unavailable.length > pair.b.unavailable.length ? 'a'
+    : pair.b.unavailable.length > pair.a.unavailable.length ? 'b'
+    : null;
+
   return (
-    <div className="bg-card border border-border rounded-lg overflow-hidden">
+    <li>
       <button
-        onClick={() => hasUnavailable && setExpanded((v) => !v)}
-        disabled={!hasUnavailable}
+        onClick={() => canExpand && setExpanded((v) => !v)}
+        disabled={!canExpand}
         className={cn(
-          'w-full grid grid-cols-[1fr_auto_1fr] items-center gap-3 px-3 py-2.5',
-          hasUnavailable ? 'hover:bg-muted/20 cursor-pointer' : 'cursor-default'
+          'w-full text-left px-4 py-3 transition-colors',
+          canExpand ? 'hover:bg-muted/20 cursor-pointer' : 'cursor-default'
         )}
       >
-        <CoachSide row={pair.a} align="left" />
-        <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">vs</span>
-        <CoachSide row={pair.b} align="right" />
+        <div className="flex flex-col gap-2">
+          <CoachInline row={pair.a} accentSide={heavier === 'a'} />
+
+          <div className="flex items-center gap-2 pl-1">
+            <span className="text-[10px] font-bold uppercase tracking-[0.15em] text-muted-foreground">
+              vs
+            </span>
+            <span className="h-px flex-1 bg-border" />
+            {delta > 0 ? (
+              <span className="text-[10px] tabular-nums text-muted-foreground">
+                {delta}-player gap
+              </span>
+            ) : (
+              <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                even
+              </span>
+            )}
+            {canExpand && (
+              expanded
+                ? <ChevronDown size={14} className="text-muted-foreground" />
+                : <ChevronRight size={14} className="text-muted-foreground" />
+            )}
+          </div>
+
+          <CoachInline row={pair.b} accentSide={heavier === 'b'} />
+        </div>
       </button>
 
-      {hasUnavailable && (
-        <div className="px-3 pb-2 -mt-1 flex items-center justify-end">
-          <span className="text-[10px] text-muted-foreground inline-flex items-center gap-1">
-            {expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-            {expanded ? 'Hide' : 'Show'} unavailable players
-          </span>
+      {canExpand && expanded && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 border-t border-border/50">
+          <UnavailableList row={pair.a} />
+          <UnavailableList row={pair.b} divider />
         </div>
       )}
-
-      {hasUnavailable && expanded && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-0 border-t border-border/50">
-          <UnavailableList row={pair.a} side="left" />
-          <UnavailableList row={pair.b} side="right" />
-        </div>
-      )}
-    </div>
+    </li>
   );
 }
 
-function CoachSide({ row, align }: { row: CoachRoundImpact; align: 'left' | 'right' }) {
+function CoachInline({
+  row,
+  accentSide,
+}: {
+  row: CoachRoundImpact;
+  /** When true, this row's grade is the worse of the pair — bumps font weight on the pill. */
+  accentSide: boolean;
+}) {
   const teamColor = TEAM_COLOR_MAP[row.team.team_id] ?? '#6B7280';
   const meta = IMPACT_META[row.grade];
   return (
-    <div className={cn('flex items-center gap-2 min-w-0', align === 'right' && 'flex-row-reverse text-right')}>
-      <span aria-hidden className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: teamColor }} />
+    <div className="flex items-center gap-3 min-w-0">
+      <span
+        aria-hidden
+        className="w-3 h-3 rounded-full shrink-0"
+        style={{ background: teamColor }}
+      />
       <div className="flex-1 min-w-0">
         <div className="text-sm font-bold truncate" style={{ color: teamColor }}>
           {TEAM_SHORT_NAMES[row.team.team_id] ?? row.team.team_name}
         </div>
-        <div className={cn('flex items-center gap-1.5 mt-1', align === 'right' && 'justify-end')}>
-          <span
-            className="text-[10px] font-semibold px-2 py-0.5 rounded-full"
-            style={{ background: meta.bg, color: meta.fg }}
-          >
-            {meta.label}
-          </span>
-          <span className="text-[10px] tabular-nums text-muted-foreground">
-            {row.unavailable.length}/{row.rosterSize || '—'}
-          </span>
+        <div className="text-[11px] text-muted-foreground truncate">
+          {row.team.team_name}
         </div>
       </div>
+      <span
+        className={cn(
+          'text-[11px] px-2.5 py-1 rounded-full shrink-0 tabular-nums',
+          accentSide ? 'font-bold ring-2 ring-offset-1 ring-current/20' : 'font-semibold'
+        )}
+        style={{ background: meta.bg, color: meta.fg }}
+      >
+        {meta.label}
+      </span>
+      <span className="text-xs tabular-nums text-muted-foreground shrink-0 w-14 text-right">
+        {row.unavailable.length}/{row.rosterSize || '—'}
+      </span>
     </div>
   );
 }
 
-function UnavailableList({ row, side }: { row: CoachRoundImpact; side: 'left' | 'right' }) {
+function UnavailableList({
+  row,
+  divider = false,
+}: {
+  row: CoachRoundImpact;
+  /** When true, render a divider against the previous panel (right side on desktop). */
+  divider?: boolean;
+}) {
   const teamColor = TEAM_COLOR_MAP[row.team.team_id] ?? '#6B7280';
   return (
-    <div className={cn('px-3 py-2.5 bg-muted/10', side === 'right' && 'sm:border-l border-border/50')}>
-      <p className="text-[10px] font-bold uppercase tracking-wider mb-1.5" style={{ color: teamColor }}>
+    <div className={cn('px-4 py-3 bg-muted/10', divider && 'sm:border-l border-border/50')}>
+      <p className="text-[10px] font-bold uppercase tracking-wider mb-2" style={{ color: teamColor }}>
         {TEAM_SHORT_NAMES[row.team.team_id] ?? row.team.team_name}
+        <span className="text-muted-foreground font-medium normal-case tracking-normal ml-1.5">
+          — {row.unavailable.length} unavailable
+        </span>
       </p>
       {row.unavailable.length === 0 ? (
         <p className="text-[11px] text-muted-foreground italic">Full squad available.</p>
       ) : (
         <ul className="space-y-1">
           {row.unavailable.map((p) => (
-            <li key={p.player_id} className="flex items-center gap-1.5 text-[11px] leading-snug">
-              <ClubBadge code={p.club} size={14} />
+            <li key={p.player_id} className="flex items-center gap-2 text-[11px] leading-snug">
+              <ClubBadge code={p.club} size={16} />
               <span className="truncate flex-1">{p.player_name}</span>
-              {p.injured && (
-                <HeartPulse size={10} className="text-rose-600 shrink-0" />
+              {p.injured ? (
+                <span
+                  title={p.byed ? 'Bye + predicted injured' : 'Predicted injured'}
+                  className="flex items-center gap-0.5 text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded bg-rose-100 text-rose-700"
+                >
+                  <HeartPulse size={9} />
+                  INJ
+                </span>
+              ) : (
+                <span className="text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded bg-muted text-muted-foreground">
+                  BYE
+                </span>
               )}
             </li>
           ))}
@@ -258,4 +329,3 @@ function UnavailableList({ row, side }: { row: CoachRoundImpact; side: 'left' | 
     </div>
   );
 }
-
