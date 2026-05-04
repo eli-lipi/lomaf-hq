@@ -85,7 +85,7 @@ export default function FixtureTab({ data }: { data: ByeData }) {
         ))}
       </div>
 
-      <div className="space-y-6">
+      <div className="space-y-8">
         {BYE_ROUNDS.map((round) => {
           // Prefer DB-uploaded matchups so post-play data (with scores) wins
           // once the matchups CSV is uploaded for these rounds. Fall back to
@@ -94,7 +94,7 @@ export default function FixtureTab({ data }: { data: ByeData }) {
           const pairs = dbPairs.length > 0
             ? dbPairs
             : pairFromStatic(round, data.impactByRound[round]);
-          return <FixtureRoundCard key={round} round={round} pairs={pairs} />;
+          return <FixtureRoundSection key={round} round={round} pairs={pairs} />;
         })}
       </div>
     </>
@@ -134,20 +134,17 @@ function pairFromStatic(
   return pairs;
 }
 
-function FixtureRoundCard({ round, pairs }: { round: ByeRound; pairs: FixturePair[] }) {
+function FixtureRoundSection({ round, pairs }: { round: ByeRound; pairs: FixturePair[] }) {
   const clubs = AFL_CLUB_BYES[round];
   const rule = getByeRule(round);
   const isBest16 = rule === 'best-16';
 
   return (
-    <section
-      id={`round-${round}`}
-      className="bg-card border border-border rounded-lg shadow-sm overflow-hidden scroll-mt-20"
-    >
-      {/* Compact round header — round number, rule chip, bye clubs all on
-          one strip so the matchups dominate the card body. */}
-      <header className="px-5 py-3 border-b border-border bg-muted/10 flex flex-wrap items-center gap-x-4 gap-y-2">
-        <h2 className="text-lg font-bold tabular-nums">Round {round}</h2>
+    <section id={`round-${round}`} className="scroll-mt-20">
+      {/* Round banner — sits on the page background like AFL's day label
+          rows. Not a card; the matchups below are the cards. */}
+      <header className="px-1 pb-3 mb-3 border-b border-border flex flex-wrap items-center gap-x-3 gap-y-2">
+        <h2 className="text-xl font-bold tabular-nums">Round {round}</h2>
         <span
           className={cn(
             'text-[11px] font-semibold px-2 py-0.5 rounded-full',
@@ -163,17 +160,18 @@ function FixtureRoundCard({ round, pairs }: { round: ByeRound; pairs: FixturePai
           {clubs.map((code) => (
             <span
               key={code}
-              className="inline-flex items-center gap-1 text-[11px] font-medium"
+              className="inline-flex items-center"
               title={AFL_CLUBS[code]?.name ?? code}
             >
-              <ClubBadge code={code} size={18} />
+              <ClubBadge code={code} size={20} />
             </span>
           ))}
         </div>
       </header>
 
-      {/* Matchups — one wide row per matchup, no two-column squeeze. */}
-      <ul className="divide-y divide-border">
+      {/* Matchups — each one a standalone card with its own shadow + gap
+          so they read as separate games, not rows of a table. */}
+      <ul className="space-y-3">
         {pairs.map((pair) => (
           <FixtureRow key={`${pair.a.team.team_id}-${pair.b.team.team_id}`} pair={pair} />
         ))}
@@ -196,7 +194,7 @@ function FixtureRow({ pair }: { pair: FixturePair }) {
     : null;
 
   return (
-    <li>
+    <li className="bg-card border border-border rounded-lg shadow-sm hover:shadow-md transition-shadow overflow-hidden">
       <button
         onClick={() => canExpand && setExpanded((v) => !v)}
         disabled={!canExpand}
