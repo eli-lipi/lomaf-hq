@@ -2,10 +2,10 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { TEAMS } from '@/lib/constants';
-import type { InjuryListPlayer, InjuryListResponse } from '@/app/api/afl-injuries/list/route';
-import type { InjuryTrend, SnapshotPoint } from '@/lib/afl-injuries';
+import type { InjuryListPlayer, InjuryListResponse, InjuryRoundCell } from '@/app/api/afl-injuries/list/route';
+import type { InjuryTrend } from '@/lib/afl-injuries';
 import { cn } from '@/lib/utils';
-import { TrendingDown, TrendingUp, AlertTriangle, Clock, Sparkles, RefreshCw } from 'lucide-react';
+import { TrendingDown, TrendingUp, AlertTriangle, Clock } from 'lucide-react';
 
 type ViewMode = 'lomaf' | 'afl';
 
@@ -301,18 +301,19 @@ function PlayerRow({
   return (
     <div
       className={cn(
-        'flex items-start gap-3 px-3 py-2.5 rounded-md border border-border',
+        'flex items-start gap-3 px-3 py-3 rounded-md border border-border',
         compact ? '' : 'bg-background'
       )}
     >
       <div className="min-w-0 flex-1">
         <div className="flex items-baseline gap-2 flex-wrap">
           <p className="text-sm font-semibold">{player.player_name}</p>
-          {player.lomaf_position && (
-            <span className="text-[11px] text-muted-foreground uppercase tracking-wider">
-              {player.lomaf_position}
-            </span>
-          )}
+          {/* Position + AFL club, comma-separated. Position only shows
+              when it's a real position (DEF/MID/FWD/RUC or DPP combo);
+              BN/UTL are stripped server-side. */}
+          <span className="text-[11px] text-muted-foreground uppercase tracking-wider">
+            {[player.lomaf_position, player.club_name].filter(Boolean).join(' · ')}
+          </span>
           {showLomaf && player.lomaf_team_name && (
             <span className="text-[11px] text-primary">→ {player.lomaf_team_name}</span>
           )}
@@ -329,11 +330,15 @@ function PlayerRow({
             <span className="ml-1.5">· listed {formatYmd(player.source_updated_at)}</span>
           )}
         </p>
-        <div className="mt-2 flex items-center gap-3">
-          <TrendChip trend={player.trend} />
-          {player.trend.snapshots.length >= 2 && (
-            <Sparkline points={player.trend.snapshots} />
-          )}
+        {/* Trend chip — only show when there's a meaningful read */}
+        {player.trend.status !== 'new' && (
+          <div className="mt-2">
+            <TrendChip trend={player.trend} />
+          </div>
+        )}
+        {/* Per-round picker */}
+        <div className="mt-2.5">
+          <RoundPicker rounds={player.rounds} />
         </div>
       </div>
     </div>
@@ -345,7 +350,7 @@ function TrendChip({ trend }: { trend: InjuryTrend }) {
     return (
       <span className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200">
         <AlertTriangle size={11} />
-        Stalled +{trend.slippageWeeks}w
+        Stalled +{trend.slippageWeeks}w · {trend.weeksOnList}w on list
       </span>
     );
   }
@@ -353,7 +358,7 @@ function TrendChip({ trend }: { trend: InjuryTrend }) {
     return (
       <span className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full bg-green-50 text-green-700 border border-green-200">
         <TrendingDown size={11} />
-        Accelerating
+        Healing ahead of schedule
       </span>
     );
   }
@@ -362,14 +367,6 @@ function TrendChip({ trend }: { trend: InjuryTrend }) {
       <span className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full bg-red-50 text-red-700 border border-red-200">
         <TrendingUp size={11} />
         Worsened
-      </span>
-    );
-  }
-  if (trend.status === 'new') {
-    return (
-      <span className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200">
-        <Sparkles size={11} />
-        New listing
       </span>
     );
   }
@@ -382,42 +379,52 @@ function TrendChip({ trend }: { trend: InjuryTrend }) {
 }
 
 /**
- * Compact SVG sparkline — return_max_weeks over time. Higher = further from
- * return; ideal trajectory is a downward slope. Flat = stalled (visible).
+ * Round-by-round picker. One tile per LOMAF round. The tile colour
+ * tells the play-status story:
+ *   - green: scored points in that round
+ *   - red:   on the AFL injury list during that round and didn't score
+ *   - grey:  didn't score, no injury listing on file
+ *   - blank: round hasn't been played yet
+ *
+ * The tile text shows the AFL-listed ETA when the snapshot for that
+ * round had one (e.g. R8 · "2-3w"). Otherwise just the round number.
  */
-function Sparkline({ points }: { points: SnapshotPoint[] }) {
-  const numericPoints = points
-    .map((p, i) => ({
-      i,
-      max: p.return_max_weeks,
-      date: p.source_updated_at,
-    }))
-    .filter((p): p is { i: number; max: number; date: string } => p.max != null);
-
-  if (numericPoints.length < 2) {
-    return null;
-  }
-  const w = 80;
-  const h = 22;
-  const xs = numericPoints.map((p) => p.i);
-  const ys = numericPoints.map((p) => p.max);
-  const minX = Math.min(...xs);
-  const maxX = Math.max(...xs);
-  const minY = 0;
-  const maxY = Math.max(...ys, 1);
-  const xScale = (x: number) => ((x - minX) / Math.max(1, maxX - minX)) * (w - 4) + 2;
-  const yScale = (y: number) => h - 2 - ((y - minY) / Math.max(1, maxY - minY)) * (h - 4);
-  const d = numericPoints.map((p, idx) => `${idx === 0 ? 'M' : 'L'}${xScale(p.i)},${yScale(p.max)}`).join(' ');
-  const last = numericPoints[numericPoints.length - 1];
+function RoundPicker({ rounds }: { rounds: InjuryRoundCell[] }) {
+  if (rounds.length === 0) return null;
   return (
-    <svg width={w} height={h} className="shrink-0" aria-label="Return ETA over time">
-      <path d={d} stroke="currentColor" strokeWidth={1.5} fill="none" className="text-muted-foreground" />
-      <circle
-        cx={xScale(last.i)}
-        cy={yScale(last.max)}
-        r={2}
-        className="fill-primary"
-      />
-    </svg>
+    <div className="flex flex-wrap gap-1">
+      {rounds.map((c) => {
+        const played = c.points != null && c.points > 0;
+        const dnpKnown = c.points === 0;
+        const onList = c.eta != null;
+        const isFuture = c.points == null && !onList;
+        // Background:
+        //   played -> green
+        //   dnp + listed -> red
+        //   dnp without listing -> grey
+        //   future / unknown -> outlined
+        let cls = 'bg-muted text-muted-foreground border-border';
+        if (played) cls = 'bg-green-100 text-green-800 border-green-200';
+        else if (dnpKnown && onList) cls = 'bg-red-100 text-red-800 border-red-200';
+        else if (dnpKnown) cls = 'bg-gray-200 text-gray-600 border-gray-300';
+        else if (onList && isFuture) cls = 'bg-amber-50 text-amber-800 border-amber-200';
+        const title = `R${c.round}${
+          c.points != null ? ` · ${c.points} pts` : ' · not played'
+        }${c.eta ? ` · listed ${c.eta}` : ''}${c.injury ? ` · ${c.injury}` : ''}`;
+        return (
+          <span
+            key={c.round}
+            title={title}
+            className={cn(
+              'inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] tabular-nums border whitespace-nowrap',
+              cls
+            )}
+          >
+            <span className="font-semibold">R{c.round}</span>
+            {c.eta && <span className="font-normal opacity-90">· {c.eta}</span>}
+          </span>
+        );
+      })}
+    </div>
   );
 }

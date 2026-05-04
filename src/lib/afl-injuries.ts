@@ -285,11 +285,13 @@ interface PlayerLookupRow {
 
 /**
  * Resolve AFL.com.au player_name + club_code to a LOMAF player_id.
- * Strategy:
- *   1. Exact normalised name + club-code-set match.
- *   2. Last-name + club-code-set match.
- *   3. Exact normalised name without club (fallback).
- *   4. null if none matched.
+ *
+ * v12.3.3 — STRICT club-matching. The earlier 'unique last name in
+ * LOMAF' fallback was matching e.g. Josh Kelly (GWS, injured) to
+ * Tim Kelly's player_id (WCE) because Kelly was unique in LOMAF.
+ * Same with Avery Thomas vs Harvey Thomas. AFL club is now required
+ * for any match. Two players with the same last name on the same
+ * AFL club is a documented edge case the user is happy to live with.
  */
 function resolvePlayerId(
   playerName: string,
@@ -298,6 +300,7 @@ function resolvePlayerId(
 ): number | null {
   const norm = normaliseName(playerName);
   const fantasyCodes = FANTASY_CLUB_BY_AFL_CODE[clubCode] ?? [];
+  if (fantasyCodes.length === 0) return null;
 
   const candidates = byName.get(norm) ?? [];
   // Exact name + matching club.
@@ -305,25 +308,19 @@ function resolvePlayerId(
     if (c.club && fantasyCodes.includes(c.club)) return c.player_id;
   }
 
-  // Last-name + matching club.
+  // Last-name + matching club. If two players on the same AFL club share
+  // a last name, first hit wins — acceptable error per user.
   const lastName = norm.split(' ').slice(-1)[0];
   if (lastName) {
-    const lastNameCandidates: PlayerLookupRow[] = [];
     for (const [k, list] of byName.entries()) {
-      if (k.split(' ').slice(-1)[0] === lastName) lastNameCandidates.push(...list);
+      if (k.split(' ').slice(-1)[0] !== lastName) continue;
+      for (const c of list) {
+        if (c.club && fantasyCodes.includes(c.club)) return c.player_id;
+      }
     }
-    for (const c of lastNameCandidates) {
-      if (c.club && fantasyCodes.includes(c.club)) return c.player_id;
-    }
-    // If only one player league-wide has that last name, accept the match.
-    const uniquePlayerIds = Array.from(new Set(lastNameCandidates.map((c) => c.player_id)));
-    if (uniquePlayerIds.length === 1) return uniquePlayerIds[0];
   }
 
-  // Exact name without club fallback (single match only).
-  const uniqueByName = Array.from(new Set(candidates.map((c) => c.player_id)));
-  if (uniqueByName.length === 1) return uniqueByName[0];
-
+  // No club-matching candidate — refuse to guess across clubs.
   return null;
 }
 

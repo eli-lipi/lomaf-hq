@@ -3,7 +3,17 @@ import { getCurrentUser } from '@/lib/auth';
 import { createSupabaseServerClient } from '@/lib/supabase-server';
 import { computeInjuryTrend, type SnapshotPoint, type InjuryTrend } from '@/lib/afl-injuries';
 import { getCurrentRound } from '@/lib/round';
+import { cleanPositionDisplay } from '@/lib/trades/positions';
 import { TEAMS } from '@/lib/constants';
+
+export interface InjuryRoundCell {
+  round: number;
+  points: number | null;
+  // ETA listed by AFL during this round, if any. Maps the snapshot to
+  // the LOMAF round that was current/upcoming when AFL published.
+  eta: string | null;
+  injury: string | null;
+}
 
 export interface InjuryListPlayer {
   player_name: string;
@@ -17,8 +27,12 @@ export interface InjuryListPlayer {
   // Resolved LOMAF rosters — null when not on a LOMAF roster.
   lomaf_team_id: number | null;
   lomaf_team_name: string | null;
+  // Cleaned to DEF / MID / FWD / RUC (or DPP combo). BN / UTL are
+  // lineup slots, not positions, so they're stripped.
   lomaf_position: string | null;
   trend: InjuryTrend;
+  /** Per-round timeline. Length = max(currentRound + 1, latest snapshot round). */
+  rounds: InjuryRoundCell[];
 }
 
 export interface InjuryListResponse {
@@ -109,6 +123,60 @@ export async function GET() {
     }
   }
 
+  // v12.3.3 — round-advance dates and per-round play data so the UI
+  // can render the round-tile picker.
+  let currentRound = await getCurrentRound(supabase);
+  if (currentRound === 0) {
+    const { data: maxRow } = await supabase
+      .from('player_rounds')
+      .select('round_number')
+      .order('round_number', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    currentRound = (maxRow as { round_number: number } | null)?.round_number ?? 0;
+  }
+  const { data: advanceRows } = await supabase
+    .from('round_advances')
+    .select('round_number, advanced_at')
+    .order('round_number', { ascending: true });
+  const advances = (advanceRows ?? []) as Array<{ round_number: number; advanced_at: string }>;
+
+  // Per-player round-by-round score data for ALL listed players, not just
+  // matched ones — so the AFL Club view can show a journeyman's
+  // played/DNP record even if they're off LOMAF rosters.
+  const allInjuredIds = injuries.map((r) => r.player_id).filter((id): id is number => id != null);
+  const playerRoundsByPlayer = new Map<number, Map<number, number | null>>();
+  if (allInjuredIds.length > 0) {
+    const { data: prAll } = await supabase
+      .from('player_rounds')
+      .select('player_id, round_number, points')
+      .in('player_id', allInjuredIds)
+      .gte('round_number', 1);
+    for (const r of (prAll ?? []) as Array<{
+      player_id: number;
+      round_number: number;
+      points: number | null;
+    }>) {
+      if (!playerRoundsByPlayer.has(r.player_id)) playerRoundsByPlayer.set(r.player_id, new Map());
+      playerRoundsByPlayer.get(r.player_id)!.set(r.round_number, r.points);
+    }
+  }
+
+  // Map a snapshot's source_updated_at → the LOMAF round it applies to.
+  // AFL updates Tuesday night; the listing applies to the round about to
+  // start. So: snapshot maps to the FIRST round whose advanced_at is
+  // AFTER the snapshot date. If nothing's been advanced yet after the
+  // snapshot, the listing applies to the next-not-yet-advanced round.
+  const snapshotToRound = (sourceDate: string | null): number | null => {
+    if (!sourceDate) return null;
+    const t = Date.parse(sourceDate + 'T00:00:00Z');
+    if (Number.isNaN(t)) return null;
+    for (const a of advances) {
+      if (Date.parse(a.advanced_at) > t) return a.round_number;
+    }
+    return currentRound + 1;
+  };
+
   // Pull all snapshots in one shot.
   const snapshotsByPlayer = new Map<number, SnapshotPoint[]>();
   // Also key by name+club for unmatched (player_id null) injuries.
@@ -155,6 +223,37 @@ export async function GET() {
     const trend = computeInjuryTrend(points);
     const roster = r.player_id != null ? rosterByPlayer.get(r.player_id) : undefined;
     const lomafTeam = roster ? TEAMS.find((t) => t.team_id === roster.team_id) : null;
+
+    // Build the per-round timeline.
+    const playerRounds = (r.player_id != null && playerRoundsByPlayer.get(r.player_id)) || new Map<number, number | null>();
+    const etaByRound = new Map<number, string>();
+    const injuryByRound = new Map<number, string>();
+    for (const s of points) {
+      const rd = snapshotToRound(s.source_updated_at);
+      if (rd != null) {
+        if (s.estimated_return) etaByRound.set(rd, s.estimated_return);
+      }
+    }
+    // Latest live injury text always lands on the listing's "current" round
+    // (snapshot dates only carry estimated_return; the injury label is in
+    // the live row).
+    const latestSnapshotRound = points.length > 0
+      ? snapshotToRound(points[points.length - 1].source_updated_at)
+      : null;
+    if (latestSnapshotRound != null && r.injury) injuryByRound.set(latestSnapshotRound, r.injury);
+
+    const maxRound = Math.max(currentRound + 1, ...Array.from(etaByRound.keys()), 1);
+    const rounds: InjuryRoundCell[] = [];
+    for (let rd = 1; rd <= maxRound; rd++) {
+      const points = playerRounds.has(rd) ? playerRounds.get(rd)! : null;
+      rounds.push({
+        round: rd,
+        points,
+        eta: etaByRound.get(rd) ?? null,
+        injury: injuryByRound.get(rd) ?? null,
+      });
+    }
+
     return {
       player_name: r.player_name,
       player_id: r.player_id,
@@ -166,8 +265,11 @@ export async function GET() {
       source_updated_at: r.source_updated_at,
       lomaf_team_id: roster?.team_id ?? null,
       lomaf_team_name: lomafTeam?.team_name ?? roster?.team_name ?? null,
-      lomaf_position: roster?.position ?? null,
+      // BN / UTL are lineup slots, not positions — strip them so the
+      // display only shows DEF / MID / FWD / RUC (or DPP combos).
+      lomaf_position: cleanPositionDisplay(roster?.position ?? null),
       trend,
+      rounds,
     };
   });
 
