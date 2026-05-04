@@ -190,6 +190,8 @@ export async function recalculateTradeForRound(
     // so the analysis can reference them when explaining underperformance.
     // v12 — also fold draft_position so the analysis knows the player's
     // league identity (drafted as DEF, drafted as MID, etc.).
+    // v12.3 — also fold the official AFL injury list (afl_injuries) so
+    // the AI cites real prognoses instead of inferring from DNP patterns.
     const tradePlayerById = new Map<
       number,
       {
@@ -198,16 +200,47 @@ export async function recalculateTradeForRound(
         draftPos?: string | null;
         draftPick?: number | null;
         expectedAvg?: number | null;
+        injuryLine?: string | null;
       }
     >();
+
+    // Pull official injuries for any of the trade's players in one go.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const playerIdsForInjuries = (players as unknown as any[]).map((p) => p.player_id);
+    let injuryById = new Map<number, { injury: string | null; estimated_return: string | null; source_updated_at: string | null }>();
+    if (playerIdsForInjuries.length > 0) {
+      const { data: injRows } = await supabase
+        .from('afl_injuries')
+        .select('player_id, injury, estimated_return, source_updated_at')
+        .in('player_id', playerIdsForInjuries);
+      for (const r of (injRows ?? []) as Array<{
+        player_id: number | null;
+        injury: string | null;
+        estimated_return: string | null;
+        source_updated_at: string | null;
+      }>) {
+        if (r.player_id != null) {
+          injuryById.set(r.player_id, {
+            injury: r.injury,
+            estimated_return: r.estimated_return,
+            source_updated_at: r.source_updated_at,
+          });
+        }
+      }
+    }
+    void injuryById;
+    const { formatInjuryForPrompt } = await import('../afl-injuries');
+
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     for (const tp of (players as unknown as any[])) {
+      const inj = injuryById.get(tp.player_id);
       tradePlayerById.set(tp.player_id, {
         tier: tp.expected_tier ?? null,
         ctx: tp.player_context ?? null,
         draftPos: tp.draft_position ?? null,
         draftPick: tp.draft_pick ?? null,
         expectedAvg: tp.expected_avg ?? null,
+        injuryLine: inj ? formatInjuryForPrompt(inj) : null,
       });
     }
 
@@ -241,6 +274,10 @@ export async function recalculateTradeForRound(
         : '(no rounds played since trade)';
       const tierStr = tradeMeta?.tier ? ` · expected tier: ${tradeMeta.tier}` : '';
       const ctxStr = tradeMeta?.ctx ? `\n    trader's note: "${tradeMeta.ctx}"` : '';
+      // v12.3 — surface the AFL.com.au official prognosis when present.
+      // The prompt instructs the model to cite this verbatim and to NOT
+      // re-infer injury status from DNPs when an official line exists.
+      const injStr = tradeMeta?.injuryLine ? `\n    ${tradeMeta.injuryLine}` : '';
       const draftPos = tradeMeta?.draftPos;
       const draftPick = tradeMeta?.draftPick;
       const livePos = cleanPositionDisplay(p.raw_position) ?? p.position ?? '?';
@@ -249,7 +286,7 @@ export async function recalculateTradeForRound(
         : livePos;
       const pickPart = draftPick && draftPick > 0 ? ` · Pick #${draftPick}` : '';
       const posStr = `${posPart}${pickPart}`;
-      return `- ${p.player_name} (${posStr}) → ${p.receiving_team_name}: expected avg ${expectedStr}${tierStr}, pre-trade season-to-date avg ${preStr} (small-sample, NOT a prediction), actual avg ${post}${gapStr}, ${p.rounds_played}/${p.rounds_possible} rounds, ${status}\n    scores: ${perRound}${ctxStr}`;
+      return `- ${p.player_name} (${posStr}) → ${p.receiving_team_name}: expected avg ${expectedStr}${tierStr}, pre-trade season-to-date avg ${preStr} (small-sample, NOT a prediction), actual avg ${post}${gapStr}, ${p.rounds_played}/${p.rounds_possible} rounds, ${status}\n    scores: ${perRound}${ctxStr}${injStr}`;
     });
 
     const teamAReceives = teamA.map((p) => p.player_name);

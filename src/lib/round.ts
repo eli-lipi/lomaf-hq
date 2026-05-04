@@ -280,7 +280,17 @@ export async function advanceToRound(supabase: SB, opts: AdvanceOpts): Promise<A
     }
   }
 
-  // 2. Recompute trades.
+  // 2a. Refresh the AFL injury cache before recomputing trades, so the
+  // narratives are written against the latest official prognoses.
+  // Non-fatal if it fails — recalc will still run with stale or no data.
+  try {
+    const { syncAflInjuries } = await import('./afl-injuries');
+    await syncAflInjuries(supabase);
+  } catch (e) {
+    console.error('[advanceToRound] AFL injury sync failed, continuing anyway:', e);
+  }
+
+  // 2b. Recompute trades.
   try {
     await recalculateAllTradesForRound(supabase, opts.round);
   } catch (e) {

@@ -161,6 +161,8 @@ USE THE ACTUAL NUMBERS — do not make up stats. Cite specific scores ("Rozee's 
 
 If the player breakdown includes a "trader's note" line (e.g., "Injured at trade time, expected return R5"), WEIGHT IT HEAVILY. A DNP that the trader explicitly priced in is fundamentally different from a surprise injury — your analysis should reflect that. Phrases like "the Mambas knew Rozee was injured but the timeline has slipped" are appropriate when the note flagged it; treat unforeseen DNPs as straight bad luck or buyer's-remorse material.
 
+If the player breakdown includes an "OFFICIAL INJURY" line, that's the AFL.com.au injury list — the official prognosis. CITE IT DIRECTLY by injury type and ETA (e.g. "Rozee is officially listed with a hamstring, 2-3 weeks"). DO NOT re-infer injury status from DNP patterns when an OFFICIAL INJURY line is present — the AFL's word beats your guess. The "(as of [date])" tells you when AFL last updated; if the date is more than a week old the prognosis may be stale, mention that.
+
 The season has 23 rounds. Finals start around R21. A "ton" is 100+, a "zero" is 0/DNP (injury or bye), a solid score is 80+. Typical stars average 90-120. Consider:
 - The original intent (from the context note) and whether it's playing out
 - Each player's actual avg vs. their EXPECTED avg (the explicit bet) — that's the trade's verdict on output. NOT pre-trade season-to-date avg.
@@ -280,6 +282,7 @@ You are given:
 - Each team's record + ladder position at trade time
 - Each team's line rankings at trade time (DEF / MID / FWD / RUC — lower rank = stronger line, 1 = best in league, 10 = worst)
 - Each player moved: position, the EXPECTED AVERAGE the receiving coach is betting on (not the player's prior avg — the bet), pre-trade season avg, and any per-player context the trader recorded ("injured at trade time", "selling high", etc.)
+- An OFFICIAL INJURY line where applicable — the current AFL.com.au listed prognosis. CITE IT VERBATIM in the justification when present. It tells you whether a coach is buying low on a known injury, taking on real risk, or just got blindsided.
 - The admin's free-text context note (if present)
 
 WRITE A SHARP, DATA-GROUNDED JUSTIFICATION OF WHY THIS TRADE MAKES SENSE FOR EACH SIDE. Use the actual numbers. Cite line ranks ("MID line ranked 8th — desperate for a top-tier mid"), expected averages ("betting Mills delivers 95+/rd"), positions, and the trader's stated reasoning if it's there. Read the trade as a coach would — what hole is each side plugging, what edge are they buying, what risk are they tolerating.

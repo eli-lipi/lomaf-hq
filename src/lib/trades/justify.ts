@@ -14,6 +14,7 @@
 import { generateTradeJustification } from './ai-assessment';
 import { fetchSnapshot, snapshotToLines } from './recalculate';
 import { cleanPositionDisplay } from './positions';
+import { formatInjuryForPrompt } from '../afl-injuries';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 interface PlayerForJustification {
@@ -73,6 +74,33 @@ export async function buildAndGenerateJustification(
     playersByTeam.get(p.receiving_team_id)!.push(p);
   }
 
+  // v12.3 — pull official injuries for any traded player so the
+  // justification prompt can lean on the AFL's prognosis (especially
+  // useful when explaining why a coach might trade FOR an injured
+  // player — the public ETA lets the AI frame the bet honestly).
+  const playerIds = inputs.players.map((p) => p.player_id);
+  const injuryById = new Map<number, { injury: string | null; estimated_return: string | null; source_updated_at: string | null }>();
+  if (playerIds.length > 0) {
+    const { data: injRows } = await supabase
+      .from('afl_injuries')
+      .select('player_id, injury, estimated_return, source_updated_at')
+      .in('player_id', playerIds);
+    for (const r of (injRows ?? []) as Array<{
+      player_id: number | null;
+      injury: string | null;
+      estimated_return: string | null;
+      source_updated_at: string | null;
+    }>) {
+      if (r.player_id != null) {
+        injuryById.set(r.player_id, {
+          injury: r.injury,
+          estimated_return: r.estimated_return,
+          source_updated_at: r.source_updated_at,
+        });
+      }
+    }
+  }
+
   const formatPlayer = (p: PlayerForJustification) => {
     const livePos = cleanPositionDisplay(p.raw_position) ?? p.position ?? '?';
     const draftPos = p.draft_position;
@@ -87,7 +115,9 @@ export async function buildAndGenerateJustification(
     const tier = p.expected_tier ? ` (${p.expected_tier})` : '';
     const pre = p.pre_trade_avg != null ? Math.round(p.pre_trade_avg).toString() : '?';
     const note = p.player_context ? `\n      trader's note: "${p.player_context}"` : '';
-    return `  - ${p.player_name} (${posPart}${pickPart}) → ${p.receiving_team_name}: bet ${expected}${tier}, pre-trade season avg ${pre}${note}`;
+    const inj = injuryById.get(p.player_id);
+    const injStr = inj ? `\n      ${formatInjuryForPrompt(inj)}` : '';
+    return `  - ${p.player_name} (${posPart}${pickPart}) → ${p.receiving_team_name}: bet ${expected}${tier}, pre-trade season avg ${pre}${note}${injStr}`;
   };
 
   const playerBreakdown = inputs.players.map(formatPlayer).join('\n');

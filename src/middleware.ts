@@ -13,6 +13,11 @@ const ADMIN_API_PREFIXES = [
   '/api/ai/intelligence-brief',
   '/api/ai/writeup-draft',
   '/api/users',
+  // v12.3 — AFL injury cache routes. The sync route also accepts cron
+  // GETs (Vercel sends x-vercel-cron: 1), which the route handler
+  // checks before requiring admin auth. Middleware still rejects
+  // anonymous users; cron requests are signed by Vercel.
+  '/api/afl-injuries',
 ];
 
 // /api/trades — GET open to all coaches; POST/PATCH/DELETE admin-only.
@@ -55,6 +60,11 @@ export async function middleware(request: NextRequest) {
 
   const path = request.nextUrl.pathname;
   const isPublic = PUBLIC_PATHS.some((p) => path.startsWith(p));
+
+  // Vercel cron requests don't have a session; let them pass through
+  // and the route handler enforces its own auth via the same header.
+  const isVercelCron = request.headers.get('x-vercel-cron') === '1';
+  if (isVercelCron) return response;
 
   // Not signed in: send to /login (unless already there).
   if (!user && !isPublic) {

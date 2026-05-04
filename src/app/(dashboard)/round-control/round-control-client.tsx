@@ -254,6 +254,9 @@ export default function RoundControlClient({
         </div>
       </section>
 
+      {/* ── AFL injury list status ───────────────────────────── */}
+      <InjuryStatusCard />
+
       {/* ── Step 1 — upload ─────────────────────────────────── */}
       <section className="bg-card border border-border rounded-lg p-6 shadow-sm mb-6">
         <div className="flex items-baseline gap-3 mb-1">
@@ -473,6 +476,112 @@ export default function RoundControlClient({
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * Compact card showing AFL injury cache freshness + a manual refresh
+ * button. The cache is auto-refreshed by the round-advance pipeline
+ * and a daily Vercel cron, but this lets admin pull on demand if
+ * Tuesday's update lands earlier than usual.
+ */
+function InjuryStatusCard() {
+  const [status, setStatus] = useState<{
+    total: number;
+    resolved: number;
+    unresolved: number;
+    lastScraped: string | null;
+    sourceFreshest: string | null;
+    sourceOldest: string | null;
+  } | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    const res = await fetch('/api/afl-injuries/status');
+    if (res.ok) setStatus(await res.json());
+  }, []);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    setError(null);
+    try {
+      const res = await fetch('/api/afl-injuries/sync', { method: 'POST' });
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        setError(j.error || 'Refresh failed');
+      } else {
+        await load();
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Refresh failed');
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
+  const sourceFreshTxt = status?.sourceFreshest
+    ? new Date(status.sourceFreshest + 'T00:00:00Z').toLocaleDateString('en-AU', {
+        day: 'numeric',
+        month: 'short',
+      })
+    : '—';
+
+  return (
+    <section className="bg-card border border-border rounded-lg p-5 shadow-sm mb-6">
+      <div className="flex items-start justify-between gap-4 flex-wrap">
+        <div>
+          <h3 className="font-semibold text-sm mb-1">AFL Injury List context</h3>
+          <p className="text-xs text-muted-foreground">
+            The AI trade analysis + justification cite the official AFL.com.au prognoses.
+            Auto-refreshed on round-advance + daily at 9am Melbourne. Manual refresh below
+            if Tuesday&apos;s update landed early.
+          </p>
+        </div>
+        <button
+          onClick={handleRefresh}
+          disabled={refreshing}
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold border border-border rounded-md hover:bg-muted disabled:opacity-50"
+        >
+          <RefreshCw size={12} className={refreshing ? 'animate-spin' : ''} />
+          {refreshing ? 'Refreshing…' : 'Refresh now'}
+        </button>
+      </div>
+      {status && (
+        <div className="mt-3 grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+          <div>
+            <p className="text-muted-foreground">Players listed</p>
+            <p className="font-semibold tabular-nums">{status.total}</p>
+          </div>
+          <div>
+            <p className="text-muted-foreground">Matched to LOMAF</p>
+            <p className="font-semibold tabular-nums">
+              {status.resolved}
+              <span className="text-muted-foreground font-normal"> / {status.total}</span>
+            </p>
+          </div>
+          <div>
+            <p className="text-muted-foreground">AFL last updated</p>
+            <p className="font-semibold tabular-nums">{sourceFreshTxt}</p>
+          </div>
+          <div>
+            <p className="text-muted-foreground">Cache last refreshed</p>
+            <p className="font-semibold tabular-nums">
+              {status.lastScraped ? relativeTime(status.lastScraped) : 'Never'}
+            </p>
+          </div>
+        </div>
+      )}
+      {error && (
+        <p className="mt-3 text-xs text-red-700 bg-red-50 border border-red-200 rounded-md px-2 py-1.5">
+          {error}
+        </p>
+      )}
+    </section>
   );
 }
 
