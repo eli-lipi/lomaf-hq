@@ -295,13 +295,11 @@ export default function OppositionTab({ data }: { data: ByeData }) {
                         </td>
                       );
                     }
-                    const meta = IMPACT_META[cell.grade];
                     return (
                       <RoundDataCells
                         key={round}
                         round={round}
                         cell={cell}
-                        meta={meta}
                       />
                     );
                   })}
@@ -313,8 +311,8 @@ export default function OppositionTab({ data }: { data: ByeData }) {
       </div>
 
       <p className="text-[10px] text-muted-foreground px-1">
-        Per-round group: <strong>Players</strong> cell on the left, <strong>Pts</strong> cell on the right —
-        sort either independently. Both cells share the combined impact colour (worst lens wins).
+        Per-round group: <strong>Players</strong> = unavailable count, <strong>Avg Lost</strong> = season-avg points lost —
+        sort either independently.
         Edge Rounds counts bye rounds where you&apos;re strictly more available than your opponent
         (ties don&apos;t count).
       </p>
@@ -343,53 +341,36 @@ function RoundSubHeaders({
         <SortBtn label="Players" sortKey={playersKey} current={current} dir={dir} onClick={onClick} />
       </th>
       <th className="px-2 pb-2 text-center">
-        <SortBtn label="Pts" sortKey={ptsKey} current={current} dir={dir} onClick={onClick} />
+        <SortBtn label="Avg Lost" sortKey={ptsKey} current={current} dir={dir} onClick={onClick} />
       </th>
     </>
   );
 }
 
-/** A pair of body cells for one round: Players cell + Pts cell. Both cells
- *  share the same combined-grade colour — they show different metrics on
- *  the same severity background. */
 function RoundDataCells({
   round,
   cell,
-  meta,
 }: {
   round: ByeRound;
   cell: PerRoundCell;
-  meta: { bg: string; fg: string; label: string };
 }) {
+  const meta = IMPACT_META[cell.grade];
   return (
     <>
       <td
-        className="px-2 py-2 text-center align-middle border-l border-border/40"
+        className="px-2 py-2.5 text-center align-middle border-l border-border/40"
         title={`R${round} vs ${cell.oppShortName} — ${meta.label} (${cell.count} out, ${cell.pointsLost} pts lost)`}
       >
-        <div
-          className="rounded-md py-1.5 px-1 leading-tight font-bold"
-          style={{ background: meta.bg, color: meta.fg }}
-        >
-          <div className="text-base tabular-nums">{cell.count}</div>
-          <div className="text-[9px] uppercase tracking-wider opacity-80 truncate">
-            vs {cell.oppShortName}
-          </div>
+        <div className="text-sm font-bold tabular-nums">{cell.count}</div>
+        <div className="text-[9px] text-muted-foreground/50 truncate">
+          vs {cell.oppShortName}
         </div>
       </td>
       <td
-        className="px-2 py-2 text-center align-middle"
+        className="px-2 py-2.5 text-center align-middle"
         title={`R${round} vs ${cell.oppShortName} — ${meta.label} (${cell.count} out, ${cell.pointsLost} pts lost)`}
       >
-        <div
-          className="rounded-md py-1.5 px-1 leading-tight font-bold"
-          style={{ background: meta.bg, color: meta.fg }}
-        >
-          <div className="text-base tabular-nums">{cell.pointsLost}</div>
-          <div className="text-[9px] uppercase tracking-wider opacity-80 truncate">
-            avg lost
-          </div>
-        </div>
+        <div className="text-sm font-bold tabular-nums">{cell.pointsLost}</div>
       </td>
     </>
   );
