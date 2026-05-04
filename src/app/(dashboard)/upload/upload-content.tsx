@@ -6,7 +6,7 @@ import Papa from 'papaparse';
 import { cn } from '@/lib/utils';
 import { supabase } from '@/lib/supabase';
 
-type CsvType = 'lineups' | 'teams' | 'matchups' | 'points_grid' | 'draft';
+type CsvType = 'lineups' | 'teams' | 'matchups' | 'points_grid' | 'draft' | 'players';
 
 interface UploadState {
   status: 'idle' | 'parsed' | 'uploading' | 'uploaded' | 'error';
@@ -25,6 +25,9 @@ function detectCsvType(filename: string): CsvType | null {
   const lower = filename.toLowerCase();
   if (lower.includes('lineup')) return 'lineups';
   if (lower.includes('matchup')) return 'matchups';
+  // 'players' must come before 'teams' since the players export is named
+  // The_Land_of_Milk_and_Fantasy_players_*.csv (contains 'team' too).
+  if (lower.includes('player')) return 'players';
   if (lower.includes('team')) return 'teams';
   if (lower.includes('points') || lower.includes('grid')) return 'points_grid';
   if (lower.includes('draft')) return 'draft';
@@ -57,6 +60,7 @@ export default function UploadContent({
     matchups: { status: 'idle' },
     points_grid: { status: 'idle' },
     draft: { status: 'idle' },
+    players: { status: 'idle' },
   });
   const [processing, setProcessing] = useState(false);
   const [processResult, setProcessResult] = useState<string | null>(null);
@@ -221,6 +225,27 @@ export default function UploadContent({
         setStepLog((prev) => [...prev, logMsg]);
       }
 
+      // Process players (season-wide canonical roster) if parsed.
+      // Round-agnostic; uses its own endpoint.
+      if (uploads.players.status === 'parsed' && uploads.players.data) {
+        setStepLog((prev) => [...prev, `Uploading players... (${uploads.players.rowCount} players)`]);
+        setUploads((prev) => ({ ...prev, players: { ...prev.players, status: 'uploading' } }));
+        const res = await fetch('/api/upload/players', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ data: uploads.players.data }),
+        });
+        if (!res.ok) {
+          const err = await res.json();
+          throw new Error(`players: ${err.error || 'Upload failed'}`);
+        }
+        const result = await res.json();
+        setUploads((prev) => ({ ...prev, players: { ...prev.players, status: 'uploaded' } }));
+        setStepLog((prev) => [...prev,
+          `Players uploaded successfully (${result.upserted} players, ${result.resolved} resolved to player_id)`]);
+        filesProcessed++;
+      }
+
       // Process draft if parsed
       if (uploads.draft.status === 'parsed' && uploads.draft.data) {
         setStepLog((prev) => [...prev, `Uploading draft... (${uploads.draft.rowCount} picks)`]);
@@ -264,6 +289,11 @@ export default function UploadContent({
     { type: 'teams', label: 'Teams' },
     { type: 'matchups', label: 'Matchups' },
     { type: 'points_grid', label: 'Points Grid' },
+    // v12.4 — Players is the canonical season-wide AFL Fantasy roster
+    // (name, AFL club, position, owner, form/projection stats). Used as
+    // position fallback when round-specific lineup data is missing or
+    // shows BN/UTL.
+    { type: 'players', label: 'Players' },
   ];
 
   const hasAnyParsed = Object.values(uploads).some((u) => u.status === 'parsed');
@@ -360,7 +390,7 @@ export default function UploadContent({
           Drop all your CSVs here at once — types auto-detected from filenames
         </p>
         <p className="text-xs text-muted-foreground mb-3">
-          (lineups, teams, matchups, points-grid)
+          (lineups, teams, matchups, points-grid, players)
         </p>
         <label className="inline-flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg text-sm font-medium cursor-pointer hover:bg-primary/90 transition-colors">
           <Upload size={14} />

@@ -136,6 +136,49 @@ export async function GET() {
     number,
     { team_id: number; team_name: string; position: string | null }
   >();
+  // v12.4 — canonical position fallback from the season-wide players
+  // table. Used when player_rounds.pos is null/BN/UTL — common for
+  // waiver pickups who've never made a senior lineup. Keyed by
+  // (name, AFL club) since the players CSV doesn't carry player_id.
+  const allInjuredKeys = injuries.map((r) => ({ name: r.player_name, club: r.club_code }));
+  const positionByNameClub = new Map<string, string>();
+  if (allInjuredKeys.length > 0) {
+    const names = Array.from(new Set(allInjuredKeys.map((k) => k.name)));
+    const { data: pl } = await supabase
+      .from('players')
+      .select('player_name, afl_club, position, player_id')
+      .in('player_name', names);
+    for (const p of (pl ?? []) as Array<{
+      player_name: string;
+      afl_club: string;
+      position: string | null;
+      player_id: number | null;
+    }>) {
+      if (p.position) {
+        positionByNameClub.set(`${p.player_name.toLowerCase()}::${p.afl_club.toUpperCase()}`, p.position);
+      }
+    }
+  }
+  // AFL.com.au club code → AFL Fantasy club code(s) — we already have
+  // a mapping baked into the matcher; mirror the resolution path here
+  // for the position lookup.
+  const FANTASY_CLUB_BY_AFL_CODE: Record<string, string[]> = {
+    ADEL: ['ADE', 'ADEL'], BRIS: ['BRL', 'BL', 'BRIS'], CARL: ['CAR', 'CARL'],
+    COLL: ['COL', 'COLL'], ESS: ['ESS'], FREM: ['FRE', 'FREM'],
+    GCS: ['GCS', 'GCFC'], GEEL: ['GEE', 'GEEL'], GWS: ['GWS'],
+    HAW: ['HAW'], MELB: ['MEL', 'MELB'], NM: ['NTH', 'NM', 'KAN'],
+    PA: ['PTA', 'PA', 'PORT'], RICH: ['RIC', 'RICH'], STK: ['STK'],
+    SYD: ['SYD'], WB: ['WBD', 'WB'], WCE: ['WCE'],
+  };
+  const positionFromPlayers = (name: string, aflCode: string): string | null => {
+    const fantasyCodes = FANTASY_CLUB_BY_AFL_CODE[aflCode] ?? [];
+    for (const fc of fantasyCodes) {
+      const hit = positionByNameClub.get(`${name.toLowerCase()}::${fc.toUpperCase()}`);
+      if (hit) return hit;
+    }
+    return null;
+  };
+
   if (matchedPlayerIds.length > 0) {
     let rosterRound = await getCurrentRound(supabase);
     if (rosterRound === 0) {
@@ -329,8 +372,12 @@ export async function GET() {
       lomaf_team_id: roster?.team_id ?? null,
       lomaf_team_name: lomafTeam?.team_name ?? roster?.team_name ?? null,
       // BN / UTL are lineup slots, not positions — strip them so the
-      // display only shows DEF / MID / FWD / RUC (or DPP combos).
-      lomaf_position: cleanPositionDisplay(roster?.position ?? null),
+      // display only shows DEF / MID / FWD / RUC (or DPP combos). When
+      // the round-specific lineup slot is missing or non-positional,
+      // fall back to the canonical players table.
+      lomaf_position:
+        cleanPositionDisplay(roster?.position ?? null) ??
+        positionFromPlayers(r.player_name, r.club_code),
       trend,
       rounds,
     };
