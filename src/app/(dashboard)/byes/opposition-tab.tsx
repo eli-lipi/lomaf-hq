@@ -1,24 +1,33 @@
 'use client';
 
 import { useMemo, useState } from 'react';
-import { ArrowDown, ArrowUp, ArrowUpDown, TrendingUp, Users } from 'lucide-react';
+import { ArrowDown, ArrowUp, ArrowUpDown, Coins, TrendingUp, Users } from 'lucide-react';
 import { TEAMS } from '@/lib/constants';
 import { TEAM_COLOR_MAP, TEAM_SHORT_NAMES } from '@/lib/team-colors';
 import {
   BYE_ROUNDS,
   IMPACT_META,
+  POINTS_META,
   type ByeRound,
   type ImpactGrade,
+  type PointsGrade,
 } from '@/lib/afl-club-byes';
 import { cn } from '@/lib/utils';
 import type { ByeData } from './use-bye-data';
 
-type SortKey = 'team' | 'totalOpp' | 'edge' | 'r12' | 'r13' | 'r14' | 'r15' | 'r16';
+type SortKey =
+  | 'team'
+  | 'totalOpp'
+  | 'totalPts'
+  | 'edge'
+  | 'r12' | 'r13' | 'r14' | 'r15' | 'r16';
 type SortDir = 'asc' | 'desc';
 
 interface PerRoundCell {
   count: number;
+  pointsLost: number;
   grade: ImpactGrade;
+  pointsGrade: PointsGrade;
   oppTeamId: number;
   oppShortName: string;
 }
@@ -29,6 +38,8 @@ interface OppositionRow {
   shortName: string;
   /** Sum of opponent unavailable counts across all 5 bye rounds. Higher = your opponents are weakest. */
   totalOppUnavailable: number;
+  /** Sum of opponent avg-points lost across all 5 bye rounds. */
+  totalOppPointsLost: number;
   /** Number of bye rounds where coach has strictly fewer unavailable players than their opponent. */
   edgeRounds: number;
   /** Per-round opponent stats. `null` if the opponent isn't resolvable for that round. */
@@ -47,6 +58,7 @@ export default function OppositionTab({ data }: { data: ByeData }) {
   const rows = useMemo<OppositionRow[]>(() => {
     return TEAMS.map((team) => {
       let totalOppUnavailable = 0;
+      let totalOppPointsLost = 0;
       let edgeRounds = 0;
       const perRound: Record<ByeRound, PerRoundCell | null> = {
         12: null, 13: null, 14: null, 15: null, 16: null,
@@ -63,9 +75,12 @@ export default function OppositionTab({ data }: { data: ByeData }) {
         if (oppImpact) {
           const count = oppImpact.unavailable.length;
           totalOppUnavailable += count;
+          totalOppPointsLost += oppImpact.pointsLost;
           perRound[round] = {
             count,
+            pointsLost: oppImpact.pointsLost,
             grade: oppImpact.grade,
+            pointsGrade: oppImpact.pointsGrade,
             oppTeamId: oppImpact.team.team_id,
             oppShortName: TEAM_SHORT_NAMES[oppImpact.team.team_id] ?? oppImpact.team.team_name,
           };
@@ -80,6 +95,7 @@ export default function OppositionTab({ data }: { data: ByeData }) {
         teamName: team.team_name,
         shortName: TEAM_SHORT_NAMES[team.team_id] ?? team.team_name,
         totalOppUnavailable,
+        totalOppPointsLost,
         edgeRounds,
         perRound,
       };
@@ -97,14 +113,18 @@ export default function OppositionTab({ data }: { data: ByeData }) {
         case 'totalOpp':
           primary = a.totalOppUnavailable - b.totalOppUnavailable;
           break;
+        case 'totalPts':
+          primary = a.totalOppPointsLost - b.totalOppPointsLost;
+          break;
         case 'edge':
           primary = a.edgeRounds - b.edgeRounds;
           break;
         default: {
-          // r12..r16
+          // r12..r16 — sort by opp pointsLost (more meaningful than raw count
+          // for the per-round columns, since a star bye matters more).
           const round = Number(sortKey.slice(1)) as ByeRound;
-          const ac = a.perRound[round]?.count ?? -1;
-          const bc = b.perRound[round]?.count ?? -1;
+          const ac = a.perRound[round]?.pointsLost ?? -1;
+          const bc = b.perRound[round]?.pointsLost ?? -1;
           primary = ac - bc;
         }
       }
@@ -146,9 +166,19 @@ export default function OppositionTab({ data }: { data: ByeData }) {
               <Th label="Coach" sortKey="team" current={sortKey} dir={sortDir} onClick={toggleSort} align="left" />
               <Th
                 label="Total Opp Out"
-                sublabel="all 5 byes"
+                sublabel="players · all 5 byes"
                 icon={<Users size={12} />}
                 sortKey="totalOpp"
+                current={sortKey}
+                dir={sortDir}
+                onClick={toggleSort}
+                align="center"
+              />
+              <Th
+                label="Total Pts Lost"
+                sublabel="opp avg · all 5 byes"
+                icon={<Coins size={12} />}
+                sortKey="totalPts"
                 current={sortKey}
                 dir={sortDir}
                 onClick={toggleSort}
@@ -168,7 +198,7 @@ export default function OppositionTab({ data }: { data: ByeData }) {
                 <Th
                   key={round}
                   label={`R${round}`}
-                  sublabel="opp out"
+                  sublabel="players · pts"
                   sortKey={ROUND_KEYS[round]}
                   current={sortKey}
                   dir={sortDir}
@@ -198,9 +228,14 @@ export default function OppositionTab({ data }: { data: ByeData }) {
                     </div>
                   </td>
 
-                  {/* Total Opp Out */}
+                  {/* Total Opp Out (player count) */}
                   <td className="px-3 py-3 text-center">
                     <span className="text-base font-bold tabular-nums">{row.totalOppUnavailable}</span>
+                  </td>
+
+                  {/* Total Pts Lost (sum of opp avg) */}
+                  <td className="px-3 py-3 text-center">
+                    <span className="text-base font-bold tabular-nums">{row.totalOppPointsLost}</span>
                   </td>
 
                   {/* Edge Rounds */}
@@ -219,7 +254,10 @@ export default function OppositionTab({ data }: { data: ByeData }) {
                     </span>
                   </td>
 
-                  {/* Per-round opp counts */}
+                  {/* Per-round opp counts — cell colour follows the
+                      points-grade (more meaningful than count alone since
+                      it weights starpower). Cell shows: opp player count
+                      on top, opp avg lost beneath, opp short name below. */}
                   {BYE_ROUNDS.map((round) => {
                     const cell = row.perRound[round];
                     if (!cell) {
@@ -229,18 +267,30 @@ export default function OppositionTab({ data }: { data: ByeData }) {
                         </td>
                       );
                     }
-                    const meta = IMPACT_META[cell.grade];
+                    const ptsMeta = POINTS_META[cell.pointsGrade];
+                    const countMeta = IMPACT_META[cell.grade];
                     return (
                       <td
                         key={round}
                         className="px-2 py-2 text-center align-middle"
-                        title={`R${round}: vs ${cell.oppShortName} — ${meta.label}, ${cell.count} unavailable`}
+                        title={
+                          `R${round}: vs ${cell.oppShortName}\n` +
+                          `Roster: ${countMeta.label} (${cell.count} out)\n` +
+                          `Scoring: ${ptsMeta.label} (${cell.pointsLost} avg lost)`
+                        }
                       >
                         <div
                           className="rounded-md py-1.5 px-1 leading-tight font-bold"
-                          style={{ background: meta.bg, color: meta.fg }}
+                          style={{ background: ptsMeta.bg, color: ptsMeta.fg }}
                         >
-                          <div className="text-base tabular-nums">{cell.count}</div>
+                          <div className="flex items-center justify-center gap-1 text-sm tabular-nums">
+                            <span>{cell.count}</span>
+                            <span className="opacity-60 text-[10px]">·</span>
+                            <span>{cell.pointsLost}</span>
+                          </div>
+                          <div className="text-[8px] uppercase tracking-wider opacity-80 truncate font-medium">
+                            players · pts
+                          </div>
                           <div className="text-[9px] uppercase tracking-wider opacity-80 truncate">
                             vs {cell.oppShortName}
                           </div>
@@ -256,9 +306,10 @@ export default function OppositionTab({ data }: { data: ByeData }) {
       </div>
 
       <p className="text-[10px] text-muted-foreground px-1">
-        Cell colors match the impact scale (No · Low · Medium · Serious · Can&apos;t Field). Cell value shows
-        opponent&apos;s unavailable count for that round; the team underneath is who you face.
-        Edge Rounds = strict &lt; (ties don&apos;t count).
+        Per-round cells: <strong>players</strong> unavailable on the left, <strong>avg points lost</strong> on the right.
+        Cell colour follows the points-weighted grade (No Hit · Light · Medium · Big · Crippling), so a 2-player cell
+        with a star going down stays red. Edge Rounds counts bye rounds where you&apos;re strictly more available than your
+        opponent (ties don&apos;t count).
       </p>
     </div>
   );

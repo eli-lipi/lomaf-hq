@@ -1,12 +1,14 @@
 'use client';
 
 import { useState } from 'react';
-import { ChevronDown, ChevronRight, HeartPulse } from 'lucide-react';
+import { ChevronDown, ChevronRight, HeartPulse, Star } from 'lucide-react';
 import { TEAM_COLOR_MAP, TEAM_SHORT_NAMES } from '@/lib/team-colors';
 import { AFL_CLUBS } from '@/lib/afl-clubs';
 import {
   AFL_CLUB_BYES,
   IMPACT_META,
+  POINTS_META,
+  STAR_AVG_THRESHOLD,
   getByeRule,
   type ByeRound,
 } from '@/lib/afl-club-byes';
@@ -58,6 +60,7 @@ export function RoundImpactCard({ round, ladder, filterTeamId, headerLabel }: Pr
     ? ladder.filter((row) => row.team.team_id === filterTeamId)
     : ladder;
   const totalImpacted = visible.reduce((s, x) => s + x.unavailable.length, 0);
+  const totalPointsLost = visible.reduce((s, x) => s + x.pointsLost, 0);
 
   return (
     <section className="bg-card border border-border rounded-lg shadow-sm overflow-hidden">
@@ -107,6 +110,7 @@ export function RoundImpactCard({ round, ladder, filterTeamId, headerLabel }: Pr
           </p>
           <p className="text-[11px] text-muted-foreground">
             {totalImpacted} player{totalImpacted === 1 ? '' : 's'} unavailable
+            {totalPointsLost > 0 ? ` · ${totalPointsLost} avg lost` : ''}
             {filterTeamId ? '' : ' across the league'}
           </p>
         </div>
@@ -125,6 +129,7 @@ function CoachLadderRow({ row, rank }: { row: CoachRoundImpact; rank: number }) 
   const [expanded, setExpanded] = useState(false);
   const teamColor = TEAM_COLOR_MAP[row.team.team_id] ?? '#6B7280';
   const meta = IMPACT_META[row.grade];
+  const ptsMeta = POINTS_META[row.pointsGrade];
   const hasPlayers = row.unavailable.length > 0;
 
   return (
@@ -155,15 +160,37 @@ function CoachLadderRow({ row, rank }: { row: CoachRoundImpact; rank: number }) 
             {row.team.team_name}
           </span>
         </div>
-        <span
-          className="text-[11px] font-semibold px-2.5 py-1 rounded-full shrink-0"
-          style={{ background: meta.bg, color: meta.fg }}
-        >
-          {meta.label}
-        </span>
-        <span className="text-[11px] tabular-nums text-muted-foreground shrink-0 hidden sm:inline">
-          {row.unavailable.length}/{row.rosterSize || '—'} out
-        </span>
+
+        {/* Two grade pills + two stat numbers, stacked vertically so the
+            roster lens (count) and scoring lens (points) are both visible
+            at a glance without dominating row width. */}
+        <div className="flex flex-col items-end gap-1 shrink-0">
+          <div className="flex items-center gap-2">
+            <span
+              className="text-[11px] font-semibold px-2 py-0.5 rounded-full"
+              style={{ background: meta.bg, color: meta.fg }}
+              title="Roster impact (count-based)"
+            >
+              {meta.label}
+            </span>
+            <span className="text-[11px] tabular-nums text-muted-foreground w-16 text-right hidden sm:inline">
+              {row.unavailable.length}/{row.rosterSize || '—'} out
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
+            <span
+              className="text-[11px] font-semibold px-2 py-0.5 rounded-full"
+              style={{ background: ptsMeta.bg, color: ptsMeta.fg }}
+              title="Scoring impact (avg-points-based)"
+            >
+              {ptsMeta.label}
+            </span>
+            <span className="text-[11px] tabular-nums text-muted-foreground w-16 text-right hidden sm:inline">
+              {row.pointsLost} pts
+            </span>
+          </div>
+        </div>
+
         {hasPlayers ? (
           expanded ? (
             <ChevronDown size={16} className="text-muted-foreground shrink-0" />
@@ -176,26 +203,40 @@ function CoachLadderRow({ row, rank }: { row: CoachRoundImpact; rank: number }) 
       </button>
       {hasPlayers && expanded && (
         <ul className="px-3 pb-3 pt-2 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-x-4 gap-y-1.5 border-t border-border/50">
-          {row.unavailable.map((p) => (
-            <li key={p.player_id} className="flex items-center gap-2 text-xs leading-snug">
-              <ClubBadge code={p.club} size={16} />
-              <span className="truncate flex-1">{p.player_name}</span>
-              {p.injured && (
-                <span
-                  title={p.byed ? 'Bye + predicted injured' : 'Predicted injured'}
-                  className="flex items-center gap-0.5 text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded bg-rose-100 text-rose-700"
-                >
-                  <HeartPulse size={9} />
-                  INJ
-                </span>
-              )}
-              {p.byed && !p.injured && (
-                <span className="text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded bg-muted text-muted-foreground">
-                  BYE
-                </span>
-              )}
-            </li>
-          ))}
+          {row.unavailable.map((p) => {
+            const isStar = p.avg != null && p.avg >= STAR_AVG_THRESHOLD;
+            return (
+              <li key={p.player_id} className="flex items-center gap-2 text-xs leading-snug">
+                <ClubBadge code={p.club} size={16} />
+                {isStar && (
+                  <Star
+                    size={11}
+                    className="text-amber-500 shrink-0 fill-amber-400"
+                    aria-label="Star player (100+ avg)"
+                  />
+                )}
+                <span className="truncate flex-1">{p.player_name}</span>
+                {p.avg != null && (
+                  <span className="text-[10px] tabular-nums text-muted-foreground shrink-0 w-7 text-right">
+                    {Math.round(p.avg)}
+                  </span>
+                )}
+                {p.injured ? (
+                  <span
+                    title={p.byed ? 'Bye + predicted injured' : 'Predicted injured'}
+                    className="flex items-center gap-0.5 text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded bg-rose-100 text-rose-700"
+                  >
+                    <HeartPulse size={9} />
+                    INJ
+                  </span>
+                ) : (
+                  <span className="text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded bg-muted text-muted-foreground">
+                    BYE
+                  </span>
+                )}
+              </li>
+            );
+          })}
         </ul>
       )}
     </li>

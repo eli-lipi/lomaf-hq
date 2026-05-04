@@ -1,13 +1,15 @@
 'use client';
 
 import { useState } from 'react';
-import { ChevronDown, ChevronRight, HeartPulse } from 'lucide-react';
+import { ChevronDown, ChevronRight, HeartPulse, Star } from 'lucide-react';
 import { TEAM_COLOR_MAP, TEAM_SHORT_NAMES } from '@/lib/team-colors';
 import { AFL_CLUBS } from '@/lib/afl-clubs';
 import {
   AFL_CLUB_BYES,
   BYE_ROUNDS,
   IMPACT_META,
+  POINTS_META,
+  STAR_AVG_THRESHOLD,
   getByeRule,
   type ByeRound,
 } from '@/lib/afl-club-byes';
@@ -129,8 +131,9 @@ function FixtureRow({ pair }: { pair: FixturePair }) {
   const canExpand = totalUnavailable > 0;
 
   // Worse impact gets visual weight in the divider so coaches can scan
-  // for one-sided matchups at a glance.
+  // for one-sided matchups at a glance — both lenses contribute.
   const delta = Math.abs(pair.a.unavailable.length - pair.b.unavailable.length);
+  const ptsDelta = Math.abs(pair.a.pointsLost - pair.b.pointsLost);
   const heavier =
     pair.a.unavailable.length > pair.b.unavailable.length ? 'a'
     : pair.b.unavailable.length > pair.a.unavailable.length ? 'b'
@@ -154,15 +157,10 @@ function FixtureRow({ pair }: { pair: FixturePair }) {
               vs
             </span>
             <span className="h-px flex-1 bg-border" />
-            {delta > 0 ? (
-              <span className="text-[10px] tabular-nums text-muted-foreground">
-                {delta}-player gap
-              </span>
-            ) : (
-              <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                even
-              </span>
-            )}
+            <span className="text-[10px] tabular-nums text-muted-foreground">
+              {delta > 0 ? `${delta}-player gap` : 'players even'}
+              {ptsDelta > 0 ? ` · ${Math.round(ptsDelta)}-pt swing` : ''}
+            </span>
             {canExpand && (
               expanded
                 ? <ChevronDown size={14} className="text-muted-foreground" />
@@ -194,6 +192,7 @@ function CoachInline({
 }) {
   const teamColor = TEAM_COLOR_MAP[row.team.team_id] ?? '#6B7280';
   const meta = IMPACT_META[row.grade];
+  const ptsMeta = POINTS_META[row.pointsGrade];
   return (
     <div className="flex items-center gap-3 min-w-0">
       <span
@@ -209,18 +208,37 @@ function CoachInline({
           {row.team.team_name}
         </div>
       </div>
-      <span
-        className={cn(
-          'text-[11px] px-2.5 py-1 rounded-full shrink-0 tabular-nums',
-          accentSide ? 'font-bold ring-2 ring-offset-1 ring-current/20' : 'font-semibold'
-        )}
-        style={{ background: meta.bg, color: meta.fg }}
-      >
-        {meta.label}
-      </span>
-      <span className="text-xs tabular-nums text-muted-foreground shrink-0 w-14 text-right">
-        {row.unavailable.length}/{row.rosterSize || '—'}
-      </span>
+      {/* Two grade pills + their respective stats — count up top, points
+          underneath, both right-aligned so the pair scans cleanly. */}
+      <div className="flex flex-col items-end gap-1 shrink-0">
+        <div className="flex items-center gap-2">
+          <span
+            className={cn(
+              'text-[11px] px-2 py-0.5 rounded-full',
+              accentSide ? 'font-bold ring-1 ring-offset-1 ring-current/30' : 'font-semibold'
+            )}
+            style={{ background: meta.bg, color: meta.fg }}
+            title="Roster impact (count-based)"
+          >
+            {meta.label}
+          </span>
+          <span className="text-[11px] tabular-nums text-muted-foreground w-14 text-right">
+            {row.unavailable.length}/{row.rosterSize || '—'}
+          </span>
+        </div>
+        <div className="flex items-center gap-2">
+          <span
+            className="text-[11px] font-semibold px-2 py-0.5 rounded-full"
+            style={{ background: ptsMeta.bg, color: ptsMeta.fg }}
+            title="Scoring impact (avg-points-based)"
+          >
+            {ptsMeta.label}
+          </span>
+          <span className="text-[11px] tabular-nums text-muted-foreground w-14 text-right">
+            {row.pointsLost} pts
+          </span>
+        </div>
+      </div>
     </div>
   );
 }
@@ -239,32 +257,43 @@ function UnavailableList({
       <p className="text-[10px] font-bold uppercase tracking-wider mb-2" style={{ color: teamColor }}>
         {TEAM_SHORT_NAMES[row.team.team_id] ?? row.team.team_name}
         <span className="text-muted-foreground font-medium normal-case tracking-normal ml-1.5">
-          — {row.unavailable.length} unavailable
+          — {row.unavailable.length} unavailable · {row.pointsLost} avg
         </span>
       </p>
       {row.unavailable.length === 0 ? (
         <p className="text-[11px] text-muted-foreground italic">Full squad available.</p>
       ) : (
         <ul className="space-y-1">
-          {row.unavailable.map((p) => (
-            <li key={p.player_id} className="flex items-center gap-2 text-[11px] leading-snug">
-              <ClubBadge code={p.club} size={16} />
-              <span className="truncate flex-1">{p.player_name}</span>
-              {p.injured ? (
-                <span
-                  title={p.byed ? 'Bye + predicted injured' : 'Predicted injured'}
-                  className="flex items-center gap-0.5 text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded bg-rose-100 text-rose-700"
-                >
-                  <HeartPulse size={9} />
-                  INJ
-                </span>
-              ) : (
-                <span className="text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded bg-muted text-muted-foreground">
-                  BYE
-                </span>
-              )}
-            </li>
-          ))}
+          {row.unavailable.map((p) => {
+            const isStar = p.avg != null && p.avg >= STAR_AVG_THRESHOLD;
+            return (
+              <li key={p.player_id} className="flex items-center gap-2 text-[11px] leading-snug">
+                <ClubBadge code={p.club} size={16} />
+                {isStar && (
+                  <Star size={10} className="text-amber-500 shrink-0 fill-amber-400" aria-label="100+ avg" />
+                )}
+                <span className="truncate flex-1">{p.player_name}</span>
+                {p.avg != null && (
+                  <span className="text-[10px] tabular-nums text-muted-foreground shrink-0 w-7 text-right">
+                    {Math.round(p.avg)}
+                  </span>
+                )}
+                {p.injured ? (
+                  <span
+                    title={p.byed ? 'Bye + predicted injured' : 'Predicted injured'}
+                    className="flex items-center gap-0.5 text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded bg-rose-100 text-rose-700"
+                  >
+                    <HeartPulse size={9} />
+                    INJ
+                  </span>
+                ) : (
+                  <span className="text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded bg-muted text-muted-foreground">
+                    BYE
+                  </span>
+                )}
+              </li>
+            );
+          })}
         </ul>
       )}
     </div>

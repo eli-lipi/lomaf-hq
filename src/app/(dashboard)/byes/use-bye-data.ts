@@ -9,6 +9,7 @@ import {
   BYE_ROUNDS,
   getByeRule,
   getImpactGrade,
+  getPointsGrade,
   type ByeRound,
 } from '@/lib/afl-club-byes';
 import { LOMAF_BYE_FIXTURE } from '@/lib/lomaf-bye-fixture';
@@ -74,6 +75,7 @@ export function useByeData(): ByeData {
   const [latestRound, setLatestRound] = useState(0);
   const [injuryFreshness, setInjuryFreshness] = useState<string | null>(null);
   const [matchups, setMatchups] = useState<MatchupDbRow[]>([]);
+  const [avgByPlayerId, setAvgByPlayerId] = useState<Map<number, number>>(new Map());
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -115,6 +117,35 @@ export function useByeData(): ByeData {
           }
         }
         if (!cancelled) setRosters(allRows);
+
+        // ── Player avgs (season-to-date avg_pts) ───────────────────────
+        // Used to weight bye/injury impact by scoring potential — losing
+        // a 110-avg star is worse than losing a 70-avg fringe player.
+        try {
+          const allAvgs: Array<{ player_id: number | null; avg_pts: number | string | null }> = [];
+          let pOffset = 0;
+          while (true) {
+            const { data: pBatch } = await supabase
+              .from('players')
+              .select('player_id, avg_pts')
+              .range(pOffset, pOffset + 999);
+            if (!pBatch || pBatch.length === 0) break;
+            allAvgs.push(...pBatch);
+            if (pBatch.length < 1000) break;
+            pOffset += 1000;
+          }
+          const map = new Map<number, number>();
+          for (const r of allAvgs) {
+            if (r.player_id != null && r.avg_pts != null) {
+              const n = Number(r.avg_pts);
+              if (Number.isFinite(n) && n > 0) map.set(r.player_id, n);
+            }
+          }
+          if (!cancelled) setAvgByPlayerId(map);
+        } catch (err) {
+          // Players table is optional — without it, points-lost stays 0.
+          console.warn('Failed to load players.avg_pts for bye impact:', err);
+        }
 
         // ── Matchups (LOMAF fixture for the bye rounds) ────────────────
         try {
@@ -197,23 +228,32 @@ export function useByeData(): ByeData {
       const perTeam: CoachRoundImpact[] = TEAMS.map((team) => {
         const roster = rosterByTeam.get(team.team_id) ?? [];
         const unavailable: UnavailablePlayer[] = [];
+        let pointsLost = 0;
         for (const p of roster) {
           const isByed = byeClubs.has(p.club);
           const isInjured = injured.has(p.player_id);
           if (isByed || isInjured) {
+            const avg = avgByPlayerId.get(p.player_id) ?? null;
+            if (avg != null) pointsLost += avg;
             unavailable.push({
               player_id: p.player_id,
               player_name: p.player_name,
               club: p.club,
               byed: isByed,
               injured: isInjured,
+              avg,
             });
           }
         }
+        // Sort unavailable players by avg desc — stars surface first in
+        // any expanded list across the tabs.
+        unavailable.sort((a, b) => (b.avg ?? -1) - (a.avg ?? -1));
         return {
           team,
           rosterSize: roster.length,
           unavailable,
+          pointsLost: Math.round(pointsLost),
+          pointsGrade: getPointsGrade(pointsLost),
           grade: getImpactGrade(unavailable.length, roster.length, rule),
         };
       });
@@ -231,7 +271,7 @@ export function useByeData(): ByeData {
     }
 
     return out;
-  }, [rosters, rosterByTeam, injuriesByRound]);
+  }, [rosters, rosterByTeam, injuriesByRound, avgByPlayerId]);
 
   // Build the per-round opponent map. Prefer DB matchup_rounds when any
   // rows exist for that round; otherwise fall back to the static fixture.

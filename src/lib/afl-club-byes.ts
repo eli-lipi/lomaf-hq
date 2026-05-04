@@ -92,6 +92,46 @@ export function getImpactGrade(
   return 'serious';
 }
 
+// =====================================================================
+// Points-weighted impact grading
+// =====================================================================
+// Same five-tier colour ramp, but graded on the sum of `avg_pts` for
+// each coach's unavailable players. Captures the "Gulden vs scrub"
+// difference: missing one star can hurt more than missing three
+// fringe scorers.
+//
+// The top tier is named "Crippling Hit" rather than "Can't Field a
+// Team" — points lost doesn't make a team unfieldable on its own; the
+// count-based grade still owns that semantic.
+// =====================================================================
+
+export type PointsGrade = 'none' | 'low' | 'medium' | 'serious' | 'crippling';
+
+export const POINTS_META: Record<PointsGrade, ImpactMeta> = {
+  'crippling': { label: 'Crippling Hit', bg: '#7F1D1D', fg: '#FFFFFF', tint: 'rgba(127,29,29,0.10)', ordinal: 0 },
+  'serious':   { label: 'Big Hit',       bg: '#EF4444', fg: '#FFFFFF', tint: 'rgba(239,68,68,0.10)', ordinal: 1 },
+  'medium':    { label: 'Medium Hit',    bg: '#F59E0B', fg: '#1F1300', tint: 'rgba(245,158,11,0.12)', ordinal: 2 },
+  'low':       { label: 'Light Hit',     bg: '#0EA5E9', fg: '#FFFFFF', tint: 'rgba(14,165,233,0.10)', ordinal: 3 },
+  'none':      { label: 'No Hit',        bg: '#10B981', fg: '#FFFFFF', tint: 'rgba(16,185,129,0.08)', ordinal: 4 },
+};
+
+/** Worst → best, useful for legends. */
+export const POINTS_GRADES_ORDERED: PointsGrade[] = [
+  'crippling', 'serious', 'medium', 'low', 'none',
+];
+
+/** Avg threshold above which an unavailable player gets a star indicator
+ *  in expanded lists. AFL Fantasy treats 100+ as the "century" tier. */
+export const STAR_AVG_THRESHOLD = 100;
+
+export function getPointsGrade(avgLost: number): PointsGrade {
+  if (avgLost <= 0) return 'none';
+  if (avgLost < 100) return 'low';      // ~one decent player or 2 bench
+  if (avgLost < 200) return 'medium';   // ~one star or 2 solid mids
+  if (avgLost < 350) return 'serious';  // multiple stars, big chunk of scoring
+  return 'crippling';                   // catastrophic
+}
+
 /** Returns the round in which an AFL club byes, or null if not in the bye window. */
 export function getByeRoundForClub(code: string): ByeRound | null {
   for (const round of BYE_ROUNDS) {

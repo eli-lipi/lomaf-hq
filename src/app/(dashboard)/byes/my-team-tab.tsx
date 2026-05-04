@@ -6,7 +6,9 @@ import { TEAM_COLOR_MAP } from '@/lib/team-colors';
 import {
   BYE_ROUNDS,
   IMPACT_META,
+  POINTS_META,
   type ImpactGrade,
+  type PointsGrade,
 } from '@/lib/afl-club-byes';
 import { RoundImpactCard } from './round-impact-card';
 import type { ByeData } from './use-bye-data';
@@ -38,7 +40,9 @@ export default function MyTeamTab({ data, defaultTeamId }: Props) {
         round,
         unavailable: row?.unavailable.length ?? 0,
         rosterSize: row?.rosterSize ?? 0,
+        pointsLost: row?.pointsLost ?? 0,
         grade: (row?.grade ?? 'none') as ImpactGrade,
+        pointsGrade: (row?.pointsGrade ?? 'none') as PointsGrade,
       };
     });
   }, [data.impactByRound, selectedTeamId]);
@@ -95,28 +99,44 @@ export default function MyTeamTab({ data, defaultTeamId }: Props) {
         <p className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground mb-3">
           Bye-window outlook
         </p>
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2">
           {summary.map((s) => {
             const meta = IMPACT_META[s.grade];
+            const ptsMeta = POINTS_META[s.pointsGrade];
             return (
               <div
                 key={s.round}
                 className="rounded-lg border border-border overflow-hidden"
                 style={{ borderLeft: `4px solid ${meta.bg}` }}
               >
-                <div className="px-3 py-2 bg-card">
+                <div className="px-3 py-2 bg-card space-y-1.5">
                   <div className="flex items-baseline justify-between">
                     <span className="text-xs font-bold tabular-nums">R{s.round}</span>
+                  </div>
+                  <div className="flex items-center justify-between gap-2">
+                    <span
+                      className="text-[10px] font-semibold px-2 py-0.5 rounded-full"
+                      style={{ background: meta.bg, color: meta.fg }}
+                      title="Roster impact"
+                    >
+                      {meta.label}
+                    </span>
                     <span className="text-[10px] tabular-nums text-muted-foreground">
                       {s.unavailable}/{s.rosterSize || '—'}
                     </span>
                   </div>
-                  <span
-                    className="mt-1.5 inline-block text-[10px] font-semibold px-2 py-0.5 rounded-full"
-                    style={{ background: meta.bg, color: meta.fg }}
-                  >
-                    {meta.label}
-                  </span>
+                  <div className="flex items-center justify-between gap-2">
+                    <span
+                      className="text-[10px] font-semibold px-2 py-0.5 rounded-full"
+                      style={{ background: ptsMeta.bg, color: ptsMeta.fg }}
+                      title="Scoring impact"
+                    >
+                      {ptsMeta.label}
+                    </span>
+                    <span className="text-[10px] tabular-nums text-muted-foreground">
+                      {s.pointsLost} pts
+                    </span>
+                  </div>
                 </div>
               </div>
             );
