@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState, useCallback } from 'react';
-import { CheckCircle2, AlertCircle, Circle, RefreshCw, PlayCircle, Mail, ChevronRight, ArrowRight } from 'lucide-react';
+import { CheckCircle2, AlertCircle, Circle, RefreshCw, PlayCircle, Mail, ChevronRight, ArrowRight, Loader2 } from 'lucide-react';
 import UploadContent from '../upload/upload-content';
 import { cn } from '@/lib/utils';
 
@@ -81,6 +81,11 @@ export default function RoundControlClient({
   const [advanceMsg, setAdvanceMsg] = useState<string | null>(null);
   const [advanceErr, setAdvanceErr] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
+  // v12.2.2 — index of the currently-running progress step. Ticks
+  // forward on a timer while the advance API runs (we don't have SSE
+  // back from the server, so the cadence is a friendly approximation
+  // — slow on the trade-recalc step because that's where time goes).
+  const [progressStep, setProgressStep] = useState(0);
 
   const isReAdvance = targetRound <= currentRound && currentRound > 0;
 
@@ -118,24 +123,52 @@ export default function RoundControlClient({
   }, [verify, refreshVerify]);
 
   const handleAdvance = async () => {
+    // Close the confirmation modal IMMEDIATELY so the loading overlay
+    // takes over without a click swallowed by the dialog.
+    setConfirming(false);
     setAdvancing(true);
-    setAdvanceMsg(
-      isReAdvance
-        ? `Re-running Round ${targetRound} — recomputing trades and AI narratives. This can take a few minutes.`
-        : `Recomputing trades and AI narratives for Round ${targetRound}. This can take a few minutes.`
-    );
+    setProgressStep(0);
+    setAdvanceMsg(null);
     setAdvanceErr(null);
+
+    // Tick the progress indicator forward on a timer. We don't get
+    // step-by-step events from the server, so use friendly estimates
+    // (trade recalc is the slowest by far — all the AI narrative
+    // calls happen inside it).
+    const ticks = [
+      4_000,   // Step 0 → 1 (locking)
+      90_000,  // Step 1 → 2 (trade recalc — the big one)
+      30_000,  // Step 2 → 3 (narratives — tail end of recalc)
+      5_000,   // Step 3 → 4 (PWRNKGs draft)
+    ];
+    let cancelled = false;
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+    let cursor = 0;
+    const advanceStep = () => {
+      if (cancelled) return;
+      cursor += 1;
+      setProgressStep(cursor);
+      const next = ticks[cursor];
+      if (next != null) timeoutId = setTimeout(advanceStep, next);
+    };
+    timeoutId = setTimeout(advanceStep, ticks[0]);
+
     try {
       const res = await fetch('/api/round/advance', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ round: targetRound, sendEmail }),
       });
+      cancelled = true;
+      if (timeoutId) clearTimeout(timeoutId);
+
       const json = (await res.json()) as AdvanceResult & { error?: string };
       if (!res.ok) {
         setAdvanceErr(json.error || 'Advance failed.');
         return;
       }
+      // Mark all steps complete.
+      setProgressStep(99);
       const note: string[] = [
         isReAdvance
           ? `Round ${targetRound} re-run complete.`
@@ -152,10 +185,11 @@ export default function RoundControlClient({
       setTargetRound(Math.min(TOTAL_ROUNDS, targetRound + 1));
       await Promise.all([refreshVerify(), refreshHistory()]);
     } catch (e) {
+      cancelled = true;
+      if (timeoutId) clearTimeout(timeoutId);
       setAdvanceErr(e instanceof Error ? e.message : 'Advance failed.');
     } finally {
       setAdvancing(false);
-      setConfirming(false);
     }
   };
 
@@ -400,6 +434,16 @@ export default function RoundControlClient({
         )}
       </section>
 
+      {/* ── Loading overlay (advance in progress) ──────────── */}
+      {advancing && (
+        <ProgressOverlay
+          targetRound={targetRound}
+          isReAdvance={isReAdvance}
+          sendEmail={sendEmail}
+          step={progressStep}
+        />
+      )}
+
       {/* ── Confirmation modal ──────────────────────────────── */}
       {confirming && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 px-4">
@@ -428,6 +472,84 @@ export default function RoundControlClient({
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * Full-screen overlay shown while the advance pipeline runs. Steps tick
+ * forward on a friendly client-side timer (the server doesn't stream
+ * progress) — recompute is the slow one because every trade gets a
+ * fresh AI narrative pass.
+ */
+function ProgressOverlay({
+  targetRound,
+  isReAdvance,
+  sendEmail,
+  step,
+}: {
+  targetRound: number;
+  isReAdvance: boolean;
+  sendEmail: boolean;
+  step: number;
+}) {
+  const baseSteps: { key: string; label: string; sub: string }[] = [
+    { key: 'lock', label: `Locking Round ${targetRound} in the ledger`, sub: 'Recording the advance.' },
+    { key: 'trades', label: 'Recomputing trade probabilities', sub: 'Running every active trade against the new round.' },
+    { key: 'narratives', label: 'Generating fresh AI narratives', sub: 'Re-reading each trade with the new data.' },
+    { key: 'pwrnkgs', label: `Opening Round ${targetRound} PWRNKGs draft`, sub: 'Seeding the editor for this week.' },
+  ];
+  if (sendEmail) {
+    baseSteps.push({
+      key: 'email',
+      label: 'Emailing all coaches',
+      sub: 'Round-live announcement going out.',
+    });
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 px-4">
+      <div className="bg-card rounded-lg shadow-xl max-w-md w-full p-6">
+        <div className="flex items-center gap-2 mb-1">
+          <Loader2 size={18} className="text-primary animate-spin" />
+          <h3 className="text-lg font-semibold">
+            {isReAdvance ? `Re-running Round ${targetRound}` : `Advancing to Round ${targetRound}`}
+          </h3>
+        </div>
+        <p className="text-xs text-muted-foreground mb-5">
+          This can take a few minutes. Don&apos;t close the tab.
+        </p>
+        <ol className="space-y-2.5">
+          {baseSteps.map((s, idx) => {
+            const isDone = idx < step || step === 99;
+            const isActive = idx === step && step !== 99;
+            return (
+              <li key={s.key} className="flex items-start gap-3">
+                <span className="shrink-0 mt-0.5">
+                  {isDone ? (
+                    <CheckCircle2 size={18} className="text-green-600" />
+                  ) : isActive ? (
+                    <Loader2 size={18} className="text-primary animate-spin" />
+                  ) : (
+                    <Circle size={18} className="text-muted-foreground/40" />
+                  )}
+                </span>
+                <div className="min-w-0 flex-1">
+                  <p className={cn(
+                    'text-sm font-medium',
+                    isDone ? 'text-foreground' : isActive ? 'text-foreground' : 'text-muted-foreground/70'
+                  )}>
+                    {s.label}
+                  </p>
+                  {(isActive || isDone) && (
+                    <p className="text-xs text-muted-foreground">{s.sub}</p>
+                  )}
+                </div>
+              </li>
+            );
+          })}
+        </ol>
+      </div>
     </div>
   );
 }
