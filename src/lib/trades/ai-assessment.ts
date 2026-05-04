@@ -163,6 +163,8 @@ If the player breakdown includes a "trader's note" line (e.g., "Injured at trade
 
 If the player breakdown includes an "OFFICIAL INJURY" line, that's the AFL.com.au injury list — the official prognosis. CITE IT DIRECTLY by injury type and ETA (e.g. "Rozee is officially listed with a hamstring, 2-3 weeks"). DO NOT re-infer injury status from DNP patterns when an OFFICIAL INJURY line is present — the AFL's word beats your guess. The "(as of [date])" tells you when AFL last updated; if the date is more than a week old the prognosis may be stale, mention that.
 
+When you see a "TIMELINE STALLED" or "TIMELINE ACCELERATING" or "TIMELINE WORSENED" line beneath an OFFICIAL INJURY, treat it as PREMIUM SIGNAL. AFL.com.au only ever shows the current week's list, so spotting a stalled timeline is a real edge — it means the player isn't progressing as expected. Use it explicitly in the trade verdict: a coach who traded OUT a player whose timeline subsequently stalled looks shrewd; a coach who traded IN such a player looks worse than the surface stats suggest. Cite the slippage by week count when present (e.g. "+4w slippage").
+
 The season has 23 rounds. Finals start around R21. A "ton" is 100+, a "zero" is 0/DNP (injury or bye), a solid score is 80+. Typical stars average 90-120. Consider:
 - The original intent (from the context note) and whether it's playing out
 - Each player's actual avg vs. their EXPECTED avg (the explicit bet) — that's the trade's verdict on output. NOT pre-trade season-to-date avg.
@@ -283,6 +285,7 @@ You are given:
 - Each team's line rankings at trade time (DEF / MID / FWD / RUC — lower rank = stronger line, 1 = best in league, 10 = worst)
 - Each player moved: position, the EXPECTED AVERAGE the receiving coach is betting on (not the player's prior avg — the bet), pre-trade season avg, and any per-player context the trader recorded ("injured at trade time", "selling high", etc.)
 - An OFFICIAL INJURY line where applicable — the current AFL.com.au listed prognosis. CITE IT VERBATIM in the justification when present. It tells you whether a coach is buying low on a known injury, taking on real risk, or just got blindsided.
+- A TIMELINE STALLED / ACCELERATING / WORSENED line where applicable — derived from snapshot history because AFL.com.au only shows the current week. Use it to credit the trader who got out before bad news compounded, or to flag the trader who's holding a player whose return keeps slipping.
 - The admin's free-text context note (if present)
 
 WRITE A SHARP, DATA-GROUNDED JUSTIFICATION OF WHY THIS TRADE MAKES SENSE FOR EACH SIDE. Use the actual numbers. Cite line ranks ("MID line ranked 8th — desperate for a top-tier mid"), expected averages ("betting Mills delivers 95+/rd"), positions, and the trader's stated reasoning if it's there. Read the trade as a coach would — what hole is each side plugging, what edge are they buying, what risk are they tolerating.

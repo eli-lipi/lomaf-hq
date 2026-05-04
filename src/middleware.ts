@@ -13,12 +13,13 @@ const ADMIN_API_PREFIXES = [
   '/api/ai/intelligence-brief',
   '/api/ai/writeup-draft',
   '/api/users',
-  // v12.3 — AFL injury cache routes. The sync route also accepts cron
-  // GETs (Vercel sends x-vercel-cron: 1), which the route handler
-  // checks before requiring admin auth. Middleware still rejects
-  // anonymous users; cron requests are signed by Vercel.
-  '/api/afl-injuries',
+  // v12.3 — AFL injury sync + status are admin-only. The 'list' subroute
+  // is exempt below — coaches read it for the /injuries page.
+  '/api/afl-injuries/sync',
+  '/api/afl-injuries/status',
 ];
+
+// /api/afl-injuries/list is public-to-signed-in for the /injuries page.
 
 // /api/trades — GET open to all coaches; POST/PATCH/DELETE admin-only.
 const TRADES_API_PREFIX = '/api/trades';

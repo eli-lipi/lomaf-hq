@@ -204,10 +204,14 @@ export async function recalculateTradeForRound(
       }
     >();
 
-    // Pull official injuries for any of the trade's players in one go.
+    // Pull official injuries + snapshot history for any of the trade's
+    // players in one go.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const playerIdsForInjuries = (players as unknown as any[]).map((p) => p.player_id);
-    let injuryById = new Map<number, { injury: string | null; estimated_return: string | null; source_updated_at: string | null }>();
+    const injuryById = new Map<
+      number,
+      { injury: string | null; estimated_return: string | null; source_updated_at: string | null }
+    >();
     if (playerIdsForInjuries.length > 0) {
       const { data: injRows } = await supabase
         .from('afl_injuries')
@@ -228,19 +232,27 @@ export async function recalculateTradeForRound(
         }
       }
     }
-    void injuryById;
-    const { formatInjuryForPrompt } = await import('../afl-injuries');
+    const { formatInjuryForPrompt, formatTrendForPrompt, computeInjuryTrend, fetchSnapshotsForPlayers } =
+      await import('../afl-injuries');
+    const snapshotsByPlayer = await fetchSnapshotsForPlayers(supabase, playerIdsForInjuries);
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     for (const tp of (players as unknown as any[])) {
       const inj = injuryById.get(tp.player_id);
+      let injuryLine: string | null = null;
+      if (inj) {
+        injuryLine = formatInjuryForPrompt(inj);
+        const trend = computeInjuryTrend(snapshotsByPlayer.get(tp.player_id) ?? []);
+        const trendLine = formatTrendForPrompt(trend);
+        if (trendLine) injuryLine += `\n    ${trendLine}`;
+      }
       tradePlayerById.set(tp.player_id, {
         tier: tp.expected_tier ?? null,
         ctx: tp.player_context ?? null,
         draftPos: tp.draft_position ?? null,
         draftPick: tp.draft_pick ?? null,
         expectedAvg: tp.expected_avg ?? null,
-        injuryLine: inj ? formatInjuryForPrompt(inj) : null,
+        injuryLine,
       });
     }
 

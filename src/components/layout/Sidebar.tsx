@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Trophy, BarChart3, ArrowLeftRight, Settings, Menu, X, ChevronDown, ChevronRight } from 'lucide-react';
+import { Trophy, BarChart3, ArrowLeftRight, Settings, Menu, X, ChevronDown, ChevronRight, HeartPulse } from 'lucide-react';
 import { useState } from 'react';
 import { cn } from '@/lib/utils';
 import type { AppUser } from '@/lib/auth';
@@ -68,6 +68,13 @@ const NAV_ITEMS: NavItem[] = [
       { href: '/trades?tab=tracking', label: 'Trade Tracking' },
       { href: '/trades?tab=recommendations', label: 'Trade Recommendations' },
     ],
+  },
+  {
+    // v12.3.1 — open to all coaches. Reads the AFL.com.au injury list
+    // + LOMAF roster overlay + trend signals.
+    href: '/injuries',
+    label: 'Injuries',
+    icon: HeartPulse,
   },
   {
     href: '/settings',

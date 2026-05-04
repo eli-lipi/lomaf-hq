@@ -139,19 +139,54 @@ export async function GET(_request: Request, ctx: { params: Promise<{ id: string
       };
     });
 
+    // v12.3.1 — official injury + trend per player.
+    const { computeInjuryTrend, fetchSnapshotsForPlayers } = await import('@/lib/afl-injuries');
+    const playerIdsForInjuries = players.map((p) => p.player_id);
+    const injuryByPlayer = new Map<
+      number,
+      { injury: string | null; estimated_return: string | null; source_updated_at: string | null }
+    >();
+    if (playerIdsForInjuries.length > 0) {
+      const { data: injRows } = await supabase
+        .from('afl_injuries')
+        .select('player_id, injury, estimated_return, source_updated_at')
+        .in('player_id', playerIdsForInjuries);
+      for (const r of (injRows ?? []) as Array<{
+        player_id: number | null;
+        injury: string | null;
+        estimated_return: string | null;
+        source_updated_at: string | null;
+      }>) {
+        if (r.player_id != null) {
+          injuryByPlayer.set(r.player_id, {
+            injury: r.injury,
+            estimated_return: r.estimated_return,
+            source_updated_at: r.source_updated_at,
+          });
+        }
+      }
+    }
+    const snapshotsByPlayer = await fetchSnapshotsForPlayers(supabase, playerIdsForInjuries);
+
     // v12 — augment each trade-player row with a fallback position so the
     // edit modal can resolve the expected-average dropdown for waiver
     // pickups / legacy rows where raw_position is null. This is layered on
     // top of the DB row, not persisted.
-    const playersWithFallback = players.map((p) => ({
-      ...p,
-      _fallback_position:
-        p.raw_position?.trim() ||
-        p.player_position ||
-        draftPosByPlayer.get(p.player_id) ||
-        roundsPosByPlayer.get(p.player_id) ||
-        null,
-    }));
+    const playersWithFallback = players.map((p) => {
+      const inj = injuryByPlayer.get(p.player_id) ?? null;
+      const trend = computeInjuryTrend(snapshotsByPlayer.get(p.player_id) ?? []);
+      return {
+        ...p,
+        _fallback_position:
+          p.raw_position?.trim() ||
+          p.player_position ||
+          draftPosByPlayer.get(p.player_id) ||
+          roundsPosByPlayer.get(p.player_id) ||
+          null,
+        _official_injury: inj,
+        _injury_trend: inj && trend.snapshots.length > 0 ? trend : null,
+      };
+    });
 
     return NextResponse.json({
       trade,

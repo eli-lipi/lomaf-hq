@@ -1812,11 +1812,35 @@ function PlayerVerdictRow({
         {/* Player */}
         <td className="py-4 pr-2 text-[18px]">
           <div className="flex items-center gap-2 min-w-0">
-            <span
-              className="w-2 h-2 rounded-full shrink-0"
-              style={{ background: dotColor }}
-              title={injured ? 'Injured' : 'Active'}
-            />
+            {(() => {
+              // v12.3.1 — prefer the AFL official prognosis when present;
+              // fall back to inferred-injured / Active.
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              const offInj = (tradePlayer as any)._official_injury as
+                | { injury: string | null; estimated_return: string | null; source_updated_at: string | null }
+                | null
+                | undefined;
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              const trend = (tradePlayer as any)._injury_trend as
+                | { status: string; summary: string }
+                | null
+                | undefined;
+              const tooltip = offInj
+                ? `Official: ${offInj.injury ?? '—'}, ${offInj.estimated_return ?? '—'}` +
+                  (offInj.source_updated_at ? ` (as of ${offInj.source_updated_at})` : '') +
+                  (trend ? `\n${trend.summary}` : '')
+                : injured
+                  ? 'Likely injured (DNP pattern)'
+                  : 'Active';
+              const colour = offInj ? '#E24B4A' : dotColor;
+              return (
+                <span
+                  className="w-2 h-2 rounded-full shrink-0"
+                  style={{ background: colour }}
+                  title={tooltip}
+                />
+              );
+            })()}
             <span className="font-medium truncate" style={{ color: TEXT }}>
               {displayLabel}
             </span>

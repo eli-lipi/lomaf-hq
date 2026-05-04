@@ -14,7 +14,12 @@
 import { generateTradeJustification } from './ai-assessment';
 import { fetchSnapshot, snapshotToLines } from './recalculate';
 import { cleanPositionDisplay } from './positions';
-import { formatInjuryForPrompt } from '../afl-injuries';
+import {
+  formatInjuryForPrompt,
+  formatTrendForPrompt,
+  computeInjuryTrend,
+  fetchSnapshotsForPlayers,
+} from '../afl-injuries';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 interface PlayerForJustification {
@@ -100,6 +105,7 @@ export async function buildAndGenerateJustification(
       }
     }
   }
+  const snapshotsByPlayer = await fetchSnapshotsForPlayers(supabase, playerIds);
 
   const formatPlayer = (p: PlayerForJustification) => {
     const livePos = cleanPositionDisplay(p.raw_position) ?? p.position ?? '?';
@@ -116,7 +122,13 @@ export async function buildAndGenerateJustification(
     const pre = p.pre_trade_avg != null ? Math.round(p.pre_trade_avg).toString() : '?';
     const note = p.player_context ? `\n      trader's note: "${p.player_context}"` : '';
     const inj = injuryById.get(p.player_id);
-    const injStr = inj ? `\n      ${formatInjuryForPrompt(inj)}` : '';
+    let injStr = '';
+    if (inj) {
+      injStr = `\n      ${formatInjuryForPrompt(inj)}`;
+      const trend = computeInjuryTrend(snapshotsByPlayer.get(p.player_id) ?? []);
+      const trendLine = formatTrendForPrompt(trend);
+      if (trendLine) injStr += `\n      ${trendLine}`;
+    }
     return `  - ${p.player_name} (${posPart}${pickPart}) → ${p.receiving_team_name}: bet ${expected}${tier}, pre-trade season avg ${pre}${note}${injStr}`;
   };
 

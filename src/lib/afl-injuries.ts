@@ -389,6 +389,36 @@ export async function syncAflInjuries(supabase: SB): Promise<SyncResult> {
       .from('afl_injuries')
       .upsert(rowsToUpsert, { onConflict: 'player_name,club_code' });
     if (error) throw error;
+
+    // v12.3.1 — append a snapshot per (player, club, source_updated_at)
+    // for trend tracking. Uniqueness on the conflict target means
+    // re-running a sync without an AFL update is a no-op.
+    const snapshotRows = rowsToUpsert
+      .filter((r) => r.source_updated_at != null)
+      .map((r) => ({
+        player_name: r.player_name,
+        player_id: r.player_id,
+        club_code: r.club_code,
+        injury: r.injury,
+        estimated_return: r.estimated_return,
+        return_min_weeks: r.return_min_weeks,
+        return_max_weeks: r.return_max_weeks,
+        return_status: r.return_status,
+        source_updated_at: r.source_updated_at,
+        scraped_at: r.scraped_at,
+      }));
+    if (snapshotRows.length > 0) {
+      const { error: snapErr } = await supabase
+        .from('afl_injury_snapshots')
+        .upsert(snapshotRows, {
+          onConflict: 'player_name,club_code,source_updated_at',
+          ignoreDuplicates: true,
+        });
+      if (snapErr) {
+        // Non-fatal — snapshots are bonus, the live cache still works.
+        console.warn('[afl-injuries] snapshot upsert failed:', snapErr.message);
+      }
+    }
   }
 
   // Drop stale entries — anyone whose (name, club) is no longer on the
@@ -443,4 +473,210 @@ export function formatInjuryForPrompt(inj: {
     text += ` (as of ${month} ${d.getUTCDate()})`;
   }
   return text;
+}
+
+// =============================================================
+// v12.3.1 — Trend detection from snapshot history
+// =============================================================
+
+export type InjuryTrendStatus =
+  | 'new'           // <2 snapshots — too early to call
+  | 'on_track'      // ETA decreasing roughly in line with weeks elapsed
+  | 'stalled'       // ETA hasn't moved (or has worsened) against weeks elapsed
+  | 'accelerating'  // ETA dropping faster than weeks elapsed
+  | 'worsened'      // status moved to 'season' / 'indefinite' from 'weeks'
+  | 'cleared';      // no longer on the list (computed externally)
+
+export interface InjuryTrend {
+  status: InjuryTrendStatus;
+  weeksOnList: number;
+  initialMaxWeeks: number | null;
+  currentMaxWeeks: number | null;
+  slippageWeeks: number | null; // current - expected; positive = stalled
+  initialStatus: string | null;
+  currentStatus: string | null;
+  snapshots: SnapshotPoint[];
+  /** Short human label for chips/tooltips. */
+  summary: string;
+}
+
+export interface SnapshotPoint {
+  source_updated_at: string; // YYYY-MM-DD
+  return_max_weeks: number | null;
+  return_min_weeks: number | null;
+  return_status: string | null;
+  estimated_return: string | null;
+}
+
+const CATEGORICAL_WORSE = new Set(['season', 'indefinite']);
+
+/**
+ * Compute a trend from a player's chronologically-ordered snapshots.
+ * Pure function — give it the snapshot list, get back the verdict.
+ */
+export function computeInjuryTrend(rawSnapshots: SnapshotPoint[]): InjuryTrend {
+  const snapshots = [...rawSnapshots].sort((a, b) =>
+    a.source_updated_at < b.source_updated_at ? -1 : 1
+  );
+  if (snapshots.length === 0) {
+    return {
+      status: 'new',
+      weeksOnList: 0,
+      initialMaxWeeks: null,
+      currentMaxWeeks: null,
+      slippageWeeks: null,
+      initialStatus: null,
+      currentStatus: null,
+      snapshots: [],
+      summary: 'New listing',
+    };
+  }
+  const first = snapshots[0];
+  const last = snapshots[snapshots.length - 1];
+  const weeksOnList = Math.max(
+    0,
+    Math.round(
+      (Date.parse(last.source_updated_at + 'T00:00:00Z') -
+        Date.parse(first.source_updated_at + 'T00:00:00Z')) /
+        (7 * 86_400_000)
+    )
+  );
+
+  if (snapshots.length === 1) {
+    return {
+      status: 'new',
+      weeksOnList: 0,
+      initialMaxWeeks: first.return_max_weeks,
+      currentMaxWeeks: first.return_max_weeks,
+      slippageWeeks: null,
+      initialStatus: first.return_status,
+      currentStatus: last.return_status,
+      snapshots,
+      summary: 'Newly listed',
+    };
+  }
+
+  const initialMax = first.return_max_weeks;
+  const currentMax = last.return_max_weeks;
+
+  // Categorical worsening trumps numeric math.
+  if (
+    last.return_status &&
+    CATEGORICAL_WORSE.has(last.return_status) &&
+    first.return_status &&
+    !CATEGORICAL_WORSE.has(first.return_status)
+  ) {
+    return {
+      status: 'worsened',
+      weeksOnList,
+      initialMaxWeeks: initialMax,
+      currentMaxWeeks: currentMax,
+      slippageWeeks: null,
+      initialStatus: first.return_status,
+      currentStatus: last.return_status,
+      snapshots,
+      summary: `Worsened: ${first.estimated_return ?? '?'} → ${last.estimated_return ?? '?'}`,
+    };
+  }
+
+  if (initialMax == null || currentMax == null) {
+    // Can't do numeric trend math (e.g. always 'Test' or 'Indefinite').
+    const sameStatus = first.return_status === last.return_status;
+    return {
+      status: sameStatus ? 'stalled' : 'on_track',
+      weeksOnList,
+      initialMaxWeeks: initialMax,
+      currentMaxWeeks: currentMax,
+      slippageWeeks: null,
+      initialStatus: first.return_status,
+      currentStatus: last.return_status,
+      snapshots,
+      summary: sameStatus
+        ? `Same status ${weeksOnList}w later`
+        : `${first.estimated_return ?? '?'} → ${last.estimated_return ?? '?'}`,
+    };
+  }
+
+  // Expected current ETA = initial - weeks elapsed (clamped at 0).
+  const expectedNowMax = Math.max(0, initialMax - weeksOnList);
+  const slippage = currentMax - expectedNowMax;
+
+  let status: InjuryTrendStatus = 'on_track';
+  if (slippage >= 2) status = 'stalled';
+  else if (slippage <= -2) status = 'accelerating';
+
+  let summary: string;
+  if (status === 'stalled') {
+    summary = `Stalled +${slippage}w · ${weeksOnList}w on list, still ${currentMax}w out`;
+  } else if (status === 'accelerating') {
+    summary = `Accelerating ${slippage}w · ${currentMax}w out vs ${expectedNowMax}w expected`;
+  } else {
+    summary = `On track · ${weeksOnList}w on list, ${currentMax}w to go`;
+  }
+
+  return {
+    status,
+    weeksOnList,
+    initialMaxWeeks: initialMax,
+    currentMaxWeeks: currentMax,
+    slippageWeeks: slippage,
+    initialStatus: first.return_status,
+    currentStatus: last.return_status,
+    snapshots,
+    summary,
+  };
+}
+
+/**
+ * Format the trend for inclusion in an AI prompt. Adds a single line on
+ * top of the OFFICIAL INJURY entry when the trend is informative
+ * (stalled / accelerating / worsened — no signal for on_track or new).
+ */
+export function formatTrendForPrompt(trend: InjuryTrend): string | null {
+  if (trend.status === 'on_track' || trend.status === 'new') return null;
+  if (trend.status === 'stalled') {
+    return `TIMELINE STALLED — listed ${trend.weeksOnList} weeks ago at ${
+      trend.initialMaxWeeks ?? '?'
+    }w, current ETA still ${trend.currentMaxWeeks ?? '?'}w. Slippage +${trend.slippageWeeks}w.`;
+  }
+  if (trend.status === 'accelerating') {
+    return `TIMELINE ACCELERATING — listed ${trend.weeksOnList} weeks ago at ${
+      trend.initialMaxWeeks ?? '?'
+    }w, current ETA only ${trend.currentMaxWeeks ?? '?'}w. Healing ahead of schedule.`;
+  }
+  if (trend.status === 'worsened') {
+    return `TIMELINE WORSENED — initially ${trend.initialStatus ?? '?'}, now ${trend.currentStatus ?? '?'}.`;
+  }
+  return null;
+}
+
+/**
+ * Pull all snapshots for a set of player_ids in one query. Caller
+ * groups by player_id and runs computeInjuryTrend.
+ */
+export async function fetchSnapshotsForPlayers(
+  supabase: SB,
+  playerIds: number[]
+): Promise<Map<number, SnapshotPoint[]>> {
+  const out = new Map<number, SnapshotPoint[]>();
+  if (playerIds.length === 0) return out;
+  const { data } = await supabase
+    .from('afl_injury_snapshots')
+    .select('player_id, source_updated_at, return_max_weeks, return_min_weeks, return_status, estimated_return')
+    .in('player_id', playerIds)
+    .order('source_updated_at', { ascending: true });
+  for (const r of (data ?? []) as Array<
+    SnapshotPoint & { player_id: number | null }
+  >) {
+    if (r.player_id == null) continue;
+    if (!out.has(r.player_id)) out.set(r.player_id, []);
+    out.get(r.player_id)!.push({
+      source_updated_at: r.source_updated_at,
+      return_max_weeks: r.return_max_weeks,
+      return_min_weeks: r.return_min_weeks,
+      return_status: r.return_status,
+      estimated_return: r.estimated_return,
+    });
+  }
+  return out;
 }
