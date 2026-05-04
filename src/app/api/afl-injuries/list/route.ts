@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { getCurrentUser } from '@/lib/auth';
 import { createSupabaseServerClient } from '@/lib/supabase-server';
 import { computeInjuryTrend, type SnapshotPoint, type InjuryTrend } from '@/lib/afl-injuries';
+import { getCurrentRound } from '@/lib/round';
 import { TEAMS } from '@/lib/constants';
 
 export interface InjuryListPlayer {
@@ -61,7 +62,11 @@ export async function GET() {
     scraped_at: string;
   }>;
 
-  // Resolve LOMAF rosters for matched players (latest player_rounds).
+  // v12.3.2 — Resolve LOMAF rosters from ONLY the most recent round.
+  // Using historical player_rounds was matching players to whichever
+  // coach last had them, even if they've been dropped or traded since.
+  // The platform's current round is the explicit ledger value; fall back
+  // to MAX(round_number) if not yet advanced.
   const matchedPlayerIds = injuries
     .map((r) => r.player_id)
     .filter((id): id is number => id != null);
@@ -70,25 +75,37 @@ export async function GET() {
     { team_id: number; team_name: string; position: string | null }
   >();
   if (matchedPlayerIds.length > 0) {
-    const { data: prRows } = await supabase
-      .from('player_rounds')
-      .select('player_id, team_id, team_name, pos, round_number')
-      .in('player_id', matchedPlayerIds)
-      .order('round_number', { ascending: false });
-    const seen = new Set<number>();
-    for (const r of (prRows ?? []) as Array<{
-      player_id: number;
-      team_id: number;
-      team_name: string;
-      pos: string | null;
-    }>) {
-      if (seen.has(r.player_id)) continue;
-      seen.add(r.player_id);
-      rosterByPlayer.set(r.player_id, {
-        team_id: r.team_id,
-        team_name: r.team_name,
-        position: r.pos,
-      });
+    let rosterRound = await getCurrentRound(supabase);
+    if (rosterRound === 0) {
+      const { data: maxRow } = await supabase
+        .from('player_rounds')
+        .select('round_number')
+        .order('round_number', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      rosterRound = (maxRow as { round_number: number } | null)?.round_number ?? 0;
+    }
+    if (rosterRound > 0) {
+      const { data: prRows } = await supabase
+        .from('player_rounds')
+        .select('player_id, team_id, team_name, pos')
+        .in('player_id', matchedPlayerIds)
+        .eq('round_number', rosterRound);
+      for (const r of (prRows ?? []) as Array<{
+        player_id: number;
+        team_id: number;
+        team_name: string;
+        pos: string | null;
+      }>) {
+        // Some round-snapshots include the same player twice (DPP/EMG);
+        // first one wins.
+        if (rosterByPlayer.has(r.player_id)) continue;
+        rosterByPlayer.set(r.player_id, {
+          team_id: r.team_id,
+          team_name: r.team_name,
+          position: r.pos,
+        });
+      }
     }
   }
 
