@@ -103,6 +103,65 @@ export async function GET(_request: Request, ctx: { params: Promise<{ id: string
       if (d.position) draftPosByPlayer.set(d.player_id, d.position);
     }
 
+    // v12.4 — canonical season-wide stats from `players` for each
+    // traded player. proj_avg + form fields feed the trade UI chips
+    // and the AI prompts. Resolved primarily by player_id (set when
+    // the players CSV was uploaded); name-fallback for unresolved.
+    interface PlayerStats {
+      proj_avg: number | null;
+      avg_pts: number | null;
+      last5_avg: number | null;
+      last3_avg: number | null;
+      last1: number | null;
+      owned_pct: number | null;
+    }
+    const statsByPlayer = new Map<number, PlayerStats>();
+    if (playerIds.length > 0) {
+      const { data: byId } = await supabase
+        .from('players')
+        .select('player_id, player_name, proj_avg, avg_pts, last5_avg, last3_avg, last1, owned_pct')
+        .in('player_id', playerIds);
+      const byName = new Map<string, PlayerStats>();
+      for (const r of (byId ?? []) as Array<{ player_id: number | null; player_name: string } & PlayerStats>) {
+        const stats: PlayerStats = {
+          proj_avg: r.proj_avg,
+          avg_pts: r.avg_pts,
+          last5_avg: r.last5_avg,
+          last3_avg: r.last3_avg,
+          last1: r.last1,
+          owned_pct: r.owned_pct,
+        };
+        if (r.player_id != null) statsByPlayer.set(r.player_id, stats);
+        byName.set(r.player_name.toLowerCase(), stats);
+      }
+      // Name-fallback for trade players whose player_id didn't resolve
+      // in the players table on upload.
+      const unresolved = players.filter((p) => !statsByPlayer.has(p.player_id));
+      if (unresolved.length > 0) {
+        const { data: byNameRows } = await supabase
+          .from('players')
+          .select('player_name, proj_avg, avg_pts, last5_avg, last3_avg, last1, owned_pct')
+          .in(
+            'player_name',
+            unresolved.map((p) => p.player_name)
+          );
+        for (const r of (byNameRows ?? []) as Array<{ player_name: string } & PlayerStats>) {
+          byName.set(r.player_name.toLowerCase(), {
+            proj_avg: r.proj_avg,
+            avg_pts: r.avg_pts,
+            last5_avg: r.last5_avg,
+            last3_avg: r.last3_avg,
+            last1: r.last1,
+            owned_pct: r.owned_pct,
+          });
+        }
+        for (const p of unresolved) {
+          const hit = byName.get(p.player_name.toLowerCase());
+          if (hit) statsByPlayer.set(p.player_id, hit);
+        }
+      }
+    }
+
     const playerPerformance: PlayerPerformance[] = players.map((p) => {
       const key = `${p.player_id}-${p.receiving_team_id}`;
       const rounds = (scoresByKey.get(key) ?? []).sort((a, b) => a.round - b.round);
@@ -172,6 +231,8 @@ export async function GET(_request: Request, ctx: { params: Promise<{ id: string
     // edit modal can resolve the expected-average dropdown for waiver
     // pickups / legacy rows where raw_position is null. This is layered on
     // top of the DB row, not persisted.
+    // v12.4 — also attach the canonical players-table stats so the UI
+    // can show proj/form chips inline.
     const playersWithFallback = players.map((p) => {
       const inj = injuryByPlayer.get(p.player_id) ?? null;
       const trend = computeInjuryTrend(snapshotsByPlayer.get(p.player_id) ?? []);
@@ -185,6 +246,7 @@ export async function GET(_request: Request, ctx: { params: Promise<{ id: string
           null,
         _official_injury: inj,
         _injury_trend: inj && trend.snapshots.length > 0 ? trend : null,
+        _stats: statsByPlayer.get(p.player_id) ?? null,
       };
     });
 

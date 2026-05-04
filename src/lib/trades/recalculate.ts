@@ -192,6 +192,35 @@ export async function recalculateTradeForRound(
     // league identity (drafted as DEF, drafted as MID, etc.).
     // v12.3 — also fold the official AFL injury list (afl_injuries) so
     // the AI cites real prognoses instead of inferring from DNP patterns.
+    // v12.4 — pull canonical season-wide stats from `players` so the
+    // AI can lean on AFL Fantasy projections + form when writing the
+    // narrative (e.g. 'Bontempelli is averaging 75 over last 3 vs his
+    // 110 projection — cooling').
+    const playerIdsAll = (players as unknown as Array<{ player_id: number }>).map((p) => p.player_id);
+    interface PlayerStats {
+      proj_avg: number | null;
+      avg_pts: number | null;
+      last3_avg: number | null;
+      last5_avg: number | null;
+    }
+    const statsByPlayer = new Map<number, PlayerStats>();
+    if (playerIdsAll.length > 0) {
+      const { data: pl } = await supabase
+        .from('players')
+        .select('player_id, proj_avg, avg_pts, last3_avg, last5_avg')
+        .in('player_id', playerIdsAll);
+      for (const r of (pl ?? []) as Array<{ player_id: number | null } & PlayerStats>) {
+        if (r.player_id != null) {
+          statsByPlayer.set(r.player_id, {
+            proj_avg: r.proj_avg,
+            avg_pts: r.avg_pts,
+            last3_avg: r.last3_avg,
+            last5_avg: r.last5_avg,
+          });
+        }
+      }
+    }
+
     const tradePlayerById = new Map<
       number,
       {
@@ -201,6 +230,7 @@ export async function recalculateTradeForRound(
         draftPick?: number | null;
         expectedAvg?: number | null;
         injuryLine?: string | null;
+        statsLine?: string | null;
       }
     >();
 
@@ -246,6 +276,15 @@ export async function recalculateTradeForRound(
         const trendLine = formatTrendForPrompt(trend);
         if (trendLine) injuryLine += `\n    ${trendLine}`;
       }
+      const stats = statsByPlayer.get(tp.player_id);
+      let statsLine: string | null = null;
+      if (stats) {
+        const parts: string[] = [];
+        if (stats.proj_avg != null) parts.push(`AFL projAvg ${Math.round(stats.proj_avg)}`);
+        if (stats.avg_pts != null) parts.push(`season avg ${Math.round(stats.avg_pts)}`);
+        if (stats.last3_avg != null) parts.push(`last-3 ${Math.round(stats.last3_avg)}`);
+        if (parts.length > 0) statsLine = parts.join(', ');
+      }
       tradePlayerById.set(tp.player_id, {
         tier: tp.expected_tier ?? null,
         ctx: tp.player_context ?? null,
@@ -253,6 +292,7 @@ export async function recalculateTradeForRound(
         draftPick: tp.draft_pick ?? null,
         expectedAvg: tp.expected_avg ?? null,
         injuryLine,
+        statsLine,
       });
     }
 
@@ -290,6 +330,8 @@ export async function recalculateTradeForRound(
       // The prompt instructs the model to cite this verbatim and to NOT
       // re-infer injury status from DNPs when an official line exists.
       const injStr = tradeMeta?.injuryLine ? `\n    ${tradeMeta.injuryLine}` : '';
+      // v12.4 — canonical AFL Fantasy projection + form context.
+      const statsStr = tradeMeta?.statsLine ? `\n    AFL FANTASY: ${tradeMeta.statsLine}` : '';
       const draftPos = tradeMeta?.draftPos;
       const draftPick = tradeMeta?.draftPick;
       const livePos = cleanPositionDisplay(p.raw_position) ?? p.position ?? '?';
@@ -298,7 +340,7 @@ export async function recalculateTradeForRound(
         : livePos;
       const pickPart = draftPick && draftPick > 0 ? ` · Pick #${draftPick}` : '';
       const posStr = `${posPart}${pickPart}`;
-      return `- ${p.player_name} (${posStr}) → ${p.receiving_team_name}: expected avg ${expectedStr}${tierStr}, pre-trade season-to-date avg ${preStr} (small-sample, NOT a prediction), actual avg ${post}${gapStr}, ${p.rounds_played}/${p.rounds_possible} rounds, ${status}\n    scores: ${perRound}${ctxStr}${injStr}`;
+      return `- ${p.player_name} (${posStr}) → ${p.receiving_team_name}: expected avg ${expectedStr}${tierStr}, pre-trade season-to-date avg ${preStr} (small-sample, NOT a prediction), actual avg ${post}${gapStr}, ${p.rounds_played}/${p.rounds_possible} rounds, ${status}\n    scores: ${perRound}${ctxStr}${injStr}${statsStr}`;
     });
 
     const teamAReceives = teamA.map((p) => p.player_name);

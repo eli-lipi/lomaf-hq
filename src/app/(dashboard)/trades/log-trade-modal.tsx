@@ -49,6 +49,9 @@ interface PlayerOption {
   player_name: string;
   pos: string | null;
   on_roster?: boolean;
+  // v12.4 — AFL Fantasy projected season avg, used to pre-select the
+  // Expected Average dropdown when the admin adds a player.
+  proj_avg?: number | null;
 }
 
 type Step = 'form' | 'saving';
@@ -550,9 +553,23 @@ function PlayerPicker({
     if (opt.on_roster === false) {
       setOffRosterIds((prev) => new Set(prev).add(opt.player_id));
     }
+    // v12.4 — pre-select the Expected Average dropdown to the player's
+    // AFL Fantasy projected average, snapped to the nearest 5. The bet
+    // is locked to the canonical projection by default; the admin can
+    // still change it.
+    let initialExpected: number | null = null;
+    if (opt.proj_avg != null && opt.proj_avg > 0) {
+      initialExpected = Math.max(50, Math.min(130, Math.round(opt.proj_avg / 5) * 5));
+    }
     onChange([
       ...players,
-      { player_id: opt.player_id, player_name: opt.player_name, pos: opt.pos, receiving_team_id: receivingTeamId },
+      {
+        player_id: opt.player_id,
+        player_name: opt.player_name,
+        pos: opt.pos,
+        receiving_team_id: receivingTeamId,
+        expected_avg: initialExpected,
+      },
     ]);
     setQuery('');
   };

@@ -165,6 +165,12 @@ If the player breakdown includes an "OFFICIAL INJURY" line, that's the AFL.com.a
 
 When you see a "TIMELINE STALLED" or "TIMELINE ACCELERATING" or "TIMELINE WORSENED" line beneath an OFFICIAL INJURY, treat it as PREMIUM SIGNAL. AFL.com.au only ever shows the current week's list, so spotting a stalled timeline is a real edge — it means the player isn't progressing as expected. Use it explicitly in the trade verdict: a coach who traded OUT a player whose timeline subsequently stalled looks shrewd; a coach who traded IN such a player looks worse than the surface stats suggest. Cite the slippage by week count when present (e.g. "+4w slippage").
 
+When the breakdown includes an "AFL FANTASY:" line, that's the canonical season-wide projection + form for the player from the official AFL Fantasy data. It carries:
+- AFL projAvg = the league-wide projection for this player's season average. The most reliable expected ceiling.
+- season avg = the player's actual season-to-date average across ALL their games (NOT post-trade).
+- last-3 = the player's last-3-rounds average. Form indicator.
+USE THESE NUMBERS. They're the cleanest signals available. If last-3 is well above projAvg, the player is in HOT FORM — frame the trade verdict accordingly (the buyer is catching a wave; the seller might regret). If last-3 is well below projAvg, COOLING OFF — the buyer is chasing dropping form. Always weight projAvg as the predictive baseline; season avg and last-3 are the trajectory.
+
 The season has 23 rounds. Finals start around R21. A "ton" is 100+, a "zero" is 0/DNP (injury or bye), a solid score is 80+. Typical stars average 90-120. Consider:
 - The original intent (from the context note) and whether it's playing out
 - Each player's actual avg vs. their EXPECTED avg (the explicit bet) — that's the trade's verdict on output. NOT pre-trade season-to-date avg.
@@ -286,6 +292,7 @@ You are given:
 - Each player moved: position, the EXPECTED AVERAGE the receiving coach is betting on (not the player's prior avg — the bet), pre-trade season avg, and any per-player context the trader recorded ("injured at trade time", "selling high", etc.)
 - An OFFICIAL INJURY line where applicable — the current AFL.com.au listed prognosis. CITE IT VERBATIM in the justification when present. It tells you whether a coach is buying low on a known injury, taking on real risk, or just got blindsided.
 - A TIMELINE STALLED / ACCELERATING / WORSENED line where applicable — derived from snapshot history because AFL.com.au only shows the current week. Use it to credit the trader who got out before bad news compounded, or to flag the trader who's holding a player whose return keeps slipping.
+- An "AFL FANTASY:" line per player with the canonical projAvg + season avg + last-3 form. USE THESE — they're the cleanest signals available. projAvg is the league-wide expected ceiling; last-3 is current form. A player whose last-3 is well above projAvg is in hot form (buyer catching a wave); well below = cooling off (buyer chasing dropping form). Cite numbers explicitly.
 - The admin's free-text context note (if present)
 
 WRITE A SHARP, DATA-GROUNDED JUSTIFICATION OF WHY THIS TRADE MAKES SENSE FOR EACH SIDE. Use the actual numbers. Cite line ranks ("MID line ranked 8th — desperate for a top-tier mid"), expected averages ("betting Mills delivers 95+/rd"), positions, and the trader's stated reasoning if it's there. Read the trade as a coach would — what hole is each side plugging, what edge are they buying, what risk are they tolerating.

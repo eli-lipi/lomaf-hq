@@ -1841,21 +1841,74 @@ function PlayerVerdictRow({
                 />
               );
             })()}
-            <span className="font-medium truncate" style={{ color: TEXT }}>
-              {displayLabel}
-            </span>
-            <span className="text-[13px] shrink-0" style={{ color: TEXT_MUTED }}>
-              ({pos}
-              {tradePlayer.draft_pick != null && tradePlayer.draft_pick > 0 ? (
-                <>
-                  <span aria-hidden> · </span>
-                  <span title={`Drafted at overall pick #${tradePlayer.draft_pick}`}>
-                    Pick #{tradePlayer.draft_pick}
-                  </span>
-                </>
-              ) : null}
-              )
-            </span>
+            <div className="flex flex-col min-w-0">
+              <div className="flex items-center gap-2">
+                <span className="font-medium truncate" style={{ color: TEXT }}>
+                  {displayLabel}
+                </span>
+                <span className="text-[13px] shrink-0" style={{ color: TEXT_MUTED }}>
+                  ({pos}
+                  {tradePlayer.draft_pick != null && tradePlayer.draft_pick > 0 ? (
+                    <>
+                      <span aria-hidden> · </span>
+                      <span title={`Drafted at overall pick #${tradePlayer.draft_pick}`}>
+                        Pick #{tradePlayer.draft_pick}
+                      </span>
+                    </>
+                  ) : null}
+                  )
+                </span>
+              </div>
+              {/* v12.4 — form chip with canonical season-wide stats from
+                  the players table. Shows season avg + last-3 with an
+                  up/down arrow when last-3 has diverged from the season
+                  average by 5+ points. Falls back gracefully when stats
+                  aren't yet uploaded. */}
+              {(() => {
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                const stats = (tradePlayer as any)._stats as
+                  | {
+                      proj_avg: number | null;
+                      avg_pts: number | null;
+                      last3_avg: number | null;
+                    }
+                  | null
+                  | undefined;
+                if (!stats) return null;
+                const projTxt = stats.proj_avg != null ? `proj ${Math.round(stats.proj_avg)}` : null;
+                const avgTxt = stats.avg_pts != null ? `season ${Math.round(stats.avg_pts)}` : null;
+                let formTxt: string | null = null;
+                let formColor: string = TEXT_MUTED;
+                if (stats.last3_avg != null) {
+                  const l3 = Math.round(stats.last3_avg);
+                  let arrow = '';
+                  if (stats.avg_pts != null) {
+                    const delta = stats.last3_avg - stats.avg_pts;
+                    if (delta >= 5) {
+                      arrow = ' ↑';
+                      formColor = '#3FBF7F';
+                    } else if (delta <= -5) {
+                      arrow = ' ↓';
+                      formColor = '#E24B4A';
+                    }
+                  }
+                  formTxt = `L3 ${l3}${arrow}`;
+                }
+                const parts = [projTxt, avgTxt].filter(Boolean) as string[];
+                if (parts.length === 0 && !formTxt) return null;
+                return (
+                  <div className="text-[11px] mt-0.5" style={{ color: TEXT_MUTED }}>
+                    {parts.join(' · ')}
+                    {formTxt && (
+                      <>
+                        {parts.length > 0 && ' · '}
+                        <span style={{ color: formColor }}>{formTxt}</span>
+                      </>
+                    )}
+                  </div>
+                );
+              })()}
+            </div>
           </div>
         </td>
         {/* Games Played — own column with text label below */}

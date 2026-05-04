@@ -107,6 +107,29 @@ export async function buildAndGenerateJustification(
   }
   const snapshotsByPlayer = await fetchSnapshotsForPlayers(supabase, playerIds);
 
+  // v12.4 — canonical AFL Fantasy stats from the players table.
+  interface PlayerStats {
+    proj_avg: number | null;
+    avg_pts: number | null;
+    last3_avg: number | null;
+  }
+  const statsByPlayer = new Map<number, PlayerStats>();
+  if (playerIds.length > 0) {
+    const { data: pl } = await supabase
+      .from('players')
+      .select('player_id, proj_avg, avg_pts, last3_avg')
+      .in('player_id', playerIds);
+    for (const r of (pl ?? []) as Array<{ player_id: number | null } & PlayerStats>) {
+      if (r.player_id != null) {
+        statsByPlayer.set(r.player_id, {
+          proj_avg: r.proj_avg,
+          avg_pts: r.avg_pts,
+          last3_avg: r.last3_avg,
+        });
+      }
+    }
+  }
+
   const formatPlayer = (p: PlayerForJustification) => {
     const livePos = cleanPositionDisplay(p.raw_position) ?? p.position ?? '?';
     const draftPos = p.draft_position;
@@ -129,7 +152,16 @@ export async function buildAndGenerateJustification(
       const trendLine = formatTrendForPrompt(trend);
       if (trendLine) injStr += `\n      ${trendLine}`;
     }
-    return `  - ${p.player_name} (${posPart}${pickPart}) → ${p.receiving_team_name}: bet ${expected}${tier}, pre-trade season avg ${pre}${note}${injStr}`;
+    const stats = statsByPlayer.get(p.player_id);
+    let statsStr = '';
+    if (stats) {
+      const parts: string[] = [];
+      if (stats.proj_avg != null) parts.push(`AFL projAvg ${Math.round(stats.proj_avg)}`);
+      if (stats.avg_pts != null) parts.push(`season avg ${Math.round(stats.avg_pts)}`);
+      if (stats.last3_avg != null) parts.push(`last-3 ${Math.round(stats.last3_avg)}`);
+      if (parts.length > 0) statsStr = `\n      AFL FANTASY: ${parts.join(', ')}`;
+    }
+    return `  - ${p.player_name} (${posPart}${pickPart}) → ${p.receiving_team_name}: bet ${expected}${tier}, pre-trade season avg ${pre}${note}${injStr}${statsStr}`;
   };
 
   const playerBreakdown = inputs.players.map(formatPlayer).join('\n');

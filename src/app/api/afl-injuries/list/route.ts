@@ -37,6 +37,10 @@ export interface InjuryListPlayer {
   trend: InjuryTrend;
   /** Per-round timeline. Length = max(currentRound + 1, latest snapshot round). */
   rounds: InjuryRoundCell[];
+  /** AFL Fantasy projected season average. Used to sort waiver targets
+   *  and quantify 'projAvg lost' per coach. Null if the players CSV
+   *  hasn't been uploaded or this player isn't in it. */
+  proj_avg: number | null;
 }
 
 export interface InjuryListResponse {
@@ -136,27 +140,30 @@ export async function GET() {
     number,
     { team_id: number; team_name: string; position: string | null }
   >();
-  // v12.4 — canonical position fallback from the season-wide players
-  // table. Used when player_rounds.pos is null/BN/UTL — common for
-  // waiver pickups who've never made a senior lineup. Keyed by
-  // (name, AFL club) since the players CSV doesn't carry player_id.
+  // v12.4 — canonical position + proj_avg from the season-wide players
+  // table. Position fallback for waiver pickups who've never made a
+  // senior lineup; proj_avg powers the 'lost projAvg' per-coach summary
+  // and waiver-target sorting. Keyed by (name, AFL club) since the
+  // players CSV doesn't carry player_id.
   const allInjuredKeys = injuries.map((r) => ({ name: r.player_name, club: r.club_code }));
   const positionByNameClub = new Map<string, string>();
+  const projAvgByNameClub = new Map<string, number>();
   if (allInjuredKeys.length > 0) {
     const names = Array.from(new Set(allInjuredKeys.map((k) => k.name)));
     const { data: pl } = await supabase
       .from('players')
-      .select('player_name, afl_club, position, player_id')
+      .select('player_name, afl_club, position, player_id, proj_avg')
       .in('player_name', names);
     for (const p of (pl ?? []) as Array<{
       player_name: string;
       afl_club: string;
       position: string | null;
       player_id: number | null;
+      proj_avg: number | null;
     }>) {
-      if (p.position) {
-        positionByNameClub.set(`${p.player_name.toLowerCase()}::${p.afl_club.toUpperCase()}`, p.position);
-      }
+      const key = `${p.player_name.toLowerCase()}::${p.afl_club.toUpperCase()}`;
+      if (p.position) positionByNameClub.set(key, p.position);
+      if (p.proj_avg != null) projAvgByNameClub.set(key, p.proj_avg);
     }
   }
   // AFL.com.au club code → AFL Fantasy club code(s) — we already have
@@ -175,6 +182,14 @@ export async function GET() {
     for (const fc of fantasyCodes) {
       const hit = positionByNameClub.get(`${name.toLowerCase()}::${fc.toUpperCase()}`);
       if (hit) return hit;
+    }
+    return null;
+  };
+  const projAvgFromPlayers = (name: string, aflCode: string): number | null => {
+    const fantasyCodes = FANTASY_CLUB_BY_AFL_CODE[aflCode] ?? [];
+    for (const fc of fantasyCodes) {
+      const hit = projAvgByNameClub.get(`${name.toLowerCase()}::${fc.toUpperCase()}`);
+      if (hit != null) return hit;
     }
     return null;
   };
@@ -380,6 +395,7 @@ export async function GET() {
         positionFromPlayers(r.player_name, r.club_code),
       trend,
       rounds,
+      proj_avg: projAvgFromPlayers(r.player_name, r.club_code),
     };
   });
 

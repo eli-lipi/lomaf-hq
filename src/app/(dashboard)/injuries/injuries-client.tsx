@@ -179,9 +179,21 @@ function ByLomafView({
     return m;
   }, [onLomaf]);
 
+  // v12.4 — sort coaches by total projAvg lost (highest first), so the
+  // worst-hit roster surfaces at the top. Falls back to count if the
+  // players CSV isn't loaded.
+  const projLostByTeam = new Map<number, number>();
+  for (const [teamId, players] of byTeam.entries()) {
+    const sum = players.reduce((s, p) => s + (p.proj_avg ?? 0), 0);
+    projLostByTeam.set(teamId, sum);
+  }
   const teams = TEAMS.filter((t) => byTeam.has(t.team_id))
     .filter((t) => !onlyMyTeam || t.team_id === userTeamId)
-    .sort((a, b) => (byTeam.get(b.team_id)!.length - byTeam.get(a.team_id)!.length));
+    .sort((a, b) => {
+      const lostDiff = (projLostByTeam.get(b.team_id) ?? 0) - (projLostByTeam.get(a.team_id) ?? 0);
+      if (lostDiff !== 0) return lostDiff;
+      return byTeam.get(b.team_id)!.length - byTeam.get(a.team_id)!.length;
+    });
 
   if (teams.length === 0) {
     return (
@@ -196,6 +208,7 @@ function ByLomafView({
       {teams.map((t) => {
         const players = byTeam.get(t.team_id)!;
         const stalledCount = players.filter((p) => p.trend.status === 'stalled' || p.trend.status === 'worsened').length;
+        const projLost = Math.round(projLostByTeam.get(t.team_id) ?? 0);
         return (
           <section key={t.team_id} className="bg-card border border-border rounded-lg p-5 shadow-sm">
             <div className="flex items-baseline justify-between gap-3 mb-4 flex-wrap">
@@ -203,6 +216,11 @@ function ByLomafView({
                 <h3 className="text-lg font-semibold">{t.team_name}</h3>
                 <p className="text-xs text-muted-foreground">
                   {t.coach} · {players.length} player{players.length === 1 ? '' : 's'} listed
+                  {projLost > 0 && (
+                    <span className="ml-2 font-semibold text-foreground">
+                      · {projLost} projAvg/round at stake
+                    </span>
+                  )}
                   {stalledCount > 0 && (
                     <span className="text-amber-600 ml-2">
                       · {stalledCount} stalled / worsened
@@ -245,6 +263,18 @@ function OffRosterSection({
 }) {
   const [expanded, setExpanded] = useState(false);
   if (players.length === 0) return null;
+  // v12.4 — sort waiver-pool injuries by projAvg desc so the highest-
+  // value targets surface first. Tie-break on player_name.
+  const sorted = useMemo(
+    () =>
+      [...players].sort((a, b) => {
+        const av = a.proj_avg ?? -1;
+        const bv = b.proj_avg ?? -1;
+        if (bv !== av) return bv - av;
+        return a.player_name.localeCompare(b.player_name);
+      }),
+    [players]
+  );
   return (
     <section className="bg-card/40 border border-border rounded-lg p-5">
       <button
@@ -254,14 +284,14 @@ function OffRosterSection({
         <div>
           <h3 className="text-base font-semibold text-muted-foreground">Off-roster injuries</h3>
           <p className="text-xs text-muted-foreground">
-            {players.length} listed players not on any LOMAF team — useful for waiver scouting.
+            {players.length} listed players not on any LOMAF team — sorted by projAvg, useful for waiver scouting.
           </p>
         </div>
         <span className="text-xs text-primary">{expanded ? 'Hide' : 'Show'}</span>
       </button>
       {expanded && (
         <div className="space-y-2 mt-4">
-          {players.map((p) => (
+          {sorted.map((p) => (
             <PlayerRow
               key={`${p.player_name}-${p.club_code}`}
               player={p}
@@ -357,6 +387,9 @@ function PlayerRow({
           )}
           {player.source_updated_at && (
             <span className="ml-1.5">· listed {formatYmd(player.source_updated_at)}</span>
+          )}
+          {player.proj_avg != null && (
+            <span className="ml-1.5">· proj {Math.round(player.proj_avg)}</span>
           )}
         </p>
         {/* Trend chip — only show when there's a meaningful read */}

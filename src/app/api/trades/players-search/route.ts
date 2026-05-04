@@ -78,6 +78,7 @@ export async function GET(request: Request) {
         player_name: string;
         pos: string | null;
         on_roster: boolean;
+        proj_avg?: number | null;
       }[] = [];
 
       // Index draft positions
@@ -110,6 +111,23 @@ export async function GET(request: Request) {
         });
       }
 
+      // v12.4 — attach proj_avg from the players table so the Log Trade
+      // modal can pre-select Expected Average from the AFL Fantasy
+      // projection. Same as the team-roster path below.
+      if (players.length > 0) {
+        const { data: pl } = await supabase
+          .from('players')
+          .select('player_id, proj_avg')
+          .in('player_id', players.map((p) => p.player_id));
+        const projById = new Map<number, number | null>();
+        for (const r of (pl ?? []) as Array<{ player_id: number | null; proj_avg: number | null }>) {
+          if (r.player_id != null) projById.set(r.player_id, r.proj_avg);
+        }
+        for (const p of players) {
+          p.proj_avg = projById.get(p.player_id) ?? null;
+        }
+      }
+
       players.sort((a, b) => a.player_name.localeCompare(b.player_name));
       return NextResponse.json({ players });
     }
@@ -136,7 +154,7 @@ export async function GET(request: Request) {
       .order('round_number', { ascending: false });
 
     const seen = new Set<number>();
-    const players: { player_id: number; player_name: string; pos: string | null; on_roster: boolean }[] = [];
+    const players: { player_id: number; player_name: string; pos: string | null; on_roster: boolean; proj_avg?: number | null }[] = [];
     const playerIds: number[] = [];
     for (const r of rows ?? []) {
       if (seen.has(r.player_id)) continue;
@@ -159,6 +177,22 @@ export async function GET(request: Request) {
       for (const p of players) {
         const dp = draftPos.get(p.player_id);
         if (dp) p.pos = dp;
+      }
+    }
+
+    // v12.4 — attach the canonical AFL Fantasy projection so the
+    // Log Trade modal can pre-select Expected Average from it.
+    if (playerIds.length > 0) {
+      const { data: pl } = await supabase
+        .from('players')
+        .select('player_id, proj_avg')
+        .in('player_id', playerIds);
+      const projById = new Map<number, number | null>();
+      for (const r of (pl ?? []) as Array<{ player_id: number | null; proj_avg: number | null }>) {
+        if (r.player_id != null) projById.set(r.player_id, r.proj_avg);
+      }
+      for (const p of players) {
+        p.proj_avg = projById.get(p.player_id) ?? null;
       }
     }
 
