@@ -106,9 +106,9 @@ export default function InjuriesClient({ userTeamId }: { userTeamId: number | nu
       </div>
 
       {view === 'lomaf' ? (
-        <ByLomafView data={data} onlyMyTeam={onlyMyTeam} userTeamId={userTeamId} />
+        <ByLomafView data={data} onlyMyTeam={onlyMyTeam} userTeamId={userTeamId} currentRound={data.cache.current_round} />
       ) : (
-        <ByAflView data={data} />
+        <ByAflView data={data} currentRound={data.cache.current_round} />
       )}
     </div>
   );
@@ -161,10 +161,12 @@ function ByLomafView({
   data,
   onlyMyTeam,
   userTeamId,
+  currentRound,
 }: {
   data: InjuryListResponse;
   onlyMyTeam: boolean;
   userTeamId: number | null;
+  currentRound: number;
 }) {
   const onLomaf = data.players.filter((p) => p.lomaf_team_id != null);
   const byTeam = useMemo(() => {
@@ -211,7 +213,12 @@ function ByLomafView({
             </div>
             <div className="space-y-2">
               {players.map((p) => (
-                <PlayerRow key={`${p.player_name}-${p.club_code}`} player={p} showLomaf={false} />
+                <PlayerRow
+                  key={`${p.player_name}-${p.club_code}`}
+                  player={p}
+                  showLomaf={false}
+                  currentRound={currentRound}
+                />
               ))}
             </div>
           </section>
@@ -220,13 +227,22 @@ function ByLomafView({
 
       {/* Off-roster injuries (anyone on the AFL list not on a LOMAF roster) */}
       {!onlyMyTeam && (
-        <OffRosterSection players={data.players.filter((p) => p.lomaf_team_id == null)} />
+        <OffRosterSection
+          players={data.players.filter((p) => p.lomaf_team_id == null)}
+          currentRound={currentRound}
+        />
       )}
     </div>
   );
 }
 
-function OffRosterSection({ players }: { players: InjuryListPlayer[] }) {
+function OffRosterSection({
+  players,
+  currentRound,
+}: {
+  players: InjuryListPlayer[];
+  currentRound: number;
+}) {
   const [expanded, setExpanded] = useState(false);
   if (players.length === 0) return null;
   return (
@@ -246,7 +262,12 @@ function OffRosterSection({ players }: { players: InjuryListPlayer[] }) {
       {expanded && (
         <div className="space-y-2 mt-4">
           {players.map((p) => (
-            <PlayerRow key={`${p.player_name}-${p.club_code}`} player={p} showLomaf />
+            <PlayerRow
+              key={`${p.player_name}-${p.club_code}`}
+              player={p}
+              showLomaf
+              currentRound={currentRound}
+            />
           ))}
         </div>
       )}
@@ -254,7 +275,7 @@ function OffRosterSection({ players }: { players: InjuryListPlayer[] }) {
   );
 }
 
-function ByAflView({ data }: { data: InjuryListResponse }) {
+function ByAflView({ data, currentRound }: { data: InjuryListResponse; currentRound: number }) {
   const byClub = useMemo(() => {
     const m = new Map<string, InjuryListPlayer[]>();
     for (const p of data.players) {
@@ -279,7 +300,13 @@ function ByAflView({ data }: { data: InjuryListResponse }) {
             </h3>
             <div className="space-y-2">
               {players.map((p) => (
-                <PlayerRow key={`${p.player_name}-${p.club_code}`} player={p} showLomaf compact />
+                <PlayerRow
+                  key={`${p.player_name}-${p.club_code}`}
+                  player={p}
+                  showLomaf
+                  compact
+                  currentRound={currentRound}
+                />
               ))}
             </div>
           </section>
@@ -293,10 +320,12 @@ function PlayerRow({
   player,
   showLomaf,
   compact,
+  currentRound,
 }: {
   player: InjuryListPlayer;
   showLomaf: boolean;
   compact?: boolean;
+  currentRound: number;
 }) {
   return (
     <div
@@ -338,7 +367,7 @@ function PlayerRow({
         )}
         {/* Per-round picker */}
         <div className="mt-2.5">
-          <RoundPicker rounds={player.rounds} />
+          <RoundPicker rounds={player.rounds} currentRound={currentRound} />
         </div>
       </div>
     </div>
@@ -390,7 +419,13 @@ function TrendChip({ trend }: { trend: InjuryTrend }) {
  * The tile text shows the AFL-listed ETA when the snapshot for that
  * round had one (e.g. R8 · "2-3w"). Otherwise just the round number.
  */
-function RoundPicker({ rounds }: { rounds: InjuryRoundCell[] }) {
+function RoundPicker({
+  rounds,
+  currentRound,
+}: {
+  rounds: InjuryRoundCell[];
+  currentRound: number;
+}) {
   if (rounds.length === 0) return null;
 
   const stripedStyle = {
@@ -402,10 +437,14 @@ function RoundPicker({ rounds }: { rounds: InjuryRoundCell[] }) {
   return (
     <div className="flex flex-wrap gap-1">
       {rounds.map((c) => {
-        const isPlayedRound = c.points != null;
+        // 'Past round' = round_number <= currentRound. The round has been
+        // played whether or not we have data for this player there.
+        const isPastRound = currentRound > 0 && c.round <= currentRound;
         const played = c.points != null && c.points > 0;
-        const dnp = c.points === 0;
-        const isFuture = !isPlayedRound;
+        // Past round + not scored (either points=0 OR no row at all because
+        // the player wasn't in the lineup) = DNP, paint red.
+        const dnp = isPastRound && !played;
+        const isFuture = !isPastRound;
 
         let cls = '';
         let style: React.CSSProperties | undefined;
@@ -422,7 +461,13 @@ function RoundPicker({ rounds }: { rounds: InjuryRoundCell[] }) {
         }
 
         const title = `R${c.round}${
-          c.points != null ? ` · ${c.points} pts` : c.predicted_injured ? ' · predicted out' : ' · not played yet'
+          played
+            ? ` · ${c.points} pts`
+            : dnp
+              ? ' · did not play'
+              : c.predicted_injured
+                ? ' · predicted out'
+                : ' · upcoming'
         }${c.eta ? ` · listed ${c.eta}` : ''}${c.injury ? ` · ${c.injury}` : ''}`;
 
         return (

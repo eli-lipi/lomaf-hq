@@ -46,6 +46,9 @@ export interface InjuryListResponse {
     last_scraped: string | null;
     total: number;
     matched_to_lomaf: number;
+    /** Platform's current round so the picker can colour past-but-no-data
+     *  rounds as DNP rather than mistaking them for future rounds. */
+    current_round: number;
   };
 }
 
@@ -305,6 +308,7 @@ export async function GET() {
       last_scraped: lastScraped,
       total: injuries.length,
       matched_to_lomaf: players.filter((p) => p.lomaf_team_id != null).length,
+      current_round: currentRound,
     },
   };
 
