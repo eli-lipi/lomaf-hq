@@ -12,6 +12,7 @@ import {
   getByeRule,
   type ByeRound,
 } from '@/lib/afl-club-byes';
+import { LOMAF_BYE_FIXTURE } from '@/lib/lomaf-bye-fixture';
 import { cn } from '@/lib/utils';
 import { ClubBadge } from './round-impact-card';
 import type { ByeData } from './use-bye-data';
@@ -68,14 +69,20 @@ export default function FixtureTab({ data }: { data: ByeData }) {
   return (
     <div className="space-y-5">
       {BYE_ROUNDS.map((round) => {
-        const pairs = pairFixtures(fixtures[round], data.impactByRound[round]);
+        // Prefer DB-uploaded matchups so post-play data (with scores) wins
+        // once the matchups CSV is uploaded for these rounds. Fall back to
+        // the static LOMAF_BYE_FIXTURE so the tab is useful immediately.
+        const dbPairs = pairFromDb(fixtures[round], data.impactByRound[round]);
+        const pairs = dbPairs.length > 0
+          ? dbPairs
+          : pairFromStatic(round, data.impactByRound[round]);
         return <FixtureRoundCard key={round} round={round} pairs={pairs} />;
       })}
     </div>
   );
 }
 
-function pairFixtures(
+function pairFromDb(
   matchups: MatchupRow[],
   ladder: CoachRoundImpact[],
 ): FixturePair[] {
@@ -90,6 +97,20 @@ function pairFixtures(
     pairs.push({ a, b });
     seen.add(m.team_id);
     seen.add(m.opp_id);
+  }
+  return pairs;
+}
+
+function pairFromStatic(
+  round: ByeRound,
+  ladder: CoachRoundImpact[],
+): FixturePair[] {
+  const impactByTeam = new Map(ladder.map((r) => [r.team.team_id, r] as const));
+  const pairs: FixturePair[] = [];
+  for (const [aId, bId] of LOMAF_BYE_FIXTURE[round]) {
+    const a = impactByTeam.get(aId);
+    const b = impactByTeam.get(bId);
+    if (a && b) pairs.push({ a, b });
   }
   return pairs;
 }
@@ -139,17 +160,11 @@ function FixtureRoundCard({ round, pairs }: { round: ByeRound; pairs: FixturePai
         <p className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground mb-3">
           LOMAF fixture
         </p>
-        {pairs.length === 0 ? (
-          <p className="text-xs text-muted-foreground italic">
-            No matchups uploaded for R{round} yet — upload the matchups CSV to populate the fixture.
-          </p>
-        ) : (
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-            {pairs.map((pair) => (
-              <FixtureRow key={`${pair.a.team.team_id}-${pair.b.team.team_id}`} pair={pair} />
-            ))}
-          </div>
-        )}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+          {pairs.map((pair) => (
+            <FixtureRow key={`${pair.a.team.team_id}-${pair.b.team.team_id}`} pair={pair} />
+          ))}
+        </div>
       </div>
     </section>
   );
