@@ -86,6 +86,7 @@ const NAV_ITEMS: NavItem[] = [
     children: [
       { href: '/byes?tab=overview', label: 'Overview', adminOnly: true },
       { href: '/byes?tab=fixture', label: 'Fixture', adminOnly: true },
+      { href: '/byes?tab=opposition', label: 'Opposition', adminOnly: true },
       { href: '/byes?tab=my-team', label: 'My Team', adminOnly: true },
     ],
   },

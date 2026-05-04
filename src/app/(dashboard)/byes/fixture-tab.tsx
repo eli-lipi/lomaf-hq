@@ -1,8 +1,7 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { ChevronDown, ChevronRight, HeartPulse } from 'lucide-react';
-import { supabase } from '@/lib/supabase';
 import { TEAM_COLOR_MAP, TEAM_SHORT_NAMES } from '@/lib/team-colors';
 import { AFL_CLUBS } from '@/lib/afl-clubs';
 import {
@@ -12,17 +11,10 @@ import {
   getByeRule,
   type ByeRound,
 } from '@/lib/afl-club-byes';
-import { LOMAF_BYE_FIXTURE } from '@/lib/lomaf-bye-fixture';
 import { cn } from '@/lib/utils';
 import { ClubBadge } from './round-impact-card';
 import type { ByeData } from './use-bye-data';
 import type { CoachRoundImpact } from './types';
-
-interface MatchupRow {
-  round_number: number;
-  team_id: number;
-  opp_id: number | null;
-}
 
 interface FixturePair {
   a: CoachRoundImpact;
@@ -30,39 +22,7 @@ interface FixturePair {
 }
 
 export default function FixtureTab({ data }: { data: ByeData }) {
-  const [fixtures, setFixtures] = useState<Record<ByeRound, MatchupRow[]>>({
-    12: [], 13: [], 14: [], 15: [], 16: [],
-  });
-  const [fixturesLoading, setFixturesLoading] = useState(true);
-
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const { data: rows } = await supabase
-          .from('matchup_rounds')
-          .select('round_number, team_id, opp_id')
-          .in('round_number', BYE_ROUNDS as unknown as number[]);
-        if (cancelled || !rows) return;
-        const next: Record<ByeRound, MatchupRow[]> = { 12: [], 13: [], 14: [], 15: [], 16: [] };
-        for (const r of rows) {
-          if ((BYE_ROUNDS as readonly number[]).includes(r.round_number)) {
-            next[r.round_number as ByeRound].push(r as MatchupRow);
-          }
-        }
-        setFixtures(next);
-      } catch (err) {
-        console.error('Failed to load matchup fixtures for byes:', err);
-      } finally {
-        if (!cancelled) setFixturesLoading(false);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, []);
-
-  const loading = data.loading || fixturesLoading;
-
-  if (loading) {
+  if (data.loading) {
     return <div className="py-12 text-center text-muted-foreground">Loading fixture…</div>;
   }
 
@@ -87,13 +47,10 @@ export default function FixtureTab({ data }: { data: ByeData }) {
 
       <div className="space-y-8">
         {BYE_ROUNDS.map((round) => {
-          // Prefer DB-uploaded matchups so post-play data (with scores) wins
-          // once the matchups CSV is uploaded for these rounds. Fall back to
-          // the static LOMAF_BYE_FIXTURE so the tab is useful immediately.
-          const dbPairs = pairFromDb(fixtures[round], data.impactByRound[round]);
-          const pairs = dbPairs.length > 0
-            ? dbPairs
-            : pairFromStatic(round, data.impactByRound[round]);
+          const pairs = pairsFromOpponentMap(
+            data.opponentByRound[round],
+            data.impactByRound[round],
+          );
           return <FixtureRoundSection key={round} round={round} pairs={pairs} />;
         })}
       </div>
@@ -101,35 +58,21 @@ export default function FixtureTab({ data }: { data: ByeData }) {
   );
 }
 
-function pairFromDb(
-  matchups: MatchupRow[],
+function pairsFromOpponentMap(
+  opps: Map<number, number>,
   ladder: CoachRoundImpact[],
 ): FixturePair[] {
   const impactByTeam = new Map(ladder.map((r) => [r.team.team_id, r] as const));
   const seen = new Set<number>();
   const pairs: FixturePair[] = [];
-  for (const m of matchups) {
-    if (seen.has(m.team_id) || m.opp_id == null || seen.has(m.opp_id)) continue;
-    const a = impactByTeam.get(m.team_id);
-    const b = impactByTeam.get(m.opp_id);
-    if (!a || !b) continue;
-    pairs.push({ a, b });
-    seen.add(m.team_id);
-    seen.add(m.opp_id);
-  }
-  return pairs;
-}
-
-function pairFromStatic(
-  round: ByeRound,
-  ladder: CoachRoundImpact[],
-): FixturePair[] {
-  const impactByTeam = new Map(ladder.map((r) => [r.team.team_id, r] as const));
-  const pairs: FixturePair[] = [];
-  for (const [aId, bId] of LOMAF_BYE_FIXTURE[round]) {
+  for (const [aId, bId] of opps) {
+    if (seen.has(aId) || seen.has(bId)) continue;
     const a = impactByTeam.get(aId);
     const b = impactByTeam.get(bId);
-    if (a && b) pairs.push({ a, b });
+    if (!a || !b) continue;
+    pairs.push({ a, b });
+    seen.add(aId);
+    seen.add(bId);
   }
   return pairs;
 }

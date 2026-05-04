@@ -5,12 +5,14 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { cn } from '@/lib/utils';
 import OverviewTab from './overview-tab';
 import FixtureTab from './fixture-tab';
+import OppositionTab from './opposition-tab';
 import MyTeamTab from './my-team-tab';
 import { useByeData } from './use-bye-data';
 
 const TABS = [
   { id: 'overview', label: 'Overview' },
   { id: 'fixture', label: 'Fixture' },
+  { id: 'opposition', label: 'Opposition' },
   { id: 'my-team', label: 'My Team' },
 ] as const;
 
@@ -69,6 +71,7 @@ function ByesClientInner({ userTeamId }: { userTeamId: number | null }) {
 
       {activeTab === 'overview' && <OverviewTab data={data} />}
       {activeTab === 'fixture' && <FixtureTab data={data} />}
+      {activeTab === 'opposition' && <OppositionTab data={data} />}
       {activeTab === 'my-team' && <MyTeamTab data={data} defaultTeamId={userTeamId} />}
     </div>
   );
