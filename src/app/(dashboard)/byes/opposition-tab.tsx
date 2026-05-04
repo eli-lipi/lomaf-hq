@@ -7,10 +7,8 @@ import { TEAM_COLOR_MAP, TEAM_SHORT_NAMES } from '@/lib/team-colors';
 import {
   BYE_ROUNDS,
   IMPACT_META,
-  POINTS_META,
   type ByeRound,
   type ImpactGrade,
-  type PointsGrade,
 } from '@/lib/afl-club-byes';
 import { cn } from '@/lib/utils';
 import type { ByeData } from './use-bye-data';
@@ -27,8 +25,8 @@ type SortDir = 'asc' | 'desc';
 interface PerRoundCell {
   count: number;
   pointsLost: number;
+  /** Combined grade — drives cell colour for both Players and Pts cells. */
   grade: ImpactGrade;
-  pointsGrade: PointsGrade;
   oppTeamId: number;
   oppShortName: string;
 }
@@ -84,7 +82,6 @@ export default function OppositionTab({ data }: { data: ByeData }) {
             count,
             pointsLost: oppImpact.pointsLost,
             grade: oppImpact.grade,
-            pointsGrade: oppImpact.pointsGrade,
             oppTeamId: oppImpact.team.team_id,
             oppShortName: TEAM_SHORT_NAMES[oppImpact.team.team_id] ?? oppImpact.team.team_name,
           };
@@ -298,15 +295,13 @@ export default function OppositionTab({ data }: { data: ByeData }) {
                         </td>
                       );
                     }
-                    const countMeta = IMPACT_META[cell.grade];
-                    const ptsMeta = POINTS_META[cell.pointsGrade];
+                    const meta = IMPACT_META[cell.grade];
                     return (
                       <RoundDataCells
                         key={round}
                         round={round}
                         cell={cell}
-                        countMeta={countMeta}
-                        ptsMeta={ptsMeta}
+                        meta={meta}
                       />
                     );
                   })}
@@ -318,9 +313,8 @@ export default function OppositionTab({ data }: { data: ByeData }) {
       </div>
 
       <p className="text-[10px] text-muted-foreground px-1">
-        Per-round group: <strong>Players</strong> cell (count-graded) on the left,
-        <strong> Pts</strong> cell (points-graded) on the right — sort either independently.
-        A 2-player cell with a star going down may show Low Players but Big Hit pts.
+        Per-round group: <strong>Players</strong> cell on the left, <strong>Pts</strong> cell on the right —
+        sort either independently. Both cells share the combined impact colour (worst lens wins).
         Edge Rounds counts bye rounds where you&apos;re strictly more available than your opponent
         (ties don&apos;t count).
       </p>
@@ -355,27 +349,27 @@ function RoundSubHeaders({
   );
 }
 
-/** A pair of body cells for one round: count-graded Players cell + points-graded Pts cell. */
+/** A pair of body cells for one round: Players cell + Pts cell. Both cells
+ *  share the same combined-grade colour — they show different metrics on
+ *  the same severity background. */
 function RoundDataCells({
   round,
   cell,
-  countMeta,
-  ptsMeta,
+  meta,
 }: {
   round: ByeRound;
   cell: PerRoundCell;
-  countMeta: { bg: string; fg: string; label: string };
-  ptsMeta: { bg: string; fg: string; label: string };
+  meta: { bg: string; fg: string; label: string };
 }) {
   return (
     <>
       <td
         className="px-2 py-2 text-center align-middle border-l border-border/40"
-        title={`R${round}: vs ${cell.oppShortName} — ${countMeta.label} (${cell.count} unavailable)`}
+        title={`R${round} vs ${cell.oppShortName} — ${meta.label} (${cell.count} out, ${cell.pointsLost} pts lost)`}
       >
         <div
           className="rounded-md py-1.5 px-1 leading-tight font-bold"
-          style={{ background: countMeta.bg, color: countMeta.fg }}
+          style={{ background: meta.bg, color: meta.fg }}
         >
           <div className="text-base tabular-nums">{cell.count}</div>
           <div className="text-[9px] uppercase tracking-wider opacity-80 truncate">
@@ -385,11 +379,11 @@ function RoundDataCells({
       </td>
       <td
         className="px-2 py-2 text-center align-middle"
-        title={`R${round}: vs ${cell.oppShortName} — ${ptsMeta.label} (${cell.pointsLost} avg lost)`}
+        title={`R${round} vs ${cell.oppShortName} — ${meta.label} (${cell.count} out, ${cell.pointsLost} pts lost)`}
       >
         <div
           className="rounded-md py-1.5 px-1 leading-tight font-bold"
-          style={{ background: ptsMeta.bg, color: ptsMeta.fg }}
+          style={{ background: meta.bg, color: meta.fg }}
         >
           <div className="text-base tabular-nums">{cell.pointsLost}</div>
           <div className="text-[9px] uppercase tracking-wider opacity-80 truncate">

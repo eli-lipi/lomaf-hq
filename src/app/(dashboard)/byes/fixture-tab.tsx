@@ -8,7 +8,6 @@ import {
   AFL_CLUB_BYES,
   BYE_ROUNDS,
   IMPACT_META,
-  POINTS_META,
   STAR_AVG_THRESHOLD,
   getByeRule,
   type ByeRound,
@@ -192,7 +191,6 @@ function CoachInline({
 }) {
   const teamColor = TEAM_COLOR_MAP[row.team.team_id] ?? '#6B7280';
   const meta = IMPACT_META[row.grade];
-  const ptsMeta = POINTS_META[row.pointsGrade];
   return (
     <div className="flex items-center gap-3 min-w-0">
       <span
@@ -208,36 +206,24 @@ function CoachInline({
           {row.team.team_name}
         </div>
       </div>
-      {/* Two grade pills + their respective stats — count up top, points
-          underneath, both right-aligned so the pair scans cleanly. */}
-      <div className="flex flex-col items-end gap-1 shrink-0">
-        <div className="flex items-center gap-2">
-          <span
-            className={cn(
-              'text-[11px] px-2 py-0.5 rounded-full',
-              accentSide ? 'font-bold ring-1 ring-offset-1 ring-current/30' : 'font-semibold'
-            )}
-            style={{ background: meta.bg, color: meta.fg }}
-            title="Roster impact (count-based)"
-          >
-            {meta.label}
-          </span>
-          <span className="text-[11px] tabular-nums text-muted-foreground w-14 text-right">
-            {row.unavailable.length}/{row.rosterSize || '—'}
-          </span>
-        </div>
-        <div className="flex items-center gap-2">
-          <span
-            className="text-[11px] font-semibold px-2 py-0.5 rounded-full"
-            style={{ background: ptsMeta.bg, color: ptsMeta.fg }}
-            title="Scoring impact (avg-points-based)"
-          >
-            {ptsMeta.label}
-          </span>
-          <span className="text-[11px] tabular-nums text-muted-foreground w-14 text-right">
-            {row.pointsLost} pts
-          </span>
-        </div>
+      {/* Single combined grade pill + both raw numbers stacked beside it. */}
+      <span
+        className={cn(
+          'text-[11px] px-2.5 py-1 rounded-full shrink-0',
+          accentSide ? 'font-bold ring-1 ring-offset-1 ring-current/30' : 'font-semibold'
+        )}
+        style={{ background: meta.bg, color: meta.fg }}
+        title={`${meta.label} — ${row.unavailable.length} out, ${row.pointsLost} pts lost`}
+      >
+        {meta.label}
+      </span>
+      <div className="flex flex-col items-end shrink-0">
+        <span className="text-[11px] tabular-nums text-muted-foreground">
+          {row.unavailable.length}/{row.rosterSize || '—'}
+        </span>
+        <span className="text-[11px] tabular-nums text-muted-foreground">
+          {row.pointsLost} pts
+        </span>
       </div>
     </div>
   );

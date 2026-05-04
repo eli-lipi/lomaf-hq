@@ -7,7 +7,6 @@ import { AFL_CLUBS } from '@/lib/afl-clubs';
 import {
   AFL_CLUB_BYES,
   IMPACT_META,
-  POINTS_META,
   STAR_AVG_THRESHOLD,
   getByeRule,
   type ByeRound,
@@ -129,7 +128,6 @@ function CoachLadderRow({ row, rank }: { row: CoachRoundImpact; rank: number }) 
   const [expanded, setExpanded] = useState(false);
   const teamColor = TEAM_COLOR_MAP[row.team.team_id] ?? '#6B7280';
   const meta = IMPACT_META[row.grade];
-  const ptsMeta = POINTS_META[row.pointsGrade];
   const hasPlayers = row.unavailable.length > 0;
 
   return (
@@ -161,34 +159,21 @@ function CoachLadderRow({ row, rank }: { row: CoachRoundImpact; rank: number }) 
           </span>
         </div>
 
-        {/* Two grade pills + two stat numbers, stacked vertically so the
-            roster lens (count) and scoring lens (points) are both visible
-            at a glance without dominating row width. */}
-        <div className="flex flex-col items-end gap-1 shrink-0">
-          <div className="flex items-center gap-2">
-            <span
-              className="text-[11px] font-semibold px-2 py-0.5 rounded-full"
-              style={{ background: meta.bg, color: meta.fg }}
-              title="Roster impact (count-based)"
-            >
-              {meta.label}
-            </span>
-            <span className="text-[11px] tabular-nums text-muted-foreground w-16 text-right hidden sm:inline">
-              {row.unavailable.length}/{row.rosterSize || '—'} out
-            </span>
-          </div>
-          <div className="flex items-center gap-2">
-            <span
-              className="text-[11px] font-semibold px-2 py-0.5 rounded-full"
-              style={{ background: ptsMeta.bg, color: ptsMeta.fg }}
-              title="Scoring impact (avg-points-based)"
-            >
-              {ptsMeta.label}
-            </span>
-            <span className="text-[11px] tabular-nums text-muted-foreground w-16 text-right hidden sm:inline">
-              {row.pointsLost} pts
-            </span>
-          </div>
+        {/* Single combined grade pill + both raw numbers stacked beside it. */}
+        <span
+          className="text-[11px] font-semibold px-2.5 py-1 rounded-full shrink-0"
+          style={{ background: meta.bg, color: meta.fg }}
+          title={`${meta.label} — ${row.unavailable.length} out, ${row.pointsLost} pts lost`}
+        >
+          {meta.label}
+        </span>
+        <div className="flex flex-col items-end shrink-0 hidden sm:flex">
+          <span className="text-[11px] tabular-nums text-muted-foreground tabular-nums">
+            {row.unavailable.length}/{row.rosterSize || '—'} out
+          </span>
+          <span className="text-[11px] tabular-nums text-muted-foreground">
+            {row.pointsLost} pts
+          </span>
         </div>
 
         {hasPlayers ? (

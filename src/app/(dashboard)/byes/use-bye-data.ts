@@ -7,9 +7,9 @@ import { AFL_CLUBS } from '@/lib/afl-clubs';
 import {
   AFL_CLUB_BYES,
   BYE_ROUNDS,
+  IMPACT_META,
   getByeRule,
   getImpactGrade,
-  getPointsGrade,
   type ByeRound,
 } from '@/lib/afl-club-byes';
 import { LOMAF_BYE_FIXTURE } from '@/lib/lomaf-bye-fixture';
@@ -248,13 +248,15 @@ export function useByeData(): ByeData {
         // Sort unavailable players by avg desc — stars surface first in
         // any expanded list across the tabs.
         unavailable.sort((a, b) => (b.avg ?? -1) - (a.avg ?? -1));
+        const roundedPoints = Math.round(pointsLost);
         return {
           team,
           rosterSize: roster.length,
           unavailable,
-          pointsLost: Math.round(pointsLost),
-          pointsGrade: getPointsGrade(pointsLost),
-          grade: getImpactGrade(unavailable.length, roster.length, rule),
+          pointsLost: roundedPoints,
+          // Combined grade — driven by whichever threshold (count or
+          // points) lands you in the higher tier.
+          grade: getImpactGrade(unavailable.length, roster.length, rule, roundedPoints),
         };
       });
 
@@ -314,11 +316,5 @@ export function useByeData(): ByeData {
 }
 
 function gradeOrdinal(grade: CoachRoundImpact['grade']): number {
-  switch (grade) {
-    case 'cannot-field': return 0;
-    case 'serious':      return 1;
-    case 'medium':       return 2;
-    case 'low':          return 3;
-    case 'none':         return 4;
-  }
+  return IMPACT_META[grade].ordinal;
 }

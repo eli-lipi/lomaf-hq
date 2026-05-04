@@ -41,18 +41,22 @@ export function getMinPlayable(rule: ByeRule): number {
 }
 
 // =====================================================================
-// Coach bye-impact grading
+// Coach bye-impact grading — single combined grade
 // =====================================================================
-// Five-tier severity scale applied to each LOMAF coach's roster, given
-// how many of their players are unavailable in a round (byed OR
-// predicted injured) and the round's scoring rule.
+// One five-tier severity scale per (coach, round) that takes BOTH the
+// raw count of unavailable players AND the sum of their season-avg
+// points. Crossing EITHER threshold bumps you up to the next tier —
+// you're as bad as your worst lens.
 //
-// "Can't Field a Team" is hard-defined: roster minus unavailable players
-// drops below the rule's minimum playable count (16 for best-16 rounds,
-// 18 for normal rounds). Below that, severity ramps with raw count.
+// Thresholds:
+//   No Impact:           0 players      AND  0 pts
+//   Low Impact:          1–3 players    OR   1–249 pts
+//   Medium Impact:       4–6 players    OR   250–499 pts
+//   High Impact:         7+ (fieldable) OR   500–699 pts
+//   Can't Field a Team:  roster − out < scoring min  OR  ≥700 pts
 // =====================================================================
 
-export type ImpactGrade = 'none' | 'low' | 'medium' | 'serious' | 'cannot-field';
+export type ImpactGrade = 'none' | 'low' | 'medium' | 'high' | 'cannot-field';
 
 export interface ImpactMeta {
   label: string;
@@ -68,7 +72,7 @@ export interface ImpactMeta {
 
 export const IMPACT_META: Record<ImpactGrade, ImpactMeta> = {
   'cannot-field': { label: "Can't Field a Team", bg: '#7F1D1D', fg: '#FFFFFF', tint: 'rgba(127,29,29,0.10)', ordinal: 0 },
-  'serious':      { label: 'Serious Impact',     bg: '#EF4444', fg: '#FFFFFF', tint: 'rgba(239,68,68,0.10)', ordinal: 1 },
+  'high':         { label: 'High Impact',        bg: '#EF4444', fg: '#FFFFFF', tint: 'rgba(239,68,68,0.10)', ordinal: 1 },
   'medium':       { label: 'Medium Impact',      bg: '#F59E0B', fg: '#1F1300', tint: 'rgba(245,158,11,0.12)', ordinal: 2 },
   'low':          { label: 'Low Impact',         bg: '#0EA5E9', fg: '#FFFFFF', tint: 'rgba(14,165,233,0.10)', ordinal: 3 },
   'none':         { label: 'No Impact',          bg: '#10B981', fg: '#FFFFFF', tint: 'rgba(16,185,129,0.08)', ordinal: 4 },
@@ -76,60 +80,51 @@ export const IMPACT_META: Record<ImpactGrade, ImpactMeta> = {
 
 /** Worst → best. Useful for legends and ladders. */
 export const IMPACT_GRADES_ORDERED: ImpactGrade[] = [
-  'cannot-field', 'serious', 'medium', 'low', 'none',
-];
-
-export function getImpactGrade(
-  unavailableCount: number,
-  rosterSize: number,
-  rule: ByeRule,
-): ImpactGrade {
-  if (unavailableCount === 0) return 'none';
-  const remaining = rosterSize - unavailableCount;
-  if (remaining < getMinPlayable(rule)) return 'cannot-field';
-  if (unavailableCount <= 3) return 'low';
-  if (unavailableCount <= 6) return 'medium';
-  return 'serious';
-}
-
-// =====================================================================
-// Points-weighted impact grading
-// =====================================================================
-// Same five-tier colour ramp, but graded on the sum of `avg_pts` for
-// each coach's unavailable players. Captures the "Gulden vs scrub"
-// difference: missing one star can hurt more than missing three
-// fringe scorers.
-//
-// The top tier is named "Crippling Hit" rather than "Can't Field a
-// Team" — points lost doesn't make a team unfieldable on its own; the
-// count-based grade still owns that semantic.
-// =====================================================================
-
-export type PointsGrade = 'none' | 'low' | 'medium' | 'serious' | 'crippling';
-
-export const POINTS_META: Record<PointsGrade, ImpactMeta> = {
-  'crippling': { label: 'Crippling Hit', bg: '#7F1D1D', fg: '#FFFFFF', tint: 'rgba(127,29,29,0.10)', ordinal: 0 },
-  'serious':   { label: 'Big Hit',       bg: '#EF4444', fg: '#FFFFFF', tint: 'rgba(239,68,68,0.10)', ordinal: 1 },
-  'medium':    { label: 'Medium Hit',    bg: '#F59E0B', fg: '#1F1300', tint: 'rgba(245,158,11,0.12)', ordinal: 2 },
-  'low':       { label: 'Light Hit',     bg: '#0EA5E9', fg: '#FFFFFF', tint: 'rgba(14,165,233,0.10)', ordinal: 3 },
-  'none':      { label: 'No Hit',        bg: '#10B981', fg: '#FFFFFF', tint: 'rgba(16,185,129,0.08)', ordinal: 4 },
-};
-
-/** Worst → best, useful for legends. */
-export const POINTS_GRADES_ORDERED: PointsGrade[] = [
-  'crippling', 'serious', 'medium', 'low', 'none',
+  'cannot-field', 'high', 'medium', 'low', 'none',
 ];
 
 /** Avg threshold above which an unavailable player gets a star indicator
  *  in expanded lists. AFL Fantasy treats 100+ as the "century" tier. */
 export const STAR_AVG_THRESHOLD = 100;
 
-export function getPointsGrade(avgLost: number): PointsGrade {
-  if (avgLost <= 0) return 'none';
-  if (avgLost < 100) return 'low';      // ~one decent player or 2 bench
-  if (avgLost < 200) return 'medium';   // ~one star or 2 solid mids
-  if (avgLost < 350) return 'serious';  // multiple stars, big chunk of scoring
-  return 'crippling';                   // catastrophic
+/** Count-only tier — internal helper, exposed for documentation/tests. */
+function countTier(
+  unavailableCount: number,
+  rosterSize: number,
+  rule: ByeRule,
+): ImpactGrade {
+  if (unavailableCount === 0) return 'none';
+  if (rosterSize - unavailableCount < getMinPlayable(rule)) return 'cannot-field';
+  if (unavailableCount <= 3) return 'low';
+  if (unavailableCount <= 6) return 'medium';
+  return 'high'; // 7+ but still fieldable
+}
+
+/** Points-only tier — internal helper. */
+function pointsTier(pointsLost: number): ImpactGrade {
+  if (pointsLost <= 0) return 'none';
+  if (pointsLost >= 700) return 'cannot-field';
+  if (pointsLost <= 249) return 'low';
+  if (pointsLost <= 499) return 'medium';
+  return 'high'; // 500–699
+}
+
+function moreSevere(a: ImpactGrade, b: ImpactGrade): ImpactGrade {
+  // Lower ordinal = more severe (cannot-field=0 is worst).
+  return IMPACT_META[a].ordinal <= IMPACT_META[b].ordinal ? a : b;
+}
+
+/** Combined grade — "you're as bad as your worst lens". */
+export function getImpactGrade(
+  unavailableCount: number,
+  rosterSize: number,
+  rule: ByeRule,
+  pointsLost: number,
+): ImpactGrade {
+  return moreSevere(
+    countTier(unavailableCount, rosterSize, rule),
+    pointsTier(pointsLost),
+  );
 }
 
 /** Returns the round in which an AFL club byes, or null if not in the bye window. */

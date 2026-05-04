@@ -1,5 +1,5 @@
 import type { LeagueTeam } from '@/lib/types';
-import type { ImpactGrade, PointsGrade } from '@/lib/afl-club-byes';
+import type { ImpactGrade } from '@/lib/afl-club-byes';
 
 export interface UnavailablePlayer {
   player_id: number;
@@ -21,10 +21,9 @@ export interface CoachRoundImpact {
   rosterSize: number;
   /** All players unavailable this round — byed, injured, or both (deduped on player_id). */
   unavailable: UnavailablePlayer[];
-  /** Count-based severity grade — drives "Can't Field a Team" semantics. */
+  /** Combined severity grade — derived from BOTH `unavailable.length` and
+   *  `pointsLost`. Crossing either threshold bumps the tier. */
   grade: ImpactGrade;
   /** Sum of `avg` across unavailable players (treats null avg as 0). */
   pointsLost: number;
-  /** Points-weighted severity grade derived from `pointsLost`. */
-  pointsGrade: PointsGrade;
 }
