@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState, useCallback } from 'react';
-import { CheckCircle2, AlertCircle, Circle, RefreshCw, PlayCircle, Mail, ChevronRight } from 'lucide-react';
+import { CheckCircle2, AlertCircle, Circle, RefreshCw, PlayCircle, Mail, ChevronRight, ArrowRight } from 'lucide-react';
 import UploadContent from '../upload/upload-content';
 import { cn } from '@/lib/utils';
 
@@ -34,10 +34,11 @@ interface AdvanceResult {
   recalcError: string | null;
 }
 
+const TOTAL_ROUNDS = 23;
+
 function relativeTime(iso: string): string {
-  const now = Date.now();
   const t = new Date(iso).getTime();
-  const diffSec = Math.floor((now - t) / 1000);
+  const diffSec = Math.floor((Date.now() - t) / 1000);
   if (diffSec < 60) return 'just now';
   const diffMin = Math.floor(diffSec / 60);
   if (diffMin < 60) return `${diffMin}m ago`;
@@ -49,9 +50,9 @@ function relativeTime(iso: string): string {
 }
 
 function StatusIcon({ status }: { status: RoundCheck['status'] }) {
-  if (status === 'ok') return <CheckCircle2 size={18} className="text-green-600 shrink-0" />;
-  if (status === 'partial') return <AlertCircle size={18} className="text-amber-500 shrink-0" />;
-  return <Circle size={18} className="text-red-400 shrink-0" />;
+  if (status === 'ok') return <CheckCircle2 size={20} className="text-green-600 shrink-0" />;
+  if (status === 'partial') return <AlertCircle size={20} className="text-amber-500 shrink-0" />;
+  return <Circle size={20} className="text-red-400 shrink-0" />;
 }
 
 export default function RoundControlClient({
@@ -66,7 +67,10 @@ export default function RoundControlClient({
 }) {
   const [currentRound, setCurrentRound] = useState(initialCurrentRound);
   const [advancedAt, setAdvancedAt] = useState<string | null>(initialAdvancedAt);
-  const [nextRound, setNextRound] = useState(initialNextRound);
+  // v12.2.1 — single source of truth for "round we're preparing".
+  // Default = the next round, but admin can change to re-advance the
+  // current round or correct a mistake.
+  const [targetRound, setTargetRound] = useState<number>(initialNextRound);
 
   const [verify, setVerify] = useState<VerifyResponse | null>(null);
   const [verifyLoading, setVerifyLoading] = useState(false);
@@ -78,15 +82,17 @@ export default function RoundControlClient({
   const [advanceErr, setAdvanceErr] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
 
+  const isReAdvance = targetRound <= currentRound && currentRound > 0;
+
   const refreshVerify = useCallback(async () => {
     setVerifyLoading(true);
     try {
-      const res = await fetch(`/api/round/verify?round=${nextRound}`);
+      const res = await fetch(`/api/round/verify?round=${targetRound}`);
       if (res.ok) setVerify(await res.json());
     } finally {
       setVerifyLoading(false);
     }
-  }, [nextRound]);
+  }, [targetRound]);
 
   const refreshHistory = useCallback(async () => {
     const res = await fetch('/api/round/history');
@@ -98,11 +104,13 @@ export default function RoundControlClient({
 
   useEffect(() => {
     refreshVerify();
-    refreshHistory();
-  }, [refreshVerify, refreshHistory]);
+  }, [refreshVerify]);
 
-  // Light auto-poll while a verify is showing partials/misses, so newly
-  // landed CSVs flip checks green without the admin clicking Refresh.
+  useEffect(() => {
+    refreshHistory();
+  }, [refreshHistory]);
+
+  // Light auto-poll while a verify is showing partials/misses.
   useEffect(() => {
     if (!verify || verify.ready) return;
     const t = setInterval(refreshVerify, 8_000);
@@ -111,30 +119,37 @@ export default function RoundControlClient({
 
   const handleAdvance = async () => {
     setAdvancing(true);
-    setAdvanceMsg('Recomputing trades and AI narratives… this can take a few minutes.');
+    setAdvanceMsg(
+      isReAdvance
+        ? `Re-running Round ${targetRound} — recomputing trades and AI narratives. This can take a few minutes.`
+        : `Recomputing trades and AI narratives for Round ${targetRound}. This can take a few minutes.`
+    );
     setAdvanceErr(null);
     try {
       const res = await fetch('/api/round/advance', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ round: nextRound, sendEmail }),
+        body: JSON.stringify({ round: targetRound, sendEmail }),
       });
       const json = (await res.json()) as AdvanceResult & { error?: string };
       if (!res.ok) {
         setAdvanceErr(json.error || 'Advance failed.');
         return;
       }
-      // Success — pull updated state and clear progress.
-      const note: string[] = [`Round ${nextRound} is now live.`];
+      const note: string[] = [
+        isReAdvance
+          ? `Round ${targetRound} re-run complete.`
+          : `Round ${targetRound} is now live.`,
+      ];
       if (json.recalcError) note.push(`Trade recalc had an issue: ${json.recalcError}`);
       if (sendEmail) {
         if (json.emailsSent) note.push('Coaches were emailed.');
         else if (json.emailError) note.push(`Email failed: ${json.emailError}`);
       }
       setAdvanceMsg(note.join(' '));
-      setCurrentRound(nextRound);
+      setCurrentRound(targetRound);
       setAdvancedAt(new Date().toISOString());
-      setNextRound(nextRound + 1);
+      setTargetRound(Math.min(TOTAL_ROUNDS, targetRound + 1));
       await Promise.all([refreshVerify(), refreshHistory()]);
     } catch (e) {
       setAdvanceErr(e instanceof Error ? e.message : 'Advance failed.');
@@ -160,70 +175,128 @@ export default function RoundControlClient({
 
   return (
     <div>
-      <h1 className="text-2xl font-bold mb-1">Round Control</h1>
-      <p className="text-muted-foreground text-sm mb-6">
-        The platform&apos;s round-rhythm. Upload data, verify, and push the league forward.
-      </p>
+      {/* ── Hero / current state ─────────────────────────────── */}
+      <div className="mb-8">
+        <h1 className="text-2xl font-bold mb-1">Round Control</h1>
+        <p className="text-muted-foreground text-sm">
+          The single place to push the league forward, round by round.
+        </p>
+      </div>
 
-      {/* ── Header — current round ─────────────────────────── */}
-      <section className="bg-card border border-border rounded-lg p-6 shadow-sm mb-6">
-        <p className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground mb-2">Current round</p>
-        <div className="flex items-baseline gap-4 flex-wrap">
-          <h2 className="text-4xl font-bold tabular-nums">
+      <section className="bg-card border border-border rounded-lg p-6 shadow-sm mb-6 flex items-center gap-6 flex-wrap">
+        <div>
+          <p className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground mb-2">Currently live</p>
+          <h2 className="text-3xl font-bold tabular-nums">
             {currentRound > 0 ? `Round ${currentRound}` : 'Pre-season'}
           </h2>
           {advancedAt && (
-            <span className="text-sm text-muted-foreground">
+            <p className="text-sm text-muted-foreground mt-1">
               Live since {relativeTime(advancedAt)}
-            </span>
+            </p>
+          )}
+        </div>
+        <ArrowRight size={28} className="text-muted-foreground" />
+        <div>
+          <p className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground mb-2">Preparing next</p>
+          <div className="flex items-center gap-2">
+            <h2 className="text-3xl font-bold tabular-nums">Round</h2>
+            <select
+              value={targetRound}
+              onChange={(e) => setTargetRound(Number(e.target.value))}
+              className="text-3xl font-bold bg-transparent border-b-2 border-primary text-primary tabular-nums focus:outline-none px-1"
+            >
+              {Array.from({ length: TOTAL_ROUNDS }, (_, i) => i + 1).map((r) => (
+                <option key={r} value={r}>
+                  {r}
+                </option>
+              ))}
+            </select>
+          </div>
+          {isReAdvance && (
+            <p className="text-xs text-amber-600 mt-1">
+              Round {targetRound} is already live — running this re-recomputes trades + (if checked) re-emails coaches.
+            </p>
           )}
         </div>
       </section>
 
-      {/* ── Prepare next round ─────────────────────────────── */}
+      {/* ── Step 1 — upload ─────────────────────────────────── */}
       <section className="bg-card border border-border rounded-lg p-6 shadow-sm mb-6">
-        <h2 className="text-lg font-semibold mb-1">Prepare Round {nextRound}</h2>
+        <div className="flex items-baseline gap-3 mb-1">
+          <span className="text-[11px] font-bold uppercase tracking-[0.18em] text-primary">Step 1</span>
+          <h2 className="text-lg font-semibold">Upload Round {targetRound}&apos;s data</h2>
+        </div>
         <p className="text-sm text-muted-foreground mb-5">
-          Upload all CSVs for Round {nextRound}. The checks beneath the uploaders will turn green when each piece is in.
+          Drop in the four CSVs for Round {targetRound} (lineups, teams, matchups, points-grid).
+          Status updates automatically as each piece lands.
         </p>
 
-        <UploadContent />
+        <UploadContent
+          controlledTargetRound={targetRound}
+          hideRoundDbSummary
+          onUploadComplete={refreshVerify}
+        />
+      </section>
 
-        {/* Verification checklist */}
-        <div className="mt-8 border-t border-border pt-6">
-          <div className="flex items-center justify-between mb-3">
-            <h3 className="font-semibold text-sm">Verification — Round {nextRound}</h3>
-            <button
-              onClick={refreshVerify}
-              disabled={verifyLoading}
-              className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground"
+      {/* ── Step 2 — verify ─────────────────────────────────── */}
+      <section className="bg-card border border-border rounded-lg p-6 shadow-sm mb-6">
+        <div className="flex items-baseline gap-3 mb-1">
+          <span className="text-[11px] font-bold uppercase tracking-[0.18em] text-primary">Step 2</span>
+          <h2 className="text-lg font-semibold">Verify Round {targetRound} is complete</h2>
+        </div>
+        <p className="text-sm text-muted-foreground mb-4">
+          Each piece needs to be in before we can advance. Auto-refreshes every few seconds.
+        </p>
+
+        <div className="flex items-center justify-end mb-3">
+          <button
+            onClick={refreshVerify}
+            disabled={verifyLoading}
+            className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground"
+          >
+            <RefreshCw size={13} className={verifyLoading ? 'animate-spin' : ''} />
+            Refresh
+          </button>
+        </div>
+        <div className="space-y-2">
+          {(verify?.checks ?? []).map((c) => (
+            <div
+              key={c.key}
+              className={cn(
+                'flex items-start gap-3 px-3 py-3 rounded-md border',
+                c.status === 'ok' ? 'border-green-200 bg-green-50' :
+                c.status === 'partial' ? 'border-amber-200 bg-amber-50' :
+                'border-red-200 bg-red-50'
+              )}
             >
-              <RefreshCw size={13} className={verifyLoading ? 'animate-spin' : ''} />
-              Refresh
-            </button>
-          </div>
-          <div className="space-y-2">
-            {(verify?.checks ?? []).map((c) => (
-              <div key={c.key} className="flex items-start gap-3 px-3 py-2 rounded-md border border-border">
-                <StatusIcon status={c.status} />
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm font-medium">{c.label}</p>
-                  <p className="text-xs text-muted-foreground">{c.detail}</p>
-                </div>
+              <StatusIcon status={c.status} />
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-semibold">{c.label}</p>
+                <p className="text-xs text-muted-foreground">{c.detail}</p>
               </div>
-            ))}
-            {!verify && (
-              <p className="text-sm text-muted-foreground">Loading checks…</p>
-            )}
-          </div>
+            </div>
+          ))}
+          {!verify && <p className="text-sm text-muted-foreground">Loading checks…</p>}
         </div>
       </section>
 
-      {/* ── Advance ─────────────────────────────────────────── */}
-      <section className="bg-card border border-border rounded-lg p-6 shadow-sm mb-6">
-        <h2 className="text-lg font-semibold mb-3">Advance to Round {nextRound}</h2>
-        <p className="text-sm text-muted-foreground mb-4">
-          Closes Round {currentRound > 0 ? currentRound : 'pre-season'} and opens Round {nextRound} across the platform: analytics retarget, trade probabilities + narratives recompute, the new PWRNKGs draft becomes the working round, and the round badge flips for everyone.
+      {/* ── Step 3 — advance ─────────────────────────────────── */}
+      <section
+        className={cn(
+          'border-2 rounded-lg p-6 shadow-sm mb-6',
+          ready ? 'border-primary bg-primary/5' : 'bg-card border-border'
+        )}
+      >
+        <div className="flex items-baseline gap-3 mb-1">
+          <span className="text-[11px] font-bold uppercase tracking-[0.18em] text-primary">Step 3</span>
+          <h2 className="text-lg font-semibold">
+            {isReAdvance ? `Re-run Round ${targetRound}` : `Advance to Round ${targetRound}`}
+          </h2>
+        </div>
+        <p className="text-sm text-muted-foreground mb-5">
+          {isReAdvance
+            ? `Re-runs the round ceremony for Round ${targetRound} — recomputes every trade, refreshes AI narratives, and (optionally) re-emails coaches.`
+            : `Closes Round ${currentRound > 0 ? currentRound : 'pre-season'} and opens Round ${targetRound} across the platform: analytics retarget, trade probabilities + narratives recompute, the new PWRNKGs draft becomes the working round, and the round badge flips for everyone.`}
         </p>
 
         <label className="inline-flex items-center gap-2 text-sm mb-4 cursor-pointer">
@@ -242,15 +315,19 @@ export default function RoundControlClient({
             onClick={() => setConfirming(true)}
             disabled={!ready || advancing}
             className={cn(
-              'inline-flex items-center gap-2 px-5 py-2.5 rounded-md font-semibold text-sm',
+              'inline-flex items-center gap-2 px-6 py-3 rounded-md font-semibold text-base',
               ready && !advancing
-                ? 'bg-primary text-primary-foreground hover:bg-primary/90'
+                ? 'bg-primary text-primary-foreground hover:bg-primary/90 shadow'
                 : 'bg-muted text-muted-foreground cursor-not-allowed'
             )}
             title={!ready ? blockingChecks.map((c) => `${c.label}: ${c.detail}`).join('\n') : undefined}
           >
-            <PlayCircle size={16} />
-            {advancing ? 'Advancing…' : `Advance to Round ${nextRound}`}
+            <PlayCircle size={18} />
+            {advancing
+              ? 'Working…'
+              : isReAdvance
+                ? `Re-run Round ${targetRound}`
+                : `Advance to Round ${targetRound}`}
           </button>
           {!ready && verify && (
             <p className="text-xs text-muted-foreground">
@@ -259,13 +336,13 @@ export default function RoundControlClient({
           )}
         </div>
 
-        {advanceMsg && !advancing && (
-          <p className="mt-4 text-sm text-green-700 bg-green-50 border border-green-200 rounded-md px-3 py-2">
+        {advancing && advanceMsg && (
+          <p className="mt-4 text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
             {advanceMsg}
           </p>
         )}
-        {advancing && (
-          <p className="mt-4 text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
+        {!advancing && advanceMsg && (
+          <p className="mt-4 text-sm text-green-700 bg-green-50 border border-green-200 rounded-md px-3 py-2">
             {advanceMsg}
           </p>
         )}
@@ -327,7 +404,9 @@ export default function RoundControlClient({
       {confirming && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 px-4">
           <div className="bg-card rounded-lg shadow-xl max-w-md w-full p-6">
-            <h3 className="text-lg font-semibold mb-2">Advance to Round {nextRound}?</h3>
+            <h3 className="text-lg font-semibold mb-2">
+              {isReAdvance ? `Re-run Round ${targetRound}?` : `Advance to Round ${targetRound}?`}
+            </h3>
             <p className="text-sm text-muted-foreground mb-5">
               This will recompute every trade and may take a few minutes.
               {sendEmail && ' All coaches will receive an email.'} You can&apos;t roll this back from the UI.
@@ -343,7 +422,7 @@ export default function RoundControlClient({
                 onClick={handleAdvance}
                 className="px-4 py-2 text-sm font-semibold bg-primary text-primary-foreground rounded-md hover:bg-primary/90"
               >
-                Yes, advance
+                Yes, run it
               </button>
             </div>
           </div>

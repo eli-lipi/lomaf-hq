@@ -33,7 +33,24 @@ function detectCsvType(filename: string): CsvType | null {
 
 const TOTAL_ROUNDS = 23;
 
-export default function UploadContent() {
+/**
+ * v12.2 — `controlledTargetRound` lets a parent (e.g. Round Control) own
+ * the round-being-prepared and keep this widget in sync. When a parent
+ * passes a value, the internal selector is hidden so there's only one
+ * source of truth on the page. `onUploadComplete` lets the parent know
+ * an upload finished so it can refresh its verification panel.
+ */
+interface UploadContentProps {
+  controlledTargetRound?: number;
+  onUploadComplete?: () => void;
+  hideRoundDbSummary?: boolean;
+}
+
+export default function UploadContent({
+  controlledTargetRound,
+  onUploadComplete,
+  hideRoundDbSummary,
+}: UploadContentProps = {}) {
   const [uploads, setUploads] = useState<Record<CsvType, UploadState>>({
     lineups: { status: 'idle' },
     teams: { status: 'idle' },
@@ -47,7 +64,12 @@ export default function UploadContent() {
   const [roundStatuses, setRoundStatuses] = useState<Record<number, RoundStatus>>({});
   const [hasDraft, setHasDraft] = useState(false);
   const [loadingDb, setLoadingDb] = useState(true);
-  const [targetRound, setTargetRound] = useState<number | null>(null);
+  const [internalTargetRound, setInternalTargetRound] = useState<number | null>(null);
+  const isControlled = controlledTargetRound !== undefined;
+  const targetRound = isControlled ? controlledTargetRound : internalTargetRound;
+  const setTargetRound = (n: number | null) => {
+    if (!isControlled) setInternalTargetRound(n);
+  };
 
   useEffect(() => {
     loadDbSummary();
@@ -56,11 +78,11 @@ export default function UploadContent() {
   // Default the target-round picker to the highest round with any data + 1,
   // or 1 if the season hasn't started.
   useEffect(() => {
-    if (loadingDb || targetRound !== null) return;
+    if (isControlled || loadingDb || internalTargetRound !== null) return;
     const roundsWithData = Object.keys(roundStatuses).map(Number);
     const maxRound = roundsWithData.length > 0 ? Math.max(...roundsWithData) : 0;
-    setTargetRound(maxRound > 0 ? maxRound : 1);
-  }, [loadingDb, roundStatuses, targetRound]);
+    setInternalTargetRound(maxRound > 0 ? maxRound : 1);
+  }, [isControlled, loadingDb, roundStatuses, internalTargetRound]);
 
   const loadDbSummary = async () => {
     setLoadingDb(true);
@@ -227,6 +249,7 @@ export default function UploadContent() {
       }
 
       await loadDbSummary();
+      onUploadComplete?.();
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : 'Unknown error';
       setStepLog((prev) => [...prev, `Error: ${errorMsg}`]);
@@ -247,7 +270,10 @@ export default function UploadContent() {
 
   return (
     <div>
-      {/* Season Round Timeline */}
+      {/* Season Round Timeline — hidden when a parent (Round Control)
+          owns the round selector and the DB summary, since it shows
+          its own status. */}
+      {!hideRoundDbSummary && (
       <div className="bg-card border border-border rounded-lg p-5 mb-6 shadow-sm">
         <h3 className="font-semibold text-sm mb-3">Season Progress</h3>
         {loadingDb ? (
@@ -288,8 +314,11 @@ export default function UploadContent() {
           </div>
         )}
       </div>
+      )}
 
-      {/* Target round picker — source of truth for which round this batch applies to */}
+      {/* Target round picker — source of truth for which round this batch
+          applies to. Hidden when the parent owns the round (Round Control). */}
+      {!isControlled && (
       <div className="bg-card border border-border rounded-lg p-5 mb-6 shadow-sm">
         <div className="flex items-center justify-between gap-4 flex-wrap">
           <div>
@@ -318,6 +347,7 @@ export default function UploadContent() {
           </div>
         </div>
       </div>
+      )}
 
       {/* Multi-file drop zone */}
       <div

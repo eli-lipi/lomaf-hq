@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Trophy, BarChart3, ArrowLeftRight, Settings, Menu, X, ChevronDown, ChevronRight, PlayCircle } from 'lucide-react';
+import { Trophy, BarChart3, ArrowLeftRight, Settings, Menu, X, ChevronDown, ChevronRight } from 'lucide-react';
 import { useState } from 'react';
 import { cn } from '@/lib/utils';
 import type { AppUser } from '@/lib/auth';
@@ -24,14 +24,6 @@ interface NavItem {
 }
 
 const NAV_ITEMS: NavItem[] = [
-  {
-    // v12.2 — Round Control sits at the top of admin's nav. The single
-    // place to advance the league between rounds. Hidden from coaches.
-    href: '/round-control',
-    label: 'Round Control',
-    icon: PlayCircle,
-    adminOnly: true,
-  },
   {
     href: '/pwrnkgs',
     label: 'PWRNKGs',
@@ -83,7 +75,10 @@ const NAV_ITEMS: NavItem[] = [
     icon: Settings,
     adminOnly: true,
     children: [
-      // v12.2 — Data Upload moved out of Settings into Round Control.
+      // v12.2 — Round Control nested under Settings (the round-rhythm
+      // ceremony). Data Upload tab is gone — uploaders live inside
+      // Round Control now.
+      { href: '/round-control', label: 'Round Control', adminOnly: true },
       { href: '/settings?tab=photos', label: 'Coach Photos', adminOnly: true },
       { href: '/settings?tab=adjustments', label: 'Score Adjustments', adminOnly: true },
       { href: '/settings?tab=prompts', label: 'AI Prompts', adminOnly: true },

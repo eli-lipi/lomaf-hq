@@ -42,9 +42,12 @@ export async function POST(req: Request) {
 
   const supabase = await createSupabaseServerClient();
   const current = await getCurrentRound(supabase);
-  if (body.round <= current) {
+  // v12.2.1 — re-advancing the current round is allowed and useful
+  // (recompute trades, refresh narratives, optionally re-email). Only
+  // block targets BELOW the current round.
+  if (body.round < current) {
     return NextResponse.json(
-      { error: `Round ${body.round} is not ahead of the current round (${current}).` },
+      { error: `Round ${body.round} is behind the current round (${current}).` },
       { status: 400 }
     );
   }
