@@ -379,42 +379,57 @@ function TrendChip({ trend }: { trend: InjuryTrend }) {
 }
 
 /**
- * Round-by-round picker. One tile per LOMAF round. The tile colour
- * tells the play-status story:
- *   - green: scored points in that round
- *   - red:   on the AFL injury list during that round and didn't score
- *   - grey:  didn't score, no injury listing on file
- *   - blank: round hasn't been played yet
+ * Round-by-round picker. One tile per LOMAF round, R1..R24.
+ *
+ * Tile rendering rules:
+ *   played (points > 0)        → green
+ *   played round, no points    → red (DNP, regardless of listing)
+ *   future round, predicted out → white striped with red
+ *   future round, expected back → white
  *
  * The tile text shows the AFL-listed ETA when the snapshot for that
  * round had one (e.g. R8 · "2-3w"). Otherwise just the round number.
  */
 function RoundPicker({ rounds }: { rounds: InjuryRoundCell[] }) {
   if (rounds.length === 0) return null;
+
+  const stripedStyle = {
+    backgroundImage:
+      'repeating-linear-gradient(45deg, transparent 0, transparent 3.5px, rgba(220,38,38,0.45) 3.5px, rgba(220,38,38,0.45) 6px)',
+    backgroundColor: '#ffffff',
+  } as const;
+
   return (
     <div className="flex flex-wrap gap-1">
       {rounds.map((c) => {
+        const isPlayedRound = c.points != null;
         const played = c.points != null && c.points > 0;
-        const dnpKnown = c.points === 0;
-        const onList = c.eta != null;
-        const isFuture = c.points == null && !onList;
-        // Background:
-        //   played -> green
-        //   dnp + listed -> red
-        //   dnp without listing -> grey
-        //   future / unknown -> outlined
-        let cls = 'bg-muted text-muted-foreground border-border';
-        if (played) cls = 'bg-green-100 text-green-800 border-green-200';
-        else if (dnpKnown && onList) cls = 'bg-red-100 text-red-800 border-red-200';
-        else if (dnpKnown) cls = 'bg-gray-200 text-gray-600 border-gray-300';
-        else if (onList && isFuture) cls = 'bg-amber-50 text-amber-800 border-amber-200';
+        const dnp = c.points === 0;
+        const isFuture = !isPlayedRound;
+
+        let cls = '';
+        let style: React.CSSProperties | undefined;
+        if (played) {
+          cls = 'bg-green-100 text-green-800 border-green-200';
+        } else if (dnp) {
+          cls = 'bg-red-100 text-red-800 border-red-300';
+        } else if (isFuture && c.predicted_injured) {
+          cls = 'text-red-700 border-red-200';
+          style = stripedStyle;
+        } else {
+          // future, expected back
+          cls = 'bg-white text-muted-foreground border-border';
+        }
+
         const title = `R${c.round}${
-          c.points != null ? ` · ${c.points} pts` : ' · not played'
+          c.points != null ? ` · ${c.points} pts` : c.predicted_injured ? ' · predicted out' : ' · not played yet'
         }${c.eta ? ` · listed ${c.eta}` : ''}${c.injury ? ` · ${c.injury}` : ''}`;
+
         return (
           <span
             key={c.round}
             title={title}
+            style={style}
             className={cn(
               'inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] tabular-nums border whitespace-nowrap',
               cls

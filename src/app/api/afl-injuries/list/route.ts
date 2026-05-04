@@ -13,6 +13,10 @@ export interface InjuryRoundCell {
   // the LOMAF round that was current/upcoming when AFL published.
   eta: string | null;
   injury: string | null;
+  // True when the round is in the future and the latest AFL listing
+  // says the player is still out. Drives the striped 'predicted-injured'
+  // tile in the picker.
+  predicted_injured: boolean;
 }
 
 export interface InjuryListPlayer {
@@ -224,33 +228,48 @@ export async function GET() {
     const roster = r.player_id != null ? rosterByPlayer.get(r.player_id) : undefined;
     const lomafTeam = roster ? TEAMS.find((t) => t.team_id === roster.team_id) : null;
 
-    // Build the per-round timeline.
+    // Build the per-round timeline. Always extend to SEASON_END_ROUND
+    // so the picker includes empty future rounds the user can scan
+    // for predicted-injured stripes.
     const playerRounds = (r.player_id != null && playerRoundsByPlayer.get(r.player_id)) || new Map<number, number | null>();
     const etaByRound = new Map<number, string>();
     const injuryByRound = new Map<number, string>();
     for (const s of points) {
       const rd = snapshotToRound(s.source_updated_at);
-      if (rd != null) {
-        if (s.estimated_return) etaByRound.set(rd, s.estimated_return);
-      }
+      if (rd != null && s.estimated_return) etaByRound.set(rd, s.estimated_return);
     }
-    // Latest live injury text always lands on the listing's "current" round
-    // (snapshot dates only carry estimated_return; the injury label is in
-    // the live row).
-    const latestSnapshotRound = points.length > 0
-      ? snapshotToRound(points[points.length - 1].source_updated_at)
+    const latestSnap = points.length > 0 ? points[points.length - 1] : null;
+    const latestSnapshotRound = latestSnap
+      ? snapshotToRound(latestSnap.source_updated_at)
       : null;
     if (latestSnapshotRound != null && r.injury) injuryByRound.set(latestSnapshotRound, r.injury);
 
-    const maxRound = Math.max(currentRound + 1, ...Array.from(etaByRound.keys()), 1);
+    // Predicted-out window: from the latest snapshot's mapped round
+    // through (round + return_max_weeks - 1). Worst-case bound so we
+    // don't promise an early return.
+    const predictedOut = new Set<number>();
+    if (
+      latestSnap &&
+      latestSnap.return_max_weeks != null &&
+      latestSnap.return_max_weeks > 0 &&
+      latestSnapshotRound != null
+    ) {
+      const start = latestSnapshotRound;
+      const end = start + latestSnap.return_max_weeks - 1;
+      for (let rd = start; rd <= end; rd++) predictedOut.add(rd);
+    }
+
+    const SEASON_END_ROUND = 24;
+    const maxRound = Math.max(SEASON_END_ROUND, currentRound + 1, ...Array.from(etaByRound.keys()), 1);
     const rounds: InjuryRoundCell[] = [];
     for (let rd = 1; rd <= maxRound; rd++) {
-      const points = playerRounds.has(rd) ? playerRounds.get(rd)! : null;
+      const cellPoints = playerRounds.has(rd) ? playerRounds.get(rd)! : null;
       rounds.push({
         round: rd,
-        points,
+        points: cellPoints,
         eta: etaByRound.get(rd) ?? null,
         injury: injuryByRound.get(rd) ?? null,
+        predicted_injured: rd > currentRound && predictedOut.has(rd),
       });
     }
 
