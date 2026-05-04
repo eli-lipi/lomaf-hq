@@ -16,7 +16,9 @@ import { recalculateAllTradesForRound } from '@/lib/trades/recalculate';
 
 // All-team count used by verifyRoundReady. LOMAF is 10 coaches.
 const TEAM_COUNT = 10;
-const MATCHUP_COUNT = TEAM_COUNT / 2; // 5 matches per round
+// matchup_rounds is keyed by (round_number, team_id), so a complete
+// round has one row per team — not one row per match.
+const MATCHUP_ROW_COUNT = TEAM_COUNT;
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type SB = SupabaseClient<any, any, any>;
@@ -114,10 +116,10 @@ export async function verifyRoundReady(supabase: SB, round: number): Promise<Ver
     }
   }
 
-  // 2. Matchups — count of rows for this round.
+  // 2. Matchups — one row per team in matchup_rounds.
   {
     const { count } = await supabase
-      .from('matchups')
+      .from('matchup_rounds')
       .select('*', { count: 'exact', head: true })
       .eq('round_number', round);
     const c = count ?? 0;
@@ -128,37 +130,34 @@ export async function verifyRoundReady(supabase: SB, round: number): Promise<Ver
         status: 'missing',
         detail: `No matchups for R${round} yet.`,
       });
-    } else if (c < MATCHUP_COUNT) {
+    } else if (c < MATCHUP_ROW_COUNT) {
       checks.push({
         key: 'matchups',
         label: 'Matchups uploaded',
         status: 'partial',
-        detail: `Only ${c}/${MATCHUP_COUNT} matchups recorded.`,
+        detail: `Only ${c}/${MATCHUP_ROW_COUNT} team matchup rows recorded.`,
       });
     } else {
       checks.push({
         key: 'matchups',
         label: 'Matchups uploaded',
         status: 'ok',
-        detail: `${c}/${MATCHUP_COUNT} matchups.`,
+        detail: `${c}/${MATCHUP_ROW_COUNT} teams.`,
       });
     }
   }
 
-  // 3. Points-grid — fraction of player_rounds rows with points NOT NULL.
+  // 3. Points-grid — at least one scoring row landed for this round.
+  // We don't gate on 100% scored: bench / emergency / unmatched players
+  // legitimately have null points, so the meaningful check is "did the
+  // points-grid CSV land at all?". A round with 0 scored rows means the
+  // points-grid hasn't been uploaded; >0 means it has.
   {
-    const { data: total } = await supabase
-      .from('player_rounds')
-      .select('player_id', { count: 'exact', head: true })
-      .eq('round_number', round);
-    const totalCount = (total as unknown as { count?: number } | null)?.count ?? 0;
-    // The supabase-js head:true count comes through differently per version;
-    // request the count separately to be safe.
-    const { count: totalCount2 } = await supabase
+    const { count: totalCount } = await supabase
       .from('player_rounds')
       .select('*', { count: 'exact', head: true })
       .eq('round_number', round);
-    const tc = totalCount2 ?? totalCount ?? 0;
+    const tc = totalCount ?? 0;
     const { count: scoredCount } = await supabase
       .from('player_rounds')
       .select('*', { count: 'exact', head: true })
@@ -177,22 +176,23 @@ export async function verifyRoundReady(supabase: SB, round: number): Promise<Ver
         key: 'points',
         label: 'Points-grid uploaded',
         status: 'missing',
-        detail: `0 / ${tc} player rows scored — upload the points-grid CSV.`,
+        detail: `0 players scored — upload the points-grid CSV.`,
       });
-    } else if (sc < tc) {
-      const pct = Math.round((sc / tc) * 100);
+    } else if (sc < 100) {
+      // Suspicious: a real LOMAF round has 200+ scoring rows. Sub-100
+      // suggests a partial CSV.
       checks.push({
         key: 'points',
         label: 'Points-grid uploaded',
         status: 'partial',
-        detail: `${sc} / ${tc} players scored (${pct}%).`,
+        detail: `Only ${sc} players scored — looks light, expected 200+.`,
       });
     } else {
       checks.push({
         key: 'points',
         label: 'Points-grid uploaded',
         status: 'ok',
-        detail: `${sc} / ${tc} players scored.`,
+        detail: `${sc} players scored (bench / emg rows are legitimately blank).`,
       });
     }
   }
