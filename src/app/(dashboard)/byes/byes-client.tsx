@@ -6,7 +6,14 @@ import { supabase } from '@/lib/supabase';
 import { TEAMS } from '@/lib/constants';
 import { TEAM_COLOR_MAP, TEAM_SHORT_NAMES } from '@/lib/team-colors';
 import { AFL_CLUBS } from '@/lib/afl-clubs';
-import { AFL_CLUB_BYES, BYE_ROUNDS, getByeRule } from '@/lib/afl-club-byes';
+import {
+  AFL_CLUB_BYES,
+  BYE_ROUNDS,
+  getByeRule,
+  getImpactGrade,
+  IMPACT_META,
+  IMPACT_GRADES_ORDERED,
+} from '@/lib/afl-club-byes';
 import { cn } from '@/lib/utils';
 
 interface PlayerClub {
@@ -108,6 +115,16 @@ export default function ByesClient() {
     return m;
   }, [data]);
 
+  // Roster size per LOMAF team (from the latest snapshot). Used to grade
+  // "Can't Field a Team" — falls back to ROSTER_SIZE if a team isn't in data.
+  const rosterSizeByTeam = useMemo(() => {
+    const m = new Map<number, number>();
+    for (const row of data) {
+      m.set(row.team_id, (m.get(row.team_id) ?? 0) + 1);
+    }
+    return m;
+  }, [data]);
+
   const toggle = (key: string) =>
     setExpanded((prev) => ({ ...prev, [key]: !prev[key] }));
 
@@ -131,15 +148,28 @@ export default function ByesClient() {
             const rule = getByeRule(round);
             const isBest16 = rule === 'best-16';
 
-            // Coach impact: count and list each LOMAF coach's players whose club is on bye.
+            // Coach impact: count and list each LOMAF coach's players whose
+            // club is on bye, then grade by severity (worst → best). The
+            // grade respects the round's scoring rule — best-16 needs 16
+            // playable, normal needs 18, so "Can't Field a Team" kicks in
+            // at different bye counts depending on the rule.
             const coachImpact = TEAMS.map((team) => {
               const players: { player_id: number; player_name: string; club: string }[] = [];
               for (const code of clubs) {
                 const list = playersByTeamClub.get(`${team.team_id}-${code}`) ?? [];
                 for (const p of list) players.push({ ...p, club: code });
               }
-              return { team, players };
-            }).sort((a, b) => b.players.length - a.players.length);
+              const rosterSize = rosterSizeByTeam.get(team.team_id) ?? 0;
+              const grade = getImpactGrade(players.length, rosterSize, rule);
+              return { team, players, rosterSize, grade };
+            }).sort((a, b) => {
+              // Ladder order: worst impact at the top. Tiebreak on raw bye
+              // count, then alphabetical so the order is deterministic.
+              const o = IMPACT_META[a.grade].ordinal - IMPACT_META[b.grade].ordinal;
+              if (o !== 0) return o;
+              if (b.players.length !== a.players.length) return b.players.length - a.players.length;
+              return a.team.team_name.localeCompare(b.team.team_name);
+            });
 
             const totalImpacted = coachImpact.reduce((s, x) => s + x.players.length, 0);
 
@@ -207,62 +237,80 @@ export default function ByesClient() {
                   </div>
 
                   {hasClubData ? (
-                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-3">
-                      {coachImpact.map(({ team, players }) => {
+                    <ol className="space-y-2">
+                      {coachImpact.map(({ team, players, rosterSize, grade }, i) => {
                         const teamColor = TEAM_COLOR_MAP[team.team_id] ?? '#6B7280';
+                        const meta = IMPACT_META[grade];
                         const key = `${round}-${team.team_id}`;
                         const isExpanded = !!expanded[key];
                         const hasPlayers = players.length > 0;
                         return (
-                          <div
+                          <li
                             key={team.team_id}
-                            className="bg-card border border-border rounded-lg overflow-hidden"
-                            style={{ borderLeft: `3px solid ${teamColor}` }}
+                            className="bg-card border border-border rounded-lg overflow-hidden transition-shadow hover:shadow-sm"
+                            style={{
+                              borderLeft: `4px solid ${meta.bg}`,
+                              background: `linear-gradient(90deg, ${meta.tint} 0%, transparent 35%)`,
+                            }}
                           >
                             <button
                               onClick={() => hasPlayers && toggle(key)}
                               disabled={!hasPlayers}
                               className={cn(
-                                'w-full flex items-center justify-between gap-2 p-3 text-left',
-                                hasPlayers ? 'hover:bg-muted/30 cursor-pointer' : 'cursor-default'
+                                'w-full flex items-center gap-3 px-3 py-2.5 text-left',
+                                hasPlayers ? 'hover:bg-muted/20 cursor-pointer' : 'cursor-default'
                               )}
                             >
-                              <div className="flex items-center gap-2 min-w-0">
-                                {hasPlayers ? (
-                                  isExpanded ? (
-                                    <ChevronDown size={14} className="text-muted-foreground shrink-0" />
-                                  ) : (
-                                    <ChevronRight size={14} className="text-muted-foreground shrink-0" />
-                                  )
-                                ) : (
-                                  <span className="w-3.5 shrink-0" />
-                                )}
-                                <span
-                                  className="text-xs font-bold truncate"
-                                  style={{ color: teamColor }}
-                                >
+                              {/* Ladder rank */}
+                              <span className="text-xs font-bold tabular-nums text-muted-foreground/70 w-5 shrink-0 text-right">
+                                {i + 1}
+                              </span>
+
+                              {/* Coach color dot + name */}
+                              <span
+                                aria-hidden
+                                className="w-2.5 h-2.5 rounded-full shrink-0"
+                                style={{ background: teamColor }}
+                              />
+                              <div className="flex-1 min-w-0 flex items-baseline gap-2">
+                                <span className="text-sm font-bold truncate" style={{ color: teamColor }}>
                                   {TEAM_SHORT_NAMES[team.team_id] ?? team.team_name}
                                 </span>
+                                <span className="text-[11px] text-muted-foreground truncate hidden sm:inline">
+                                  {team.team_name}
+                                </span>
                               </div>
+
+                              {/* Impact grade pill */}
                               <span
-                                className={cn(
-                                  'text-[10px] font-bold tabular-nums px-2 py-0.5 rounded-full shrink-0',
-                                  hasPlayers ? '' : 'opacity-40'
-                                )}
-                                style={{
-                                  background: `${teamColor}1A`,
-                                  color: teamColor,
-                                }}
+                                className="text-[11px] font-semibold px-2.5 py-1 rounded-full shrink-0"
+                                style={{ background: meta.bg, color: meta.fg }}
                               >
-                                × {players.length}
+                                {meta.label}
                               </span>
+
+                              {/* Bye count of roster */}
+                              <span className="text-[11px] tabular-nums text-muted-foreground shrink-0 hidden sm:inline">
+                                {players.length}/{rosterSize || '—'} byed
+                              </span>
+
+                              {/* Expand chevron */}
+                              {hasPlayers ? (
+                                isExpanded ? (
+                                  <ChevronDown size={16} className="text-muted-foreground shrink-0" />
+                                ) : (
+                                  <ChevronRight size={16} className="text-muted-foreground shrink-0" />
+                                )
+                              ) : (
+                                <span className="w-4 shrink-0" />
+                              )}
                             </button>
                             {hasPlayers && isExpanded && (
-                              <ul className="px-3 pb-3 pt-0 space-y-1 border-t border-border/50">
+                              <ul className="px-3 pb-3 pt-2 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-x-4 gap-y-1.5 border-t border-border/50">
                                 {players.map((p) => (
                                   <li
                                     key={p.player_id}
-                                    className="flex items-center gap-2 text-xs leading-snug pt-1.5"
+                                    className="flex items-center gap-2 text-xs leading-snug"
                                   >
                                     <ClubBadge code={p.club} size={16} />
                                     <span className="truncate">{p.player_name}</span>
@@ -270,15 +318,42 @@ export default function ByesClient() {
                                 ))}
                               </ul>
                             )}
-                          </div>
+                          </li>
                         );
                       })}
-                    </div>
+                    </ol>
                   ) : null}
                 </div>
               </section>
             );
           })}
+        </div>
+      )}
+
+      {/* Legend — explains the colour scale used on every round's ladder */}
+      {!loading && (
+        <div className="mt-6 bg-card border border-border rounded-lg shadow-sm px-4 py-3">
+          <p className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground mb-2">
+            Impact scale
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {IMPACT_GRADES_ORDERED.map((g) => {
+              const meta = IMPACT_META[g];
+              return (
+                <span
+                  key={g}
+                  className="text-[11px] font-semibold px-2.5 py-1 rounded-full"
+                  style={{ background: meta.bg, color: meta.fg }}
+                >
+                  {meta.label}
+                </span>
+              );
+            })}
+          </div>
+          <p className="text-[10px] text-muted-foreground mt-2">
+            &quot;Can&apos;t Field a Team&quot; means a coach&apos;s playable roster after byes drops below the
+            scoring minimum (16 in best-16 rounds, 18 in normal rounds).
+          </p>
         </div>
       )}
     </div>

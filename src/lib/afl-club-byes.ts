@@ -33,6 +33,58 @@ export function getByeRule(round: ByeRound): ByeRule {
   return AFL_CLUB_BYES[round].length === 2 ? 'normal' : 'best-16';
 }
 
+/** Minimum playable squad size for the round's scoring rule.
+ *  Normal: 18 scoring positions (5 DEF + 7 MID + 4 FWD + 1 RUC + 1 UTL).
+ *  Best-16: top 16 scores from the full roster — no positions / bench. */
+export function getMinPlayable(rule: ByeRule): number {
+  return rule === 'best-16' ? 16 : 18;
+}
+
+// =====================================================================
+// Coach bye-impact grading
+// =====================================================================
+// Five-tier severity scale applied to each LOMAF coach's roster, given
+// how many of their players bye in a round and the round's scoring rule.
+// "Can't Field a Team" is hard-defined: roster minus byes < the rule's
+// minimum playable count. Below that, severity ramps with raw bye count.
+// =====================================================================
+
+export type ImpactGrade = 'none' | 'low' | 'medium' | 'serious' | 'cannot-field';
+
+export interface ImpactMeta {
+  label: string;
+  /** Pill background. */
+  bg: string;
+  /** Pill text on `bg`. */
+  fg: string;
+  /** Soft tint used for row accent / hover. */
+  tint: string;
+  /** Worst-first ordinal for sorting (0 = worst). */
+  ordinal: number;
+}
+
+export const IMPACT_META: Record<ImpactGrade, ImpactMeta> = {
+  'cannot-field': { label: "Can't Field a Team", bg: '#7F1D1D', fg: '#FFFFFF', tint: 'rgba(127,29,29,0.10)', ordinal: 0 },
+  'serious':      { label: 'Serious Impact',     bg: '#EF4444', fg: '#FFFFFF', tint: 'rgba(239,68,68,0.10)', ordinal: 1 },
+  'medium':       { label: 'Medium Impact',      bg: '#F59E0B', fg: '#1F1300', tint: 'rgba(245,158,11,0.12)', ordinal: 2 },
+  'low':          { label: 'Low Impact',         bg: '#0EA5E9', fg: '#FFFFFF', tint: 'rgba(14,165,233,0.10)', ordinal: 3 },
+  'none':         { label: 'No Impact',          bg: '#10B981', fg: '#FFFFFF', tint: 'rgba(16,185,129,0.08)', ordinal: 4 },
+};
+
+/** Worst → best. Useful for legends and ladders. */
+export const IMPACT_GRADES_ORDERED: ImpactGrade[] = [
+  'cannot-field', 'serious', 'medium', 'low', 'none',
+];
+
+export function getImpactGrade(byedCount: number, rosterSize: number, rule: ByeRule): ImpactGrade {
+  if (byedCount === 0) return 'none';
+  const remaining = rosterSize - byedCount;
+  if (remaining < getMinPlayable(rule)) return 'cannot-field';
+  if (byedCount <= 2) return 'low';
+  if (byedCount <= 4) return 'medium';
+  return 'serious';
+}
+
 /** Returns the round in which an AFL club byes, or null if not in the bye window. */
 export function getByeRoundForClub(code: string): ByeRound | null {
   for (const round of BYE_ROUNDS) {
