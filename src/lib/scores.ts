@@ -1,5 +1,6 @@
 import { supabase } from './supabase';
 import { TEAMS } from './constants';
+import { getCurrentRound } from './round';
 
 /**
  * Fetches resolved scores for all teams across all rounds.
@@ -88,10 +89,19 @@ export async function fetchResolvedScores(): Promise<{
   }
 
   // 6. Filter valid rounds (8+ teams with scores > 500)
-  const validRounds = allRounds.filter(round => {
+  let validRounds = allRounds.filter(round => {
     const teamsWithScores = TEAMS.filter(t => (teamRoundScores[`${round}-${t.team_id}`] || 0) > 500).length;
     return teamsWithScores >= 8;
   });
+
+  // v12.2 — cap at the platform's current round so data uploaded for
+  // R+1 doesn't leak into analytics until the admin runs the round
+  // advance ceremony on /round-control. If round_advances is empty
+  // (legacy season), getCurrentRound returns 0 — pass everything through.
+  const currentRound = await getCurrentRound(supabase);
+  if (currentRound > 0) {
+    validRounds = validRounds.filter((r) => r <= currentRound);
+  }
 
   return { teamRoundScores, lineAdjustments, validRounds, allPlayerRounds };
 }

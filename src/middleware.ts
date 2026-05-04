@@ -5,7 +5,7 @@ import { createServerClient } from '@supabase/ssr';
 // Actual role check happens via a quick Supabase query below.
 // v12.1 — /trades opened to all coaches (read). Page route is no longer
 // admin-gated; write API actions are gated by HTTP method below.
-const ADMIN_PAGE_PREFIXES = ['/upload', '/settings'];
+const ADMIN_PAGE_PREFIXES = ['/upload', '/settings', '/round-control'];
 const ADMIN_API_PREFIXES = [
   '/api/upload',
   '/api/rankings',
@@ -17,6 +17,11 @@ const ADMIN_API_PREFIXES = [
 
 // /api/trades — GET open to all coaches; POST/PATCH/DELETE admin-only.
 const TRADES_API_PREFIX = '/api/trades';
+
+// /api/round — most subroutes admin-only. /api/round/current is open
+// because the round badge in the header reads it for everyone.
+const ROUND_API_PREFIX = '/api/round';
+const ROUND_API_PUBLIC_PATHS = ['/api/round/current'];
 
 // Public paths (no auth required).
 const PUBLIC_PATHS = ['/login', '/auth/callback'];
@@ -72,11 +77,18 @@ export async function middleware(request: NextRequest) {
   const isTradesApi = path === TRADES_API_PREFIX || path.startsWith(TRADES_API_PREFIX + '/');
   const tradesNeedsAdmin = isTradesApi && request.method !== 'GET';
 
+  // /api/round is admin-only, except the public /api/round/current
+  // which the header badge reads.
+  const isRoundApi = path === ROUND_API_PREFIX || path.startsWith(ROUND_API_PREFIX + '/');
+  const isRoundPublic = ROUND_API_PUBLIC_PATHS.some((p) => path === p);
+  const roundNeedsAdmin = isRoundApi && !isRoundPublic;
+
   // Admin-gated routes: look up role.
   const needsAdmin =
     ADMIN_PAGE_PREFIXES.some((p) => path === p || path.startsWith(p + '/')) ||
     ADMIN_API_PREFIXES.some((p) => path === p || path.startsWith(p + '/')) ||
-    tradesNeedsAdmin;
+    tradesNeedsAdmin ||
+    roundNeedsAdmin;
 
   if (user && needsAdmin) {
     // Role is cached in a cookie at login (see /auth/callback) to avoid

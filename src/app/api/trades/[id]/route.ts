@@ -6,6 +6,7 @@ import { detectInjury } from '@/lib/trades/compute-probability';
 import { normalizePosition, cleanPositionDisplay } from '@/lib/trades/positions';
 import { recalculateTradeAcrossPostTradeRounds } from '@/lib/trades/recalculate';
 import { autoExpectedAvg, autoExpectedGames } from '@/lib/trades/expected';
+import { getCurrentRound } from '@/lib/round';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -41,8 +42,12 @@ export async function GET(_request: Request, ctx: { params: Promise<{ id: string
     const trade = tradeRes.data as Trade;
     const players = (playersRes.data ?? []) as TradePlayer[];
     const allProbs = probsRes.data ?? [];
-    const maxPlayedRound =
+    // v12.2 — cap by Round Control's explicit current round; falls back
+    // to MAX(played) for legacy seasons before the ledger was populated.
+    const currentRound = await getCurrentRound(supabase);
+    const fallbackPlayed =
       (latestPlayedRes.data as { round_number: number }[] | null)?.[0]?.round_number ?? null;
+    const maxPlayedRound = currentRound > 0 ? currentRound : fallbackPlayed;
     const probs =
       maxPlayedRound != null
         ? allProbs.filter((p) => p.round_number <= maxPlayedRound)

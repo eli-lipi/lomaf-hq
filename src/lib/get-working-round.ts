@@ -1,21 +1,55 @@
 import { supabase } from '@/lib/supabase';
 import type { PwrnkgsRound } from '@/lib/types';
+import { getCurrentRound } from '@/lib/round';
 
 /**
  * Determines the current "working round" for the This Week tabs.
  *
- * Logic:
- * 1. If there's an existing draft pwrnkgs_round → use that
- * 2. If all rounds are published → next round = latest published + 1 (auto-create draft)
- * 3. If no rounds exist at all → fall back to latest team_snapshots round
- *
- * Returns the round data, round number, and whether team_snapshots exist for it.
+ * v12.2 — defers to round_advances first (the new explicit ledger). If
+ * the platform has been advanced, the working round is the platform's
+ * current round, with a draft pwrnkgs_round auto-created if absent.
+ * Falls back to the legacy logic for empty round_advances:
+ * 1. Existing draft pwrnkgs_round → use that
+ * 2. All rounds published → latest published + 1 (auto-create draft)
+ * 3. No rounds → latest team_snapshots round
  */
 export async function getWorkingRound(): Promise<{
   round: PwrnkgsRound | null;
   roundNumber: number | null;
   hasSnapshots: boolean;
 }> {
+  // v12.2 — Round Control path. If the platform has an explicit current
+  // round, that's what the editor works on.
+  const currentRound = await getCurrentRound(supabase);
+  if (currentRound > 0) {
+    const { data: existing } = await supabase
+      .from('pwrnkgs_rounds')
+      .select('*')
+      .eq('round_number', currentRound)
+      .maybeSingle();
+
+    let roundRow = existing as PwrnkgsRound | null;
+    if (!roundRow) {
+      const { data: created } = await supabase
+        .from('pwrnkgs_rounds')
+        .insert({ round_number: currentRound })
+        .select()
+        .single();
+      roundRow = (created as PwrnkgsRound | null) ?? null;
+    }
+
+    const { count } = await supabase
+      .from('team_snapshots')
+      .select('*', { count: 'exact', head: true })
+      .eq('round_number', currentRound);
+
+    return {
+      round: roundRow,
+      roundNumber: currentRound,
+      hasSnapshots: (count ?? 0) > 0,
+    };
+  }
+
   // 1. Check for an existing draft round
   const { data: draftRounds } = await supabase
     .from('pwrnkgs_rounds')

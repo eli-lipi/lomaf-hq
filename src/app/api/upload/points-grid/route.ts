@@ -176,17 +176,11 @@ export async function POST(request: Request) {
       },
     });
 
-    // Recalculate trade probabilities ONLY for the latest round we have data for.
-    // Running this for every round column (0..28) was causing 10+ minute timeouts;
-    // the only snapshot the UI cares about is the current round.
-    try {
-      const { recalculateAllTradesForRound } = await import('@/lib/trades/recalculate');
-      await recalculateAllTradesForRound(supabase, maxRound).catch((e) =>
-        console.error('[points-grid] Trade recalc failed for R' + maxRound, e)
-      );
-    } catch (e) {
-      console.error('[points-grid] Could not load trade recalc module', e);
-    }
+    // v12.2 — Trade recalc is no longer auto-triggered on upload. The
+    // /round-control "Advance" ceremony owns recalc + AI narrative regen
+    // so the round transition is explicit and intentional. Uploading
+    // points-grid for R+1 just lands the data; nothing public flips
+    // until the admin pushes Advance.
 
     return NextResponse.json({
       success: true,

@@ -9,11 +9,11 @@ import { cn } from '@/lib/utils';
 import ScoreAdjustmentsTab from './score-adjustments-tab';
 import UsersTab from './users-tab';
 import UsageTab from './usage-tab';
-import DataUploadTab from './data-upload-tab';
 import AIPromptsTab from './ai-prompts-tab';
 
+// v12.2 — 'Data Upload' tab removed; the per-CSV uploaders now live on
+// /round-control as part of the round-rhythm ceremony.
 const TABS = [
-  { id: 'upload', label: 'Data Upload' },
   { id: 'photos', label: 'Coach Photos' },
   { id: 'adjustments', label: 'Score Adjustments' },
   { id: 'prompts', label: 'AI Prompts' },
@@ -36,7 +36,7 @@ function SettingsPageInner() {
   const searchParams = useSearchParams();
   const tabParam = searchParams.get('tab');
   const [activeTab, setActiveTab] = useState<TabId>(
-    (TABS.find((t) => t.id === tabParam)?.id) ?? 'upload'
+    (TABS.find((t) => t.id === tabParam)?.id) ?? 'photos'
   );
 
   useEffect(() => {
@@ -69,8 +69,6 @@ function SettingsPageInner() {
           </button>
         ))}
       </div>
-
-      {activeTab === 'upload' && <DataUploadTab />}
 
       {activeTab === 'photos' && (
         <section>

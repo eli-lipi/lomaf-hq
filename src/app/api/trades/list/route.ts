@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { detectInjury } from '@/lib/trades/compute-probability';
+import { getCurrentRound } from '@/lib/round';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -30,6 +31,13 @@ export async function GET() {
     const tradeIds = (trades ?? []).map((t) => t.id);
     if (tradeIds.length === 0) return NextResponse.json({ trades: [] });
 
+    // v12.2 — the platform's current round is the explicit ledger value
+    // (round_advances), not the max round in player_rounds. Any data
+    // uploaded for R+1 doesn't surface until the admin runs the round
+    // advance ceremony. Falls back to MAX(played) for legacy seasons
+    // before round_advances was populated.
+    const currentRound = await getCurrentRound(supabase);
+
     const [playersRes, probsRes, latestPlayedRes] = await Promise.all([
       supabase.from('trade_players').select('*').in('trade_id', tradeIds),
       supabase
@@ -37,10 +45,6 @@ export async function GET() {
         .select('*')
         .in('trade_id', tradeIds)
         .order('round_number', { ascending: false }),
-      // Determine the MAX round with actual played scores. Used to ignore
-      // stale future-round trade_probabilities rows (R28 ghosts from the
-      // earlier recalc bug). The DB self-heals on next CSV upload, but
-      // we filter on read so the UI never shows the bogus round labels.
       supabase
         .from('player_rounds')
         .select('round_number')
@@ -49,8 +53,9 @@ export async function GET() {
         .limit(1),
     ]);
 
-    const maxPlayedRound =
+    const fallbackPlayed =
       (latestPlayedRes.data as { round_number: number }[] | null)?.[0]?.round_number ?? null;
+    const maxPlayedRound = currentRound > 0 ? currentRound : fallbackPlayed;
 
     const players = (playersRes.data ?? []) as TradePlayerRow[];
 
