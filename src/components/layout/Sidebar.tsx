@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Trophy, BarChart3, ArrowLeftRight, Settings, Menu, X, ChevronDown, ChevronRight, HeartPulse } from 'lucide-react';
+import { Trophy, BarChart3, ArrowLeftRight, Settings, Menu, X, ChevronDown, ChevronRight, HeartPulse, CalendarOff } from 'lucide-react';
 import { useState } from 'react';
 import { cn } from '@/lib/utils';
 import type { AppUser } from '@/lib/auth';
@@ -75,6 +75,14 @@ const NAV_ITEMS: NavItem[] = [
     href: '/injuries',
     label: 'Injuries',
     icon: HeartPulse,
+  },
+  {
+    // Phase 1 — admin-only while we validate the data + UI. Once approved
+    // we drop `adminOnly` and remove the role gate in byes/page.tsx.
+    href: '/byes',
+    label: 'Byes',
+    icon: CalendarOff,
+    adminOnly: true,
   },
   {
     href: '/settings',
