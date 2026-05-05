@@ -22,16 +22,10 @@ interface RosterRow {
   club: string;
 }
 
-interface MatchupDbRow {
-  round_number: number;
-  team_id: number;
-  opp_id: number | null;
-}
-
 /** Per-player injury status across the bye window. Set membership = predicted out. */
 type InjuryByRound = Record<ByeRound, Set<number>>;
 
-/** team_id → opp_id, per round. Built from matchup_rounds with a static fallback. */
+/** team_id → opp_id, per round. Sourced from the canonical static fixture. */
 type OpponentByRound = Record<ByeRound, Map<number, number>>;
 
 /** Loaded data + computed impact maps for every bye round × LOMAF team. */
@@ -48,8 +42,9 @@ export interface ByeData {
    */
   impactByRound: Record<ByeRound, CoachRoundImpact[]>;
   /**
-   * Per-round map from team_id → opp_id. Sourced from matchup_rounds when
-   * uploaded, otherwise from the static LOMAF_BYE_FIXTURE table.
+   * Per-round map from team_id → opp_id. Sourced from the canonical
+   * LOMAF_BYE_FIXTURE table — DB matchups are not consulted for the bye
+   * window because the fixture is finalized for the season.
    */
   opponentByRound: OpponentByRound;
 }
@@ -74,7 +69,6 @@ export function useByeData(): ByeData {
   });
   const [latestRound, setLatestRound] = useState(0);
   const [injuryFreshness, setInjuryFreshness] = useState<string | null>(null);
-  const [matchups, setMatchups] = useState<MatchupDbRow[]>([]);
   const [avgByPlayerId, setAvgByPlayerId] = useState<Map<number, number>>(new Map());
   const [loading, setLoading] = useState(true);
 
@@ -145,23 +139,6 @@ export function useByeData(): ByeData {
         } catch (err) {
           // Players table is optional — without it, points-lost stays 0.
           console.warn('Failed to load players.avg_pts for bye impact:', err);
-        }
-
-        // ── Matchups (LOMAF fixture for the bye rounds) ────────────────
-        try {
-          const { data: rows } = await supabase
-            .from('matchup_rounds')
-            .select('round_number, team_id, opp_id')
-            .in('round_number', BYE_ROUNDS as unknown as number[]);
-          if (!cancelled && rows) {
-            setMatchups(
-              rows.filter((r) =>
-                (BYE_ROUNDS as readonly number[]).includes(r.round_number),
-              ) as MatchupDbRow[],
-            );
-          }
-        } catch (err) {
-          console.warn('Failed to load matchup_rounds for byes:', err);
         }
 
         // ── Injuries ───────────────────────────────────────────────────
@@ -275,35 +252,23 @@ export function useByeData(): ByeData {
     return out;
   }, [rosters, rosterByTeam, injuriesByRound, avgByPlayerId]);
 
-  // Build the per-round opponent map. Prefer DB matchup_rounds when any
-  // rows exist for that round; otherwise fall back to the static fixture.
+  // Build the per-round opponent map straight from the static fixture.
+  // The bye-window fixture is finalized for the 2026 season (see
+  // lomaf-bye-fixture.ts), so we deliberately ignore matchup_rounds here
+  // — that table can drift via stale CSV uploads and we don't want it
+  // to override the canonical schedule.
   const opponentByRound = useMemo<OpponentByRound>(() => {
     const out: OpponentByRound = {
       12: new Map(), 13: new Map(), 14: new Map(), 15: new Map(), 16: new Map(),
     };
-    const dbByRound: Record<ByeRound, MatchupDbRow[]> = {
-      12: [], 13: [], 14: [], 15: [], 16: [],
-    };
-    for (const m of matchups) {
-      if ((BYE_ROUNDS as readonly number[]).includes(m.round_number)) {
-        dbByRound[m.round_number as ByeRound].push(m);
-      }
-    }
     for (const round of BYE_ROUNDS) {
-      const dbRows = dbByRound[round];
-      if (dbRows.length > 0) {
-        for (const m of dbRows) {
-          if (m.opp_id != null) out[round].set(m.team_id, m.opp_id);
-        }
-      } else {
-        for (const [a, b] of LOMAF_BYE_FIXTURE[round]) {
-          out[round].set(a, b);
-          out[round].set(b, a);
-        }
+      for (const [a, b] of LOMAF_BYE_FIXTURE[round]) {
+        out[round].set(a, b);
+        out[round].set(b, a);
       }
     }
     return out;
-  }, [matchups]);
+  }, []);
 
   return {
     loading,

@@ -3,9 +3,10 @@
 // =====================================================================
 // Hardcoded from the league site's Matchups screen. Each round is a list
 // of [team_id_a, team_id_b] pairs; order within a tuple is arbitrary.
-// Used by the Byes → Fixture tab. The tab still prefers `matchup_rounds`
-// data if it's been uploaded for these rounds — this constant is the
-// fallback so the Fixture view works before the matchups CSV exists.
+//
+// FINALIZED 2026-05-05 — confirmed by Lipi against the league site. The
+// Byes feature treats this as authoritative and ignores `matchup_rounds`
+// for the bye window so a stale DB upload can't drift these.
 // =====================================================================
 
 import { TEAMS } from './constants';
