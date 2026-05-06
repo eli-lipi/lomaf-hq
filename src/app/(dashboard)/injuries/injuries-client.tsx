@@ -409,10 +409,17 @@ function PlayerRow({
 
 function TrendChip({ trend }: { trend: InjuryTrend }) {
   if (trend.status === 'stalled') {
+    // slippageWeeks is null for non-numeric stalls (e.g. 'Concussion
+    // protocols' listed unchanged for two weeks running). Drop the
+    // '+Nw' marker in that case so the chip doesn't render '+w'.
+    const label =
+      trend.slippageWeeks != null
+        ? `Stalled +${trend.slippageWeeks}w · ${trend.weeksOnList}w on list`
+        : `Stalled · ${trend.weeksOnList}w on list, no change`;
     return (
       <span className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200">
         <AlertTriangle size={11} />
-        Stalled +{trend.slippageWeeks}w · {trend.weeksOnList}w on list
+        {label}
       </span>
     );
   }

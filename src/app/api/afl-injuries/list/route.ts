@@ -349,16 +349,27 @@ export async function GET() {
     // Predicted-out window: from the latest snapshot's mapped round
     // through (round + return_max_weeks - 1). Worst-case bound so we
     // don't promise an early return.
+    //
+    // For non-numeric ETAs ('Test', 'Concussion protocols', 'TBC',
+    // 'Indefinite', 'Season') return_max_weeks is null but the listing
+    // itself implies the player isn't fit. Treat them as out for at
+    // least the live week — we can't extend further without a
+    // duration. 'Season' and 'Indefinite' get extended to season-end.
     const predictedOut = new Set<number>();
-    if (
-      latestSnap &&
-      latestSnap.return_max_weeks != null &&
-      latestSnap.return_max_weeks > 0 &&
-      latestSnapshotRound != null
-    ) {
-      const start = latestSnapshotRound;
-      const end = start + latestSnap.return_max_weeks - 1;
-      for (let rd = start; rd <= end; rd++) predictedOut.add(rd);
+    if (latestSnap && latestSnapshotRound != null) {
+      if (latestSnap.return_max_weeks != null && latestSnap.return_max_weeks > 0) {
+        const start = latestSnapshotRound;
+        const end = start + latestSnap.return_max_weeks - 1;
+        for (let rd = start; rd <= end; rd++) predictedOut.add(rd);
+      } else if (latestSnap.estimated_return && latestSnap.estimated_return.trim() !== '') {
+        predictedOut.add(latestSnapshotRound);
+        const status = (latestSnap.return_status ?? '').toLowerCase();
+        if (status === 'season' || status === 'indefinite') {
+          for (let rd = latestSnapshotRound + 1; rd <= 24; rd++) {
+            predictedOut.add(rd);
+          }
+        }
+      }
     }
 
     const SEASON_END_ROUND = 24;
