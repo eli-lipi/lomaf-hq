@@ -392,17 +392,19 @@ function PlayerRow({
             <span className="ml-1.5">· proj {Math.round(player.proj_avg)}</span>
           )}
         </p>
-        {/* Trend chip — only show when there's a meaningful read */}
-        {player.trend.status !== 'new' && (
-          <div className="mt-2">
-            <TrendChip trend={player.trend} />
-          </div>
-        )}
         {/* Per-round picker */}
         <div className="mt-2.5">
           <RoundPicker rounds={player.rounds} currentRound={currentRound} />
         </div>
       </div>
+      {/* Trend chip pinned to the top-right of the row so it's the
+          first thing the eye lands on. Only renders when there's a
+          meaningful read (filters out 'new'). */}
+      {player.trend.status !== 'new' && (
+        <div className="shrink-0 self-start">
+          <TrendChip trend={player.trend} />
+        </div>
+      )}
     </div>
   );
 }
@@ -411,6 +413,13 @@ function TrendChip({ trend }: { trend: InjuryTrend }) {
   // The chip text is intentionally short ('Recovery: <state>'). The
   // contextual detail (weeks on list, slippage, status transition)
   // moves to the hover tooltip so the chip stays scannable.
+  //
+  // Common base — slightly bigger and bolder than the default body
+  // text so the chip wins the eye against player metadata; subtle
+  // ring + shadow lift it off the card surface.
+  const base =
+    'inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-full border shadow-sm whitespace-nowrap';
+
   if (trend.status === 'stalled') {
     const detail =
       trend.slippageWeeks != null
@@ -418,10 +427,10 @@ function TrendChip({ trend }: { trend: InjuryTrend }) {
         : `Stalled · ${trend.weeksOnList}w on list, no change`;
     return (
       <span
-        className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200"
+        className={cn(base, 'bg-amber-100 text-amber-800 border-amber-300 ring-1 ring-amber-200/60')}
         title={detail}
       >
-        <AlertTriangle size={11} />
+        <AlertTriangle size={13} />
         Recovery: Stalled
       </span>
     );
@@ -429,10 +438,10 @@ function TrendChip({ trend }: { trend: InjuryTrend }) {
   if (trend.status === 'accelerating') {
     return (
       <span
-        className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full bg-green-50 text-green-700 border border-green-200"
+        className={cn(base, 'bg-emerald-100 text-emerald-800 border-emerald-300 ring-1 ring-emerald-200/60')}
         title={`Healing faster than the original ETA (${trend.weeksOnList}w on list)`}
       >
-        <TrendingDown size={11} />
+        <TrendingDown size={13} />
         Recovery: Ahead of Schedule
       </span>
     );
@@ -440,20 +449,20 @@ function TrendChip({ trend }: { trend: InjuryTrend }) {
   if (trend.status === 'worsened') {
     return (
       <span
-        className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full bg-red-50 text-red-700 border border-red-200"
+        className={cn(base, 'bg-red-100 text-red-800 border-red-300 ring-1 ring-red-200/60')}
         title={`Status moved from '${trend.initialStatus ?? '?'}' to '${trend.currentStatus ?? '?'}'`}
       >
-        <TrendingUp size={11} />
+        <TrendingUp size={13} />
         Recovery: Worsened
       </span>
     );
   }
   return (
     <span
-      className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full bg-muted text-muted-foreground border border-border"
+      className={cn(base, 'bg-slate-100 text-slate-700 border-slate-300 ring-1 ring-slate-200/60')}
       title={`On track · ${trend.weeksOnList}w on list`}
     >
-      <Clock size={11} />
+      <Clock size={13} />
       Recovery: On Track
     </span>
   );
