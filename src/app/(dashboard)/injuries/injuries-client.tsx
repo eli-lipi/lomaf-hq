@@ -408,41 +408,53 @@ function PlayerRow({
 }
 
 function TrendChip({ trend }: { trend: InjuryTrend }) {
+  // The chip text is intentionally short ('Recovery: <state>'). The
+  // contextual detail (weeks on list, slippage, status transition)
+  // moves to the hover tooltip so the chip stays scannable.
   if (trend.status === 'stalled') {
-    // slippageWeeks is null for non-numeric stalls (e.g. 'Concussion
-    // protocols' listed unchanged for two weeks running). Drop the
-    // '+Nw' marker in that case so the chip doesn't render '+w'.
-    const label =
+    const detail =
       trend.slippageWeeks != null
         ? `Stalled +${trend.slippageWeeks}w · ${trend.weeksOnList}w on list`
         : `Stalled · ${trend.weeksOnList}w on list, no change`;
     return (
-      <span className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200">
+      <span
+        className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200"
+        title={detail}
+      >
         <AlertTriangle size={11} />
-        {label}
+        Recovery: Stalled
       </span>
     );
   }
   if (trend.status === 'accelerating') {
     return (
-      <span className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full bg-green-50 text-green-700 border border-green-200">
+      <span
+        className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full bg-green-50 text-green-700 border border-green-200"
+        title={`Healing faster than the original ETA (${trend.weeksOnList}w on list)`}
+      >
         <TrendingDown size={11} />
-        Healing ahead of schedule
+        Recovery: Ahead of Schedule
       </span>
     );
   }
   if (trend.status === 'worsened') {
     return (
-      <span className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full bg-red-50 text-red-700 border border-red-200">
+      <span
+        className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full bg-red-50 text-red-700 border border-red-200"
+        title={`Status moved from '${trend.initialStatus ?? '?'}' to '${trend.currentStatus ?? '?'}'`}
+      >
         <TrendingUp size={11} />
-        Worsened
+        Recovery: Worsened
       </span>
     );
   }
   return (
-    <span className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full bg-muted text-muted-foreground border border-border">
+    <span
+      className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full bg-muted text-muted-foreground border border-border"
+      title={`On track · ${trend.weeksOnList}w on list`}
+    >
       <Clock size={11} />
-      On track · {trend.weeksOnList}w on list
+      Recovery: On Track
     </span>
   );
 }

@@ -149,10 +149,12 @@ export function parseEstimatedReturn(raw: string): {
     return { min: w, max: w, status: 'months' };
   }
 
-  // 'N-M weeks' or 'N week(s)'
-  const range = text.match(/(\d+)\s*-\s*(\d+)\s*week/);
+  // 'N-M weeks' or 'N week(s)' — also accept 'match'/'matches' and
+  // 'game'/'games' (AFL uses these for suspensions; one match == one
+  // week for our purposes since LOMAF rounds map 1:1 with AFL rounds).
+  const range = text.match(/(\d+)\s*-\s*(\d+)\s*(?:week|match|game)/);
   if (range) return { min: Number(range[1]), max: Number(range[2]), status: 'weeks' };
-  const single = text.match(/(\d+)\s*week/);
+  const single = text.match(/(\d+)\s*(?:week|match|game)/);
   if (single) {
     const n = Number(single[1]);
     return { min: n, max: n, status: 'weeks' };
