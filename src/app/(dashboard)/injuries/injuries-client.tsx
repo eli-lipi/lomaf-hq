@@ -446,8 +446,17 @@ function TrendChip({ trend }: { trend: InjuryTrend }) {
  * Tile rendering rules:
  *   played (points > 0)        → green
  *   played round, no points    → red (DNP, regardless of listing)
- *   future round, predicted out → white striped with red
- *   future round, expected back → white
+ *   live week, predicted out   → solid amber (AFL's direct forecast
+ *                                 for the upcoming round — distinct
+ *                                 from the further-future projection)
+ *   live week, expected back   → white with a blue accent ring
+ *   far future, predicted out  → white striped with red (projection)
+ *   far future, expected back  → white
+ *
+ * 'Live week' = currentRound + 1 — the round the latest AFL listing
+ * applies to. We split it out so a striped tile means 'we're projecting
+ * forward' and a solid amber tile means 'AFL specifically says out
+ * this week'.
  *
  * The tile text shows the AFL-listed ETA when the snapshot for that
  * round had one (e.g. R8 · "2-3w"). Otherwise just the round number.
@@ -478,6 +487,10 @@ function RoundPicker({
         // the player wasn't in the lineup) = DNP, paint red.
         const dnp = isPastRound && !played;
         const isFuture = !isPastRound;
+        // Live week = the upcoming round AFL's most recent listing
+        // maps to. predicted_injured here is a definitive forecast
+        // ('out this round'), not a projection.
+        const isLiveWeek = currentRound > 0 && c.round === currentRound + 1;
 
         let cls = '';
         let style: React.CSSProperties | undefined;
@@ -485,11 +498,21 @@ function RoundPicker({
           cls = 'bg-green-100 text-green-800 border-green-200';
         } else if (dnp) {
           cls = 'bg-red-100 text-red-800 border-red-300';
+        } else if (isLiveWeek && c.predicted_injured) {
+          // AFL's direct forecast for the upcoming round — solid, not
+          // striped, so it visually splits from the far-future
+          // projection tiles.
+          cls = 'bg-amber-100 text-amber-900 border-amber-300 font-semibold';
         } else if (isFuture && c.predicted_injured) {
           cls = 'text-red-700 border-red-200';
           style = stripedStyle;
+        } else if (isLiveWeek) {
+          // Live week, expected back — subtle accent so the 'what's
+          // next' lens is visually anchored even when the player is
+          // expected to play.
+          cls = 'bg-white text-foreground border-blue-200 ring-1 ring-blue-100';
         } else {
-          // future, expected back
+          // far future, expected back
           cls = 'bg-white text-muted-foreground border-border';
         }
 
@@ -498,9 +521,13 @@ function RoundPicker({
             ? ` · ${c.points} pts`
             : dnp
               ? ' · did not play'
-              : c.predicted_injured
-                ? ' · predicted out'
-                : ' · upcoming'
+              : isLiveWeek && c.predicted_injured
+                ? ' · expected out (live week)'
+                : c.predicted_injured
+                  ? ' · projected out'
+                  : isLiveWeek
+                    ? ' · live week'
+                    : ' · upcoming'
         }${c.eta ? ` · listed ${c.eta}` : ''}${c.injury ? ` · ${c.injury}` : ''}`;
 
         return (
