@@ -1584,20 +1584,22 @@ function PlayerVerdictTable({
 }) {
   return (
     <div className="overflow-x-auto">
-      {/* v10 — six-column structure with a vertical separator between the
-          "Actuals" group (left) and the "Expectations" group (right).
-          v10.1 — overall size bumped ~30% via base font size on the table. */}
+      {/* Seven-column structure: Actuals (Games Played, Avg Since) | sep |
+          Expectations (Avg Before, Expected Avg, Expected Games). Expected
+          Games is its own rightmost column so the on-track/off-track signal
+          is legible at a glance, not crammed under Expected Avg. */}
       <table
         className="w-full"
         style={{ tableLayout: 'fixed', fontSize: 18 }}
       >
         <colgroup>
-          <col style={{ width: '28%' }} />          {/* Player */}
-          <col style={{ width: '14%' }} />          {/* Games Played */}
-          <col style={{ width: '14%' }} />          {/* Avg Since */}
-          <col style={{ width: '4%' }} />            {/* visual separator */}
-          <col style={{ width: '20%' }} />          {/* Avg Before (Δ) */}
-          <col style={{ width: '20%' }} />          {/* Expected (Δ) */}
+          <col style={{ width: '26%' }} />          {/* Player */}
+          <col style={{ width: '12%' }} />          {/* Games Played */}
+          <col style={{ width: '12%' }} />          {/* Avg Since */}
+          <col style={{ width: '3%' }} />           {/* visual separator */}
+          <col style={{ width: '15%' }} />          {/* Avg Before (Δ) */}
+          <col style={{ width: '16%' }} />          {/* Expected Avg (Δ) */}
+          <col style={{ width: '16%' }} />          {/* Expected Games (status) */}
         </colgroup>
         <thead>
           {/* Group header row — 'ACTUALS' over the left half, 'EXPECTATIONS' over the right. */}
@@ -1612,7 +1614,7 @@ function PlayerVerdictTable({
             </th>
             <th />
             <th
-              colSpan={2}
+              colSpan={3}
               className="text-center pb-1 font-semibold"
               style={{ borderBottom: '1px solid rgba(255,255,255,0.06)' }}
             >
@@ -1632,13 +1634,19 @@ function PlayerVerdictTable({
                 </InfoTip>
               </span>
             </th>
-            <th className="text-right font-medium pl-2 pb-3 whitespace-nowrap">
+            <th className="text-right font-medium px-2 pb-3 whitespace-nowrap">
               <span className="inline-flex items-center gap-1 justify-end">
                 Expected
                 <InfoTip placement="bottom-right">
                   <strong style={{ color: TEXT }}>Expected average:</strong> the bar this player needed to clear for the trade to make sense. Locked at trade execution. Auto-derived from a position-tier baseline blended 60/40 with last-3-rounds form. The delta in parentheses compares Avg Since to Expected.
-                  <br /><br />
-                  <strong style={{ color: TEXT }}>Expected games:</strong> the games-out-of-max the trader bet this player would play across the post-trade window. <span style={{ color: '#3FBF7F' }}>(on track)</span> / <span style={{ color: '#E24B4A' }}>(off track)</span> compares actual games played to the pro-rata expectation at the current round. Blank means the trade was logged before this field existed — Edit the trade to backfill.
+                </InfoTip>
+              </span>
+            </th>
+            <th className="text-right font-medium pl-2 pb-3 whitespace-nowrap">
+              <span className="inline-flex items-center gap-1 justify-end">
+                Expected Games
+                <InfoTip placement="bottom-right">
+                  <strong style={{ color: TEXT }}>Expected games:</strong> the games-out-of-max the trader bet this player would play across the post-trade window. <span style={{ color: '#3FBF7F' }}>(on track)</span> / <span style={{ color: '#E24B4A' }}>(off track)</span> compares actual games played to the pro-rata expectation at the current round. <em>(not set)</em> means the trade was logged before this field existed — Edit the trade to backfill.
                 </InfoTip>
               </span>
             </th>
@@ -1647,7 +1655,7 @@ function PlayerVerdictTable({
         <tbody>
           {tradePlayers.length === 0 && (
             <tr>
-              <td colSpan={6} className="text-xs italic py-2" style={{ color: TEXT_MUTED }}>—</td>
+              <td colSpan={7} className="text-xs italic py-2" style={{ color: TEXT_MUTED }}>—</td>
             </tr>
           )}
           {tradePlayers.map((tp) => (
@@ -1938,9 +1946,9 @@ function PlayerVerdictRow({
           {computedPreAvg != null ? Math.round(computedPreAvg) : '—'}
           <DeltaPill delta={preDelta} teamColor={teamColor} />
         </td>
-        {/* Expected (Δ vs Avg Since) — avg on top, games-bet below */}
+        {/* Expected Avg (Δ vs Avg Since) */}
         <td
-          className="pl-2 text-right tabular-nums"
+          className="px-2 text-right text-[18px] tabular-nums"
           style={{ color: TEXT }}
           // Per-row ⓘ removed in v10.4 — the column header carries the
           // explanation. Hover the row to inspect via the title attr if needed.
@@ -1950,10 +1958,11 @@ function PlayerVerdictRow({
               : undefined
           }
         >
-          <div className="text-[18px]">
-            {expectedAvg != null ? Math.round(expectedAvg) : '—'}
-            <DeltaPill delta={sinceDelta} teamColor={teamColor} />
-          </div>
+          {expectedAvg != null ? Math.round(expectedAvg) : '—'}
+          <DeltaPill delta={sinceDelta} teamColor={teamColor} />
+        </td>
+        {/* Expected Games — rightmost column with on-track/off-track suffix */}
+        <td className="pl-2 text-right text-[18px] tabular-nums" style={{ color: TEXT }}>
           <GamesTrackPill
             expectedRemaining={tradePlayer.expected_games_remaining ?? null}
             expectedMax={tradePlayer.expected_games_max ?? null}
@@ -1964,7 +1973,7 @@ function PlayerVerdictRow({
       </tr>
       {expanded && traj.length > 0 && performance && (
         <tr style={{ background: 'rgba(255,255,255,0.02)' }}>
-          <td colSpan={6} className="px-2 pb-3">
+          <td colSpan={7} className="px-2 pb-3">
             <div className="grid grid-flow-col auto-cols-fr gap-1 mt-1">
               {traj.map((s) => {
                 const cell = scoreCellStyle(s.pts, baselineForPerformance(performance));
@@ -2073,9 +2082,10 @@ function DeltaPill({
 }
 
 /**
- * Renders the "X/Y games (on track | off track)" line under Expected avg.
- * Always renders so legacy trades visibly read "— games (not set)" — that's
- * the cue to Edit the trade and backfill expected_games_remaining.
+ * Renders the Expected Games column cell — "X/Y" with an "(on track)" /
+ * "(off track)" suffix in green/red. Always renders so legacy trades
+ * visibly read "— (not set)" — that's the cue to Edit and backfill
+ * expected_games_remaining.
  *
  * On-track logic: pro-rate expected_games_remaining over the season window
  * by elapsed rounds; on track if actual games played >= floor(pro-rata).
@@ -2096,12 +2106,12 @@ function GamesTrackPill({
   // Legacy trade (no v11 fields). Show clearly so the admin spots it.
   if (expectedRemaining == null) {
     return (
-      <div className="text-[13px] mt-1 tabular-nums" style={{ color: TEXT_MUTED }}>
-        — games
-        <span className="ml-1.5 italic" style={{ color: MUTED }}>
+      <span style={{ color: TEXT_BODY }}>
+        —
+        <span className="ml-1.5 text-[13px] italic" style={{ color: MUTED }}>
           (not set)
         </span>
-      </div>
+      </span>
     );
   }
 
@@ -2123,13 +2133,13 @@ function GamesTrackPill({
   }
 
   return (
-    <div className="text-[13px] mt-1 tabular-nums" style={{ color: TEXT_MUTED }}>
+    <span>
       {expectedRemaining}
-      {denomLabel} games
-      <span className="ml-1.5" style={{ color: labelColor }}>
+      {denomLabel}
+      <span className="ml-1.5 text-[13px]" style={{ color: labelColor }}>
         ({label})
       </span>
-    </div>
+    </span>
   );
 }
 
