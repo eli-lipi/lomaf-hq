@@ -68,7 +68,15 @@ export default function LogTradeModal({ onClose, onCreated, initial }: Props) {
   const [timing, setTiming] = useState<Timing>('after');
   const [roundPicked, setRoundPicked] = useState<number>(initial?.roundExecuted ?? 1);
   const [contextNotes, setContextNotes] = useState<string>(initial?.contextNotes ?? '');
-  const [players, setPlayers] = useState<DraftPlayer[]>(initial?.players ?? []);
+  const [players, setPlayers] = useState<DraftPlayer[]>(() => {
+    if (!initial?.players?.length) return [];
+    const max = maxGamesAvailable(initial.roundExecuted);
+    return initial.players.map(p => ({
+      ...p,
+      expected_games_remaining: p.expected_games_remaining ?? max,
+      expected_games_max: p.expected_games_max ?? max,
+    }));
+  });
 
   // round_executed = the last round where OLD rosters applied.
   // "After Round N" → trade took effect R(N+1) → round_executed = N.
