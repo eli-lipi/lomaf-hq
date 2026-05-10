@@ -119,10 +119,19 @@ export default function TradeTrackingTab({ isAdmin = false }: { isAdmin?: boolea
   }, [items, sort]);
 
   if (activeTradeId) {
+    // Chronological index: earliest trade = #1, regardless of current sort.
+    const chronological = [...items].sort((a, b) => {
+      if (a.trade.round_executed !== b.trade.round_executed)
+        return a.trade.round_executed - b.trade.round_executed;
+      return new Date(a.trade.created_at).getTime() - new Date(b.trade.created_at).getTime();
+    });
+    const chronoIndex = new Map(chronological.map((it, i) => [it.trade.id, i + 1]));
+
     const tradeList = sortedItems.map((it) => ({
       id: it.trade.id,
       label: `${it.trade.team_a_name} ↔ ${it.trade.team_b_name}`,
       round: it.trade.round_executed,
+      chronoNum: chronoIndex.get(it.trade.id) ?? 0,
     }));
 
     return (

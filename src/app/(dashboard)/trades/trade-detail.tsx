@@ -79,6 +79,7 @@ interface TradeNavItem {
   id: string;
   label: string;
   round: number;
+  chronoNum?: number;
 }
 
 interface Props {
@@ -344,9 +345,9 @@ export default function TradeDetail({
                 maxWidth: 280,
               }}
             >
-              {tradeList.map((t, i) => (
+              {tradeList.map((t) => (
                 <option key={t.id} value={t.id}>
-                  {i + 1}. {t.label} (R{t.round})
+                  {t.chronoNum ?? '?'}. {t.label} (R{t.round})
                 </option>
               ))}
             </select>
