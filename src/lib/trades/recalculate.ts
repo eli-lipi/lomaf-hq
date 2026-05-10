@@ -247,6 +247,7 @@ export async function recalculateTradeForRound(
         injuryAtTradeLine?: string | null;
         driftLine?: string | null;
         availabilityLine?: string | null;
+        projectedLine?: string | null;
       }
     >();
 
@@ -256,24 +257,37 @@ export async function recalculateTradeForRound(
     const playerIdsForInjuries = (players as unknown as any[]).map((p) => p.player_id);
     const injuryById = new Map<
       number,
-      { injury: string | null; estimated_return: string | null; source_updated_at: string | null }
+      {
+        injury: string | null;
+        estimated_return: string | null;
+        source_updated_at: string | null;
+        return_min_weeks: number | null;
+        return_max_weeks: number | null;
+        return_status: string | null;
+      }
     >();
     if (playerIdsForInjuries.length > 0) {
       const { data: injRows } = await supabase
         .from('afl_injuries')
-        .select('player_id, injury, estimated_return, source_updated_at')
+        .select('player_id, injury, estimated_return, source_updated_at, return_min_weeks, return_max_weeks, return_status')
         .in('player_id', playerIdsForInjuries);
       for (const r of (injRows ?? []) as Array<{
         player_id: number | null;
         injury: string | null;
         estimated_return: string | null;
         source_updated_at: string | null;
+        return_min_weeks: number | null;
+        return_max_weeks: number | null;
+        return_status: string | null;
       }>) {
         if (r.player_id != null) {
           injuryById.set(r.player_id, {
             injury: r.injury,
             estimated_return: r.estimated_return,
             source_updated_at: r.source_updated_at,
+            return_min_weeks: r.return_min_weeks,
+            return_max_weeks: r.return_max_weeks,
+            return_status: r.return_status,
           });
         }
       }
@@ -321,9 +335,9 @@ export async function recalculateTradeForRound(
         ? {
             injury: inj.injury,
             estimated_return: inj.estimated_return,
-            return_min_weeks: null,
-            return_max_weeks: null,
-            return_status: 'unknown',
+            return_min_weeks: inj.return_min_weeks,
+            return_max_weeks: inj.return_max_weeks,
+            return_status: inj.return_status ?? 'unknown',
             source_updated_at: inj.source_updated_at,
             trend_status: null,
             trend_summary: null,
@@ -338,12 +352,28 @@ export async function recalculateTradeForRound(
       let availabilityLine: string | null = null;
       const expGames = tp.expected_games_remaining as number | null | undefined;
       const expMax = tp.expected_games_max as number | null | undefined;
-      if (expGames != null && expMax != null && expMax > 0) {
-        const perf = performance.find((pp) => pp.player_id === tp.player_id);
-        if (perf) {
-          const proRata = expGames * (Math.min(roundsSince, expMax) / expMax);
-          const onTrack = proRata <= 0 || perf.rounds_played >= proRata * 0.8;
-          availabilityLine = `AVAILABILITY: ${onTrack ? 'ON_TRACK' : 'OFF_TRACK'} — ${perf.rounds_played}/${Math.round(proRata)} games (pro-rata expected)`;
+      const perf = performance.find((pp) => pp.player_id === tp.player_id);
+      if (expGames != null && expMax != null && expMax > 0 && perf) {
+        const proRata = expGames * (Math.min(roundsSince, expMax) / expMax);
+        const onTrack = proRata <= 0 || perf.rounds_played >= proRata * 0.8;
+        availabilityLine = `AVAILABILITY: ${onTrack ? 'ON_TRACK' : 'OFF_TRACK'} — ${perf.rounds_played}/${Math.round(proRata)} games (pro-rata expected)`;
+      }
+
+      // v13.1 — projected max games when a player is currently injured.
+      // Pre-computes the best/worst case so the AI doesn't have to do
+      // arithmetic with weeks and rounds.
+      let projectedLine: string | null = null;
+      if (inj && perf && expMax != null && expMax > 0) {
+        const roundsMissedSoFar = roundsSince - perf.rounds_played;
+        const minWeeks = inj.return_min_weeks;
+        const maxWeeks = inj.return_max_weeks;
+        if (minWeeks != null && maxWeeks != null) {
+          const bestCase = Math.max(0, expMax - roundsMissedSoFar - minWeeks);
+          const worstCase = Math.max(0, expMax - roundsMissedSoFar - maxWeeks);
+          const expectedStr = expGames != null ? ` (expected ${expGames})` : '';
+          projectedLine = `PROJECTED MAX GAMES: best case ${bestCase}, worst case ${worstCase} of ${expMax} available${expectedStr} — already missed ${roundsMissedSoFar} rounds, still ${inj.estimated_return ?? '?'} out`;
+        } else if (inj.return_status === 'season' || inj.return_status === 'indefinite') {
+          projectedLine = `PROJECTED MAX GAMES: 0 of ${expMax} — listed as ${inj.return_status}, season likely over`;
         }
       }
 
@@ -358,6 +388,7 @@ export async function recalculateTradeForRound(
         injuryAtTradeLine,
         driftLine,
         availabilityLine,
+        projectedLine,
       });
     }
 
@@ -408,7 +439,8 @@ export async function recalculateTradeForRound(
       const injAtTradeStr = tradeMeta?.injuryAtTradeLine ? `\n    ${tradeMeta.injuryAtTradeLine}` : '';
       const driftStr = tradeMeta?.driftLine ? `\n    ${tradeMeta.driftLine}` : '';
       const availStr = tradeMeta?.availabilityLine ? `\n    ${tradeMeta.availabilityLine}` : '';
-      return `- ${p.player_name} (${posStr}) → ${p.receiving_team_name}: expected avg ${expectedStr}${tierStr}, pre-trade season-to-date avg ${preStr} (small-sample, NOT a prediction), actual avg ${post}${gapStr}, ${p.rounds_played}/${p.rounds_possible} rounds, ${status}\n    scores: ${perRound}${ctxStr}${injAtTradeStr}${driftStr}${injStr}${availStr}${statsStr}`;
+      const projStr = tradeMeta?.projectedLine ? `\n    ${tradeMeta.projectedLine}` : '';
+      return `- ${p.player_name} (${posStr}) → ${p.receiving_team_name}: expected avg ${expectedStr}${tierStr}, pre-trade season-to-date avg ${preStr} (small-sample, NOT a prediction), actual avg ${post}${gapStr}, ${p.rounds_played}/${p.rounds_possible} rounds, ${status}\n    scores: ${perRound}${ctxStr}${injAtTradeStr}${driftStr}${injStr}${availStr}${projStr}${statsStr}`;
     });
 
     const teamAReceives = teamA.map((p) => p.player_name);

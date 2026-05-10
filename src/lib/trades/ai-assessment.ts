@@ -186,6 +186,12 @@ When you see an "AVAILABILITY:" line, it shows whether the player is hitting the
 - OFF_TRACK: Missing more games than expected. e.g. "1/4 games (pro-rata expected)".
 Use this to ground your availability commentary in actual numbers rather than vibes. An OFF_TRACK player who was injured at trade time and whose drift is ON_TRACK is different from an OFF_TRACK player who was healthy — the first was priced in, the second wasn't.
 
+When you see a "PROJECTED MAX GAMES:" line, this is the PRE-COMPUTED projection of how many games the player can realistically still play this season, given their CURRENT injury timeline and games already missed. It shows best-case and worst-case scenarios. THIS IS CRITICAL FOR GRADING THE TRADE:
+- Compare the projected max to the player's EXPECTED GAMES. If expected was 11 but projected max is only 7 best-case, the player CANNOT hit their expected output even if they score well — the volume simply isn't there. Flag this explicitly.
+- A player listed as "season" or "indefinite" with projected max 0 is a total write-off for the receiving coach.
+- Use the "already missed X rounds" count to ground the narrative — don't just say "hasn't played", say "has missed 7 of 14 possible rounds and still faces 8-10 more weeks out".
+- When the projected max games is significantly below expected, this is the HEADLINE STORY — it dominates any per-game average analysis because volume matters more than efficiency when you can't play.
+
 The season has 23 rounds. Finals start around R21. A "ton" is 100+, a "zero" is 0/DNP (injury or bye), a solid score is 80+. Typical stars average 90-120. Consider:
 - The original intent (from the context note) and whether it's playing out
 - Each player's actual avg vs. their EXPECTED avg (the explicit bet) — that's the trade's verdict on output. NOT pre-trade season-to-date avg.
