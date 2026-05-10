@@ -1,16 +1,49 @@
 'use client';
 
 import { Suspense, useState, useEffect } from 'react';
+import dynamic from 'next/dynamic';
 import { useSearchParams } from 'next/navigation';
 import { cn } from '@/lib/utils';
-import OverviewTab from './overview-tab';
-import RoundRangeTab from './round-range-tab';
-import LineRankingsTab from './line-rankings-tab';
-import LuckFormTab from './luck-form-tab';
-import DraftTab from './draft-tab';
-import PlayersTab from './players-tab';
-import ConcentrationTab from './concentration-tab';
-import StabilityTab from './stability-tab';
+
+// v13.2 — Each analytics tab imports recharts (~200KB) and only one
+// renders at a time. Dynamic-import them so the browser only fetches
+// the active tab's bundle. Note: next/dynamic requires the options
+// arg to be an object literal — we can't share a config variable.
+const TabLoading = () => (
+  <div className="py-12 text-center text-muted-foreground">Loading…</div>
+);
+const OverviewTab = dynamic(() => import('./overview-tab'), {
+  ssr: false,
+  loading: TabLoading,
+});
+const RoundRangeTab = dynamic(() => import('./round-range-tab'), {
+  ssr: false,
+  loading: TabLoading,
+});
+const LineRankingsTab = dynamic(() => import('./line-rankings-tab'), {
+  ssr: false,
+  loading: TabLoading,
+});
+const LuckFormTab = dynamic(() => import('./luck-form-tab'), {
+  ssr: false,
+  loading: TabLoading,
+});
+const DraftTab = dynamic(() => import('./draft-tab'), {
+  ssr: false,
+  loading: TabLoading,
+});
+const PlayersTab = dynamic(() => import('./players-tab'), {
+  ssr: false,
+  loading: TabLoading,
+});
+const ConcentrationTab = dynamic(() => import('./concentration-tab'), {
+  ssr: false,
+  loading: TabLoading,
+});
+const StabilityTab = dynamic(() => import('./stability-tab'), {
+  ssr: false,
+  loading: TabLoading,
+});
 
 const TABS = [
   { id: 'overview', label: 'Overview' },

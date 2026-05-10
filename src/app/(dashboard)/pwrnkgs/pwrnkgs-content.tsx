@@ -1,12 +1,33 @@
 'use client';
 
 import { Suspense, useState, useEffect } from 'react';
+import dynamic from 'next/dynamic';
 import { useSearchParams } from 'next/navigation';
 import { cn } from '@/lib/utils';
-import SlideLayoutTab from './slide-layout-tab';
-import RankingsTab from './rankings-tab';
-import PreviewPublishTab from './preview-publish-tab';
-import PreviousWeeksTab from './previous-weeks-tab';
+
+// v13.2 — these tabs each pull in heavy deps (dnd-kit for SlideLayout,
+// recharts for PreviousWeeks). Dynamic-import so only the active tab
+// ships its bundle. Note: next/dynamic requires the options arg to be
+// an object literal — we can't share a config variable.
+const TabLoading = () => (
+  <div className="py-12 text-center text-muted-foreground">Loading…</div>
+);
+const SlideLayoutTab = dynamic(() => import('./slide-layout-tab'), {
+  ssr: false,
+  loading: TabLoading,
+});
+const RankingsTab = dynamic(() => import('./rankings-tab'), {
+  ssr: false,
+  loading: TabLoading,
+});
+const PreviewPublishTab = dynamic(() => import('./preview-publish-tab'), {
+  ssr: false,
+  loading: TabLoading,
+});
+const PreviousWeeksTab = dynamic(() => import('./previous-weeks-tab'), {
+  ssr: false,
+  loading: TabLoading,
+});
 
 const TOP_TABS = [
   { id: 'this-week', label: 'This Week' },

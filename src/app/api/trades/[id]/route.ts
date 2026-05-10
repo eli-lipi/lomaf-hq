@@ -8,6 +8,11 @@ import { recalculateTradeAcrossPostTradeRounds } from '@/lib/trades/recalculate'
 import { autoExpectedAvg, autoExpectedGames, maxGamesAvailable } from '@/lib/trades/expected';
 import { getCurrentRound } from '@/lib/round';
 import { insertResilient, updateResilient } from '@/lib/trades/db-resilient';
+import {
+  computeInjuryTrend,
+  fetchSnapshotsForPlayers,
+  computeInjuryDrift,
+} from '@/lib/afl-injuries';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -18,7 +23,11 @@ export async function GET(_request: Request, ctx: { params: Promise<{ id: string
   try {
     const { id } = await ctx.params;
 
-    const [tradeRes, playersRes, probsRes, latestPlayedRes] = await Promise.all([
+    // v13.2 — Round 1 (parallel): trade row + trade_players + probabilities
+    // + latest played + currentRound. getCurrentRound was previously
+    // sequential after the first Promise.all; folding it in saves one
+    // round-trip.
+    const [tradeRes, playersRes, probsRes, latestPlayedRes, currentRound] = await Promise.all([
       supabase.from('trades').select('*').eq('id', id).single(),
       supabase.from('trade_players').select('*').eq('trade_id', id),
       supabase
@@ -34,6 +43,7 @@ export async function GET(_request: Request, ctx: { params: Promise<{ id: string
         .not('points', 'is', null)
         .order('round_number', { ascending: false })
         .limit(1),
+      getCurrentRound(supabase),
     ]);
 
     if (tradeRes.error || !tradeRes.data) {
@@ -45,7 +55,6 @@ export async function GET(_request: Request, ctx: { params: Promise<{ id: string
     const allProbs = probsRes.data ?? [];
     // v12.2 — cap by Round Control's explicit current round; falls back
     // to MAX(played) for legacy seasons before the ledger was populated.
-    const currentRound = await getCurrentRound(supabase);
     const fallbackPlayed =
       (latestPlayedRes.data as { round_number: number }[] | null)?.[0]?.round_number ?? null;
     const maxPlayedRound = currentRound > 0 ? currentRound : fallbackPlayed;
@@ -54,15 +63,44 @@ export async function GET(_request: Request, ctx: { params: Promise<{ id: string
         ? allProbs.filter((p) => p.round_number <= maxPlayedRound)
         : allProbs;
     const latestRound = probs.length > 0 ? probs[probs.length - 1].round_number : trade.round_executed;
+    const playerIds = players.map((p) => p.player_id);
+
+    // v13.2 — Round 2 (parallel): every query that depends on playerIds
+    // runs concurrently. Was previously 5 sequential round-trips
+    // (player_rounds → draft_picks → players-by-id → afl_injuries →
+    // snapshots). Saves ~200-400ms on cold loads.
+    const [playerRoundsRes, draftRes, playersByIdRes, injRes, snapshotsByPlayer] = await Promise.all([
+      playerIds.length > 0
+        ? supabase
+            .from('player_rounds')
+            .select('player_id, team_id, round_number, points, pos')
+            .in('player_id', playerIds)
+            .lte('round_number', latestRound)
+        : Promise.resolve({ data: [] as Array<{ player_id: number; team_id: number; round_number: number; points: number | null; pos: string | null }> }),
+      playerIds.length > 0
+        ? supabase
+            .from('draft_picks')
+            .select('player_id, position')
+            .in('player_id', playerIds)
+        : Promise.resolve({ data: [] as Array<{ player_id: number; position: string | null }> }),
+      playerIds.length > 0
+        ? supabase
+            .from('players')
+            .select('player_id, player_name, proj_avg, avg_pts, last5_avg, last3_avg, last1, owned_pct')
+            .in('player_id', playerIds)
+        : Promise.resolve({ data: [] }),
+      playerIds.length > 0
+        ? supabase
+            .from('afl_injuries')
+            .select('player_id, injury, estimated_return, source_updated_at')
+            .in('player_id', playerIds)
+        : Promise.resolve({ data: [] }),
+      fetchSnapshotsForPlayers(supabase, playerIds),
+    ]);
 
     // Build per-player performance — covers the full trajectory (pre-trade
     // rounds + post-trade rounds) so the UI can show the before/after split.
-    const playerIds = players.map((p) => p.player_id);
-    const { data: playerRoundsAll } = await supabase
-      .from('player_rounds')
-      .select('player_id, team_id, round_number, points, pos')
-      .in('player_id', playerIds)
-      .lte('round_number', latestRound);
+    const playerRoundsAll = playerRoundsRes.data;
 
     // v12 — fallback position lookup from any round we have for the
     // player. Used when raw_position / player_position / draft_position
@@ -94,13 +132,10 @@ export async function GET(_request: Request, ctx: { params: Promise<{ id: string
 
     const roundsPossible = Math.max(0, latestRound - trade.round_executed);
 
-    // Draft position lookup — the stable per-player position (not BN)
-    const { data: draftRows } = await supabase
-      .from('draft_picks')
-      .select('player_id, position')
-      .in('player_id', playerIds);
+    // Draft position lookup — the stable per-player position (not BN).
+    // Pulled in the parallel batch above; just shape it here.
     const draftPosByPlayer = new Map<number, string>();
-    for (const d of (draftRows ?? []) as { player_id: number; position: string | null }[]) {
+    for (const d of (draftRes.data ?? []) as { player_id: number; position: string | null }[]) {
       if (d.position) draftPosByPlayer.set(d.player_id, d.position);
     }
 
@@ -108,6 +143,8 @@ export async function GET(_request: Request, ctx: { params: Promise<{ id: string
     // traded player. proj_avg + form fields feed the trade UI chips
     // and the AI prompts. Resolved primarily by player_id (set when
     // the players CSV was uploaded); name-fallback for unresolved.
+    // v13.2 — by-id query was hoisted to the parallel batch; only
+    // the by-name fallback (rare) stays sequential below.
     interface PlayerStats {
       proj_avg: number | null;
       avg_pts: number | null;
@@ -117,49 +154,43 @@ export async function GET(_request: Request, ctx: { params: Promise<{ id: string
       owned_pct: number | null;
     }
     const statsByPlayer = new Map<number, PlayerStats>();
-    if (playerIds.length > 0) {
-      const { data: byId } = await supabase
+    const byName = new Map<string, PlayerStats>();
+    for (const r of (playersByIdRes.data ?? []) as Array<{ player_id: number | null; player_name: string } & PlayerStats>) {
+      const stats: PlayerStats = {
+        proj_avg: r.proj_avg,
+        avg_pts: r.avg_pts,
+        last5_avg: r.last5_avg,
+        last3_avg: r.last3_avg,
+        last1: r.last1,
+        owned_pct: r.owned_pct,
+      };
+      if (r.player_id != null) statsByPlayer.set(r.player_id, stats);
+      byName.set(r.player_name.toLowerCase(), stats);
+    }
+    // Name-fallback for trade players whose player_id didn't resolve
+    // in the players table on upload. Rare path.
+    const unresolved = players.filter((p) => !statsByPlayer.has(p.player_id));
+    if (unresolved.length > 0) {
+      const { data: byNameRows } = await supabase
         .from('players')
-        .select('player_id, player_name, proj_avg, avg_pts, last5_avg, last3_avg, last1, owned_pct')
-        .in('player_id', playerIds);
-      const byName = new Map<string, PlayerStats>();
-      for (const r of (byId ?? []) as Array<{ player_id: number | null; player_name: string } & PlayerStats>) {
-        const stats: PlayerStats = {
+        .select('player_name, proj_avg, avg_pts, last5_avg, last3_avg, last1, owned_pct')
+        .in(
+          'player_name',
+          unresolved.map((p) => p.player_name)
+        );
+      for (const r of (byNameRows ?? []) as Array<{ player_name: string } & PlayerStats>) {
+        byName.set(r.player_name.toLowerCase(), {
           proj_avg: r.proj_avg,
           avg_pts: r.avg_pts,
           last5_avg: r.last5_avg,
           last3_avg: r.last3_avg,
           last1: r.last1,
           owned_pct: r.owned_pct,
-        };
-        if (r.player_id != null) statsByPlayer.set(r.player_id, stats);
-        byName.set(r.player_name.toLowerCase(), stats);
+        });
       }
-      // Name-fallback for trade players whose player_id didn't resolve
-      // in the players table on upload.
-      const unresolved = players.filter((p) => !statsByPlayer.has(p.player_id));
-      if (unresolved.length > 0) {
-        const { data: byNameRows } = await supabase
-          .from('players')
-          .select('player_name, proj_avg, avg_pts, last5_avg, last3_avg, last1, owned_pct')
-          .in(
-            'player_name',
-            unresolved.map((p) => p.player_name)
-          );
-        for (const r of (byNameRows ?? []) as Array<{ player_name: string } & PlayerStats>) {
-          byName.set(r.player_name.toLowerCase(), {
-            proj_avg: r.proj_avg,
-            avg_pts: r.avg_pts,
-            last5_avg: r.last5_avg,
-            last3_avg: r.last3_avg,
-            last1: r.last1,
-            owned_pct: r.owned_pct,
-          });
-        }
-        for (const p of unresolved) {
-          const hit = byName.get(p.player_name.toLowerCase());
-          if (hit) statsByPlayer.set(p.player_id, hit);
-        }
+      for (const p of unresolved) {
+        const hit = byName.get(p.player_name.toLowerCase());
+        if (hit) statsByPlayer.set(p.player_id, hit);
       }
     }
 
@@ -200,34 +231,25 @@ export async function GET(_request: Request, ctx: { params: Promise<{ id: string
     });
 
     // v12.3.1 — official injury + trend per player. v13 — drift detection.
-    const { computeInjuryTrend, fetchSnapshotsForPlayers, computeInjuryDrift } =
-      await import('@/lib/afl-injuries');
-    const playerIdsForInjuries = players.map((p) => p.player_id);
+    // v13.2 — afl_injuries + snapshots fetch hoisted to the parallel batch.
     const injuryByPlayer = new Map<
       number,
       { injury: string | null; estimated_return: string | null; source_updated_at: string | null }
     >();
-    if (playerIdsForInjuries.length > 0) {
-      const { data: injRows } = await supabase
-        .from('afl_injuries')
-        .select('player_id, injury, estimated_return, source_updated_at')
-        .in('player_id', playerIdsForInjuries);
-      for (const r of (injRows ?? []) as Array<{
-        player_id: number | null;
-        injury: string | null;
-        estimated_return: string | null;
-        source_updated_at: string | null;
-      }>) {
-        if (r.player_id != null) {
-          injuryByPlayer.set(r.player_id, {
-            injury: r.injury,
-            estimated_return: r.estimated_return,
-            source_updated_at: r.source_updated_at,
-          });
-        }
+    for (const r of (injRes.data ?? []) as Array<{
+      player_id: number | null;
+      injury: string | null;
+      estimated_return: string | null;
+      source_updated_at: string | null;
+    }>) {
+      if (r.player_id != null) {
+        injuryByPlayer.set(r.player_id, {
+          injury: r.injury,
+          estimated_return: r.estimated_return,
+          source_updated_at: r.source_updated_at,
+        });
       }
     }
-    const snapshotsByPlayer = await fetchSnapshotsForPlayers(supabase, playerIdsForInjuries);
 
     // v12 — augment each trade-player row with a fallback position so the
     // edit modal can resolve the expected-average dropdown for waiver

@@ -1,9 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { supabase } from '@/lib/supabase';
 import { TEAMS } from '@/lib/constants';
-import { AFL_CLUBS } from '@/lib/afl-clubs';
 import {
   AFL_CLUB_BYES,
   BYE_ROUNDS,
@@ -77,99 +75,65 @@ export function useByeData(): ByeData {
 
     (async () => {
       try {
-        // ── Rosters ────────────────────────────────────────────────────
-        const { data: roundCheck } = await supabase
-          .from('player_rounds')
-          .select('round_number')
-          .order('round_number', { ascending: false })
-          .limit(1);
-        const maxRound = roundCheck?.[0]?.round_number ?? 0;
-        if (!cancelled) setLatestRound(maxRound);
+        // v13.2 — kick off both data sources in parallel from the
+        // browser. Previously these were sequential paginated loops
+        // run directly against Supabase from the browser (3-4 round
+        // trips, each with public-internet latency). Now:
+        //  - /api/byes/data: server-side parallel rosters + avgs
+        //  - /api/afl-injuries/list: existing single-call endpoint
+        const [byesRes, injRes] = await Promise.all([
+          fetch('/api/byes/data', { cache: 'no-store' }).catch((e) => {
+            console.warn('byes/data fetch failed', e);
+            return null;
+          }),
+          fetch('/api/afl-injuries/list', { cache: 'no-store' }).catch((e) => {
+            console.warn('afl-injuries/list fetch failed', e);
+            return null;
+          }),
+        ]);
 
-        const allRows: RosterRow[] = [];
-        if (maxRound > 0) {
-          let offset = 0;
-          while (true) {
-            const { data: batch } = await supabase
-              .from('player_rounds')
-              .select('team_id, player_id, player_name, club')
-              .eq('round_number', maxRound)
-              .range(offset, offset + 999);
-            if (!batch || batch.length === 0) break;
-            for (const row of batch) {
-              if (row.club && AFL_CLUBS[row.club]) {
-                allRows.push({
-                  team_id: row.team_id,
-                  player_id: row.player_id,
-                  player_name: row.player_name,
-                  club: row.club,
-                });
-              }
-            }
-            if (batch.length < 1000) break;
-            offset += 1000;
+        // ── Rosters + avgs ─────────────────────────────────────────────
+        if (byesRes && byesRes.ok) {
+          const json = (await byesRes.json()) as {
+            latestRound: number;
+            rosters: RosterRow[];
+            averages: Array<{ player_id: number; avg_pts: number }>;
+          };
+          if (!cancelled) {
+            setLatestRound(json.latestRound ?? 0);
+            setRosters(json.rosters ?? []);
+            const map = new Map<number, number>();
+            for (const r of json.averages ?? []) map.set(r.player_id, r.avg_pts);
+            setAvgByPlayerId(map);
           }
-        }
-        if (!cancelled) setRosters(allRows);
-
-        // ── Player avgs (season-to-date avg_pts) ───────────────────────
-        // Used to weight bye/injury impact by scoring potential — losing
-        // a 110-avg star is worse than losing a 70-avg fringe player.
-        try {
-          const allAvgs: Array<{ player_id: number | null; avg_pts: number | string | null }> = [];
-          let pOffset = 0;
-          while (true) {
-            const { data: pBatch } = await supabase
-              .from('players')
-              .select('player_id, avg_pts')
-              .range(pOffset, pOffset + 999);
-            if (!pBatch || pBatch.length === 0) break;
-            allAvgs.push(...pBatch);
-            if (pBatch.length < 1000) break;
-            pOffset += 1000;
-          }
-          const map = new Map<number, number>();
-          for (const r of allAvgs) {
-            if (r.player_id != null && r.avg_pts != null) {
-              const n = Number(r.avg_pts);
-              if (Number.isFinite(n) && n > 0) map.set(r.player_id, n);
-            }
-          }
-          if (!cancelled) setAvgByPlayerId(map);
-        } catch (err) {
-          // Players table is optional — without it, points-lost stays 0.
-          console.warn('Failed to load players.avg_pts for bye impact:', err);
         }
 
         // ── Injuries ───────────────────────────────────────────────────
-        // Reuse the same endpoint the Injuries page uses. Each player has
-        // a `rounds[]` timeline with `predicted_injured` per round.
-        try {
-          const res = await fetch('/api/afl-injuries/list', { cache: 'no-store' });
-          if (res.ok) {
-            const json = await res.json() as {
-              players: Array<{ player_id: number | null; rounds: Array<{ round: number; predicted_injured: boolean }> }>;
-              cache?: { afl_freshest?: string | null };
-            };
-            const next: InjuryByRound = {
-              12: new Set(), 13: new Set(), 14: new Set(), 15: new Set(), 16: new Set(),
-            };
-            for (const p of json.players ?? []) {
-              if (p.player_id == null) continue;
-              for (const cell of p.rounds ?? []) {
-                if (cell.predicted_injured && (BYE_ROUNDS as readonly number[]).includes(cell.round)) {
-                  next[cell.round as ByeRound].add(p.player_id);
-                }
+        // Each player has a `rounds[]` timeline with `predicted_injured`
+        // per round; the bye page only cares about the BYE_ROUNDS slice.
+        if (injRes && injRes.ok) {
+          const json = (await injRes.json()) as {
+            players: Array<{
+              player_id: number | null;
+              rounds: Array<{ round: number; predicted_injured: boolean }>;
+            }>;
+            cache?: { afl_freshest?: string | null };
+          };
+          const next: InjuryByRound = {
+            12: new Set(), 13: new Set(), 14: new Set(), 15: new Set(), 16: new Set(),
+          };
+          for (const p of json.players ?? []) {
+            if (p.player_id == null) continue;
+            for (const cell of p.rounds ?? []) {
+              if (cell.predicted_injured && (BYE_ROUNDS as readonly number[]).includes(cell.round)) {
+                next[cell.round as ByeRound].add(p.player_id);
               }
             }
-            if (!cancelled) {
-              setInjuriesByRound(next);
-              setInjuryFreshness(json.cache?.afl_freshest ?? null);
-            }
           }
-        } catch (err) {
-          // Injury feed is optional — without it, impact = byes only.
-          console.warn('Failed to load AFL injury list for bye impact:', err);
+          if (!cancelled) {
+            setInjuriesByRound(next);
+            setInjuryFreshness(json.cache?.afl_freshest ?? null);
+          }
         }
       } catch (err) {
         console.error('Failed to load bye data:', err);

@@ -1,10 +1,23 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import dynamic from 'next/dynamic';
 import { Plus, ArrowLeftRight } from 'lucide-react';
 import TradeCard from './trade-card';
-import TradeDetail from './trade-detail';
 import LogTradeModal from './log-trade-modal';
+
+// v13.2 — TradeDetail bundles all of recharts (~200KB). Dynamic-import
+// so the trades list page loads fast and recharts only ships when a
+// user actually opens a trade. ssr:false because ResponsiveContainer
+// needs the DOM.
+const TradeDetail = dynamic(() => import('./trade-detail'), {
+  ssr: false,
+  loading: () => (
+    <div className="min-h-screen flex items-center justify-center" style={{ background: '#0A0F1C', color: '#9AA3B5' }}>
+      Loading trade…
+    </div>
+  ),
+});
 import { TEAMS } from '@/lib/constants';
 import { snap5, colorForTeam, probabilityFromAdvantage, COLOR_POSITIVE } from '@/lib/trades/scale';
 import { getCoachByTeam } from '@/lib/team-colors';

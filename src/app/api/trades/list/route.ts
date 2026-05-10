@@ -22,27 +22,43 @@ interface TradePlayerRow {
 
 export async function GET() {
   try {
-    const { data: trades, error } = await supabase
-      .from('trades')
-      .select('*')
-      .order('created_at', { ascending: false });
-    if (error) throw error;
+    // v13.2 — explicit columns on every query (was select('*')) so we don't
+    // ship JSONB blobs and stale fields the list view doesn't render.
+    // Round 1: trades + currentRound (independent).
+    const [tradesRes, currentRound] = await Promise.all([
+      supabase
+        .from('trades')
+        .select(
+          'id, team_a_id, team_a_name, team_b_id, team_b_name, round_executed, created_at, context_notes, ai_justification, positive_team_id'
+        )
+        .order('created_at', { ascending: false }),
+      // v12.2 — the platform's current round is the explicit ledger value
+      // (round_advances), not the max round in player_rounds. Any data
+      // uploaded for R+1 doesn't surface until the admin runs the round
+      // advance ceremony.
+      getCurrentRound(supabase),
+    ]);
+    if (tradesRes.error) throw tradesRes.error;
+    const trades = tradesRes.data;
 
     const tradeIds = (trades ?? []).map((t) => t.id);
     if (tradeIds.length === 0) return NextResponse.json({ trades: [] });
 
-    // v12.2 — the platform's current round is the explicit ledger value
-    // (round_advances), not the max round in player_rounds. Any data
-    // uploaded for R+1 doesn't surface until the admin runs the round
-    // advance ceremony. Falls back to MAX(played) for legacy seasons
-    // before round_advances was populated.
-    const currentRound = await getCurrentRound(supabase);
-
+    // Round 2: depends on tradeIds. trade_players is needed to derive
+    // uniquePlayerIds for round 3. trade_probabilities + latestPlayed
+    // are independent and run in parallel here.
     const [playersRes, probsRes, latestPlayedRes] = await Promise.all([
-      supabase.from('trade_players').select('*').in('trade_id', tradeIds),
+      supabase
+        .from('trade_players')
+        .select(
+          'id, trade_id, player_id, player_name, player_position, raw_position, receiving_team_id, receiving_team_name, pre_trade_avg'
+        )
+        .in('trade_id', tradeIds),
       supabase
         .from('trade_probabilities')
-        .select('*')
+        .select(
+          'trade_id, round_number, team_a_probability, team_b_probability, advantage, calculated_at, ai_assessment'
+        )
         .in('trade_id', tradeIds)
         .order('round_number', { ascending: false }),
       supabase
@@ -58,6 +74,7 @@ export async function GET() {
     const maxPlayedRound = currentRound > 0 ? currentRound : fallbackPlayed;
 
     const players = (playersRes.data ?? []) as TradePlayerRow[];
+    const uniquePlayerIds = Array.from(new Set(players.map((p) => p.player_id)));
 
     const playersByTrade = new Map<string, TradePlayerRow[]>();
     for (const p of players) {
@@ -76,44 +93,37 @@ export async function GET() {
       if (!latestProbByTrade.has(row.trade_id)) latestProbByTrade.set(row.trade_id, row);
     }
 
-    // Draft positions (stable, never 'BN') for every player across all trades
-    const uniquePlayerIds = Array.from(new Set(players.map((p) => p.player_id)));
+    // Round 3 (parallel): draft_picks + player_rounds-for-injuries —
+    // both need uniquePlayerIds and were previously sequential. Reuses
+    // the latestPlayedRes round for the upper bound (was a duplicate
+    // query before).
     const draftPosByPlayer = new Map<number, string>();
-    if (uniquePlayerIds.length > 0) {
-      const { data: draftRows } = await supabase
-        .from('draft_picks')
-        .select('player_id, position')
-        .in('player_id', uniquePlayerIds);
-      for (const d of (draftRows ?? []) as { player_id: number; position: string | null }[]) {
-        if (d.position) draftPosByPlayer.set(d.player_id, d.position);
-      }
-    }
-
-    // Injury status per (trade_id, player_id) — compute per-player using the
-    // same detectInjury helper as the detail view. Only looks at post-trade
-    // rounds on the player's receiving team.
     const injuryByTradePlayer = new Map<string, boolean>();
     if (uniquePlayerIds.length > 0) {
-      // Find max round with player_rounds data
-      const { data: latest } = await supabase
-        .from('player_rounds')
-        .select('round_number')
-        .order('round_number', { ascending: false })
-        .limit(1);
-      const latestRound = latest?.[0]?.round_number ?? 0;
+      const latestRound = (latestPlayedRes.data as { round_number: number }[] | null)?.[0]
+        ?.round_number ?? 0;
+      const [draftRes, allRoundsRes] = await Promise.all([
+        supabase
+          .from('draft_picks')
+          .select('player_id, position')
+          .in('player_id', uniquePlayerIds),
+        supabase
+          .from('player_rounds')
+          .select('player_id, team_id, round_number, points')
+          .in('player_id', uniquePlayerIds)
+          .lte('round_number', latestRound),
+      ]);
 
-      // Fetch all post-trade rounds for all traded players
-      const { data: allRounds } = await supabase
-        .from('player_rounds')
-        .select('player_id, team_id, round_number, points')
-        .in('player_id', uniquePlayerIds)
-        .lte('round_number', latestRound);
+      for (const d of (draftRes.data ?? []) as { player_id: number; position: string | null }[]) {
+        if (d.position) draftPosByPlayer.set(d.player_id, d.position);
+      }
 
-      // For each trade × player, filter to post-trade rounds on receiving team
+      // For each trade × player, filter to post-trade rounds on receiving team.
+      const allRounds = allRoundsRes.data ?? [];
       for (const t of trades ?? []) {
         const tradePlayers = playersByTrade.get(t.id) ?? [];
         for (const tp of tradePlayers) {
-          const scores = (allRounds ?? [])
+          const scores = allRounds
             .filter(
               (r) =>
                 r.player_id === tp.player_id &&
