@@ -360,21 +360,11 @@ function TeamSelect({
 // v11 — per-player expectations panel (Expected tier, Expected games,
 // per-player context). Renders inline beneath each chosen player chip.
 // ============================================================
-const SEASON_END_ROUND = 24;
-
-/** Best-guess byes left in the post-trade window. Byes are an AFL-CLUB
- *  attribute (each AFL club gets one bye between R12-R15), not a LOMAF
- *  attribute. Until afl_club_byes data is wired in we use a league-wide
- *  approximation: 1 bye if the trade was executed before the AFL bye block
- *  ends (R15), otherwise 0. The trader can manually drop the games figure
- *  if their player's specific AFL club hasn't byed yet within the window. */
-function estimatedByesInWindow(executedRound: number): number {
-  return executedRound < 15 ? 1 : 0;
-}
-
-function maxGamesAvailable(executedRound: number): number {
-  return Math.max(0, SEASON_END_ROUND - executedRound - estimatedByesInWindow(executedRound));
-}
+import {
+  SEASON_END_ROUND,
+  estimatedByesInWindow,
+  maxGamesAvailable,
+} from '@/lib/trades/expected';
 
 function PlayerExpectations({
   player,

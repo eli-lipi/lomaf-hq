@@ -127,3 +127,14 @@ export function autoExpectedGames(args: {
 
   return Math.max(0, Math.min(4, Math.round(games)));
 }
+
+// ── Post-trade window sizing ────────────────────────────────
+export const SEASON_END_ROUND = 24;
+
+export function estimatedByesInWindow(executedRound: number): number {
+  return executedRound < 15 ? 1 : 0;
+}
+
+export function maxGamesAvailable(executedRound: number): number {
+  return Math.max(0, SEASON_END_ROUND - executedRound - estimatedByesInWindow(executedRound));
+}

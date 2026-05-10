@@ -5,7 +5,7 @@ import type { NormalizedPosition, PlayerPerformance, Trade, TradePlayer } from '
 import { detectInjury } from '@/lib/trades/compute-probability';
 import { normalizePosition, cleanPositionDisplay } from '@/lib/trades/positions';
 import { recalculateTradeAcrossPostTradeRounds } from '@/lib/trades/recalculate';
-import { autoExpectedAvg, autoExpectedGames } from '@/lib/trades/expected';
+import { autoExpectedAvg, autoExpectedGames, maxGamesAvailable } from '@/lib/trades/expected';
 import { getCurrentRound } from '@/lib/round';
 import { insertResilient, updateResilient } from '@/lib/trades/db-resilient';
 
@@ -234,11 +234,14 @@ export async function GET(_request: Request, ctx: { params: Promise<{ id: string
     // top of the DB row, not persisted.
     // v12.4 — also attach the canonical players-table stats so the UI
     // can show proj/form chips inline.
+    const defaultMaxGames = maxGamesAvailable(trade.round_executed);
     const playersWithFallback = players.map((p) => {
       const inj = injuryByPlayer.get(p.player_id) ?? null;
       const trend = computeInjuryTrend(snapshotsByPlayer.get(p.player_id) ?? []);
       return {
         ...p,
+        expected_games_remaining: p.expected_games_remaining ?? defaultMaxGames,
+        expected_games_max: p.expected_games_max ?? defaultMaxGames,
         _fallback_position:
           p.raw_position?.trim() ||
           p.player_position ||
@@ -420,6 +423,7 @@ export async function PATCH(request: Request, ctx: { params: Promise<{ id: strin
         if (d.overall_pick && d.overall_pick > 0) draftPickByPlayer.set(d.player_id, d.overall_pick);
       }
 
+      const patchDefaultMaxGames = maxGamesAvailable(nextRound);
       const playerRows = body.players.map((p) => {
         const receivingTeam = p.receiving_team_id === teamA.team_id ? teamA : teamB;
         const scores = scoresByPlayer.get(p.player_id) ?? [];
@@ -454,8 +458,6 @@ export async function PATCH(request: Request, ctx: { params: Promise<{ id: strin
           player_name: p.player_name,
           player_position: normalizePosition(rawPos),
           raw_position: rawPos,
-          // v12 — persist draft_position + draft_pick so player identity
-          // locks on the row.
           draft_position: draftPos,
           draft_pick: draftPick,
           receiving_team_id: receivingTeam.team_id,
@@ -464,10 +466,9 @@ export async function PATCH(request: Request, ctx: { params: Promise<{ id: strin
           expected_avg,
           expected_avg_source,
           expected_games,
-          // v11 — admin edit can backfill tier system fields on existing trades.
           expected_tier: p.expected_tier ?? null,
-          expected_games_remaining: p.expected_games_remaining ?? null,
-          expected_games_max: p.expected_games_max ?? null,
+          expected_games_remaining: p.expected_games_remaining ?? patchDefaultMaxGames,
+          expected_games_max: p.expected_games_max ?? patchDefaultMaxGames,
           player_context: p.player_context ?? null,
         };
       });

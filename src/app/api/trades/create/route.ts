@@ -3,7 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 import { TEAMS } from '@/lib/constants';
 import { normalizePosition, cleanPositionDisplay } from '@/lib/trades/positions';
 import { recalculateTradeAcrossPostTradeRounds } from '@/lib/trades/recalculate';
-import { autoExpectedAvg, autoExpectedGames } from '@/lib/trades/expected';
+import { autoExpectedAvg, autoExpectedGames, maxGamesAvailable } from '@/lib/trades/expected';
 import { insertResilient } from '@/lib/trades/db-resilient';
 
 const supabase = createClient(
@@ -199,6 +199,7 @@ export async function POST(request: Request) {
     }
 
     // 3. Build trade_players rows with auto-derived expected_avg + expected_games
+    const defaultMaxGames = maxGamesAvailable(body.round_executed);
     const playerRows = body.players.map((p) => {
       const receivingTeam = p.receiving_team_id === teamA.team_id ? teamA : teamB;
       const rawPos = p.raw_position || posByPlayer.get(p.player_id) || null;
@@ -247,8 +248,8 @@ export async function POST(request: Request) {
         expected_games,
         // v11 — pass-through. The form decides what to send; we just persist.
         expected_tier: p.expected_tier ?? null,
-        expected_games_remaining: p.expected_games_remaining ?? null,
-        expected_games_max: p.expected_games_max ?? null,
+        expected_games_remaining: p.expected_games_remaining ?? defaultMaxGames,
+        expected_games_max: p.expected_games_max ?? defaultMaxGames,
         player_context: p.player_context ?? null,
       };
     });
