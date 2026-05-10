@@ -2073,9 +2073,9 @@ function DeltaPill({
 }
 
 /**
- * Renders the "X/Y games (on track | off track | —)" line under Expected avg.
- * Returns null when the trade pre-dates the v11 expected_games_remaining field —
- * blank intentionally signals "this trade needs backfilling via Edit."
+ * Renders the "X/Y games (on track | off track)" line under Expected avg.
+ * Always renders so legacy trades visibly read "— games (not set)" — that's
+ * the cue to Edit the trade and backfill expected_games_remaining.
  *
  * On-track logic: pro-rate expected_games_remaining over the season window
  * by elapsed rounds; on track if actual games played >= floor(pro-rata).
@@ -2091,7 +2091,19 @@ function GamesTrackPill({
   actualGames: number;
   elapsedRounds: number;
 }) {
-  if (expectedRemaining == null) return null;
+  const MUTED = 'rgba(155,163,181,0.55)';
+
+  // Legacy trade (no v11 fields). Show clearly so the admin spots it.
+  if (expectedRemaining == null) {
+    return (
+      <div className="text-[13px] mt-1 tabular-nums" style={{ color: TEXT_MUTED }}>
+        — games
+        <span className="ml-1.5 italic" style={{ color: MUTED }}>
+          (not set)
+        </span>
+      </div>
+    );
+  }
 
   const denomLabel = expectedMax != null ? `/${expectedMax}` : '';
 
@@ -2099,7 +2111,7 @@ function GamesTrackPill({
   let labelColor: string;
   if (elapsedRounds <= 0) {
     label = '—';
-    labelColor = 'rgba(155,163,181,0.55)';
+    labelColor = MUTED;
   } else if (expectedMax != null && expectedMax > 0) {
     const proRata = expectedRemaining * (elapsedRounds / expectedMax);
     const onTrack = actualGames >= Math.floor(proRata);
@@ -2107,7 +2119,7 @@ function GamesTrackPill({
     labelColor = onTrack ? '#3FBF7F' : '#E24B4A';
   } else {
     label = '—';
-    labelColor = 'rgba(155,163,181,0.55)';
+    labelColor = MUTED;
   }
 
   return (
