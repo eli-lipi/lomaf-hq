@@ -4,6 +4,7 @@ import { TEAMS } from '@/lib/constants';
 import { normalizePosition, cleanPositionDisplay } from '@/lib/trades/positions';
 import { recalculateTradeAcrossPostTradeRounds } from '@/lib/trades/recalculate';
 import { autoExpectedAvg, autoExpectedGames } from '@/lib/trades/expected';
+import { insertResilient } from '@/lib/trades/db-resilient';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -252,27 +253,10 @@ export async function POST(request: Request) {
       };
     });
 
-    // Try insert with v11/v12 columns; if the schema isn't migrated yet,
-    // strip them and retry so trade-creation still works.
-    let playersErr: { message?: string; code?: string } | null = null;
-    const tryFirst = await supabase.from('trade_players').insert(playerRows);
-    playersErr = tryFirst.error as { message?: string; code?: string } | null;
-    if (
-      playersErr &&
-      /column .* does not exist|expected_tier|expected_games_remaining|expected_games_max|player_context|draft_position|draft_pick/i.test(
-        playersErr.message ?? ''
-      )
-    ) {
-      console.warn('[trades/create] v11/v12 columns missing — retrying without them.');
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const stripped = (playerRows as any[]).map(({ expected_tier, expected_games_remaining, expected_games_max, player_context, draft_position, draft_pick, ...rest }) => {
-        void expected_tier; void expected_games_remaining; void expected_games_max; void player_context; void draft_position; void draft_pick;
-        return rest;
-      });
-      const retry = await supabase.from('trade_players').insert(stripped);
-      playersErr = retry.error as { message?: string; code?: string } | null;
-    }
-    if (playersErr) throw new Error(playersErr.message ?? 'trade_players insert failed');
+    // Iteratively strips any column the schema reports as missing — keeps
+    // trade-creation working on partially-migrated DBs without nuking
+    // unrelated fields. See lib/trades/db-resilient.ts.
+    await insertResilient(supabase, 'trade_players', playerRows, '[trades/create]');
 
     // 4. Kick off initial recalc across every post-trade round that has data.
     try {

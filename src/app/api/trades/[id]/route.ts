@@ -7,6 +7,7 @@ import { normalizePosition, cleanPositionDisplay } from '@/lib/trades/positions'
 import { recalculateTradeAcrossPostTradeRounds } from '@/lib/trades/recalculate';
 import { autoExpectedAvg, autoExpectedGames } from '@/lib/trades/expected';
 import { getCurrentRound } from '@/lib/round';
+import { insertResilient, updateResilient } from '@/lib/trades/db-resilient';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -359,10 +360,10 @@ export async function PATCH(request: Request, ctx: { params: Promise<{ id: strin
     }
 
     // 3. Update trade row
-    // v12 — resilient pattern: try with v2 polarity + ladder cols; if DB
-    // is missing them (older deploy that hasn't run the v2 migration),
-    // strip and retry. Keeps Edit working on legacy schemas; the polarity
-    // simply won't persist until the migration is run.
+    // Iteratively strips any column the schema reports as missing — keeps
+    // Edit working on partially-migrated DBs without nuking unrelated fields.
+    // See lib/trades/db-resilient.ts for the rationale (this replaced an
+    // all-or-nothing fallback that silently dropped user data).
     const fullUpdate = {
       team_a_id: teamA.team_id,
       team_a_name: teamA.team_name,
@@ -375,31 +376,7 @@ export async function PATCH(request: Request, ctx: { params: Promise<{ id: strin
       team_a_ladder_at_trade,
       team_b_ladder_at_trade,
     };
-    let { error: updateErr } = await supabase
-      .from('trades')
-      .update(fullUpdate)
-      .eq('id', id);
-    if (
-      updateErr &&
-      /positive_team_id|negative_team_id|team_a_ladder_at_trade|team_b_ladder_at_trade|column .* does not exist|schema cache/i.test(
-        updateErr.message ?? ''
-      )
-    ) {
-      // Strip v2 cols and retry on legacy schema
-      const {
-        positive_team_id: _p,
-        negative_team_id: _n,
-        team_a_ladder_at_trade: _la,
-        team_b_ladder_at_trade: _lb,
-        ...legacyUpdate
-      } = fullUpdate;
-      void _p; void _n; void _la; void _lb;
-      ({ error: updateErr } = await supabase
-        .from('trades')
-        .update(legacyUpdate)
-        .eq('id', id));
-    }
-    if (updateErr) throw updateErr;
+    await updateResilient(supabase, 'trades', fullUpdate, { id }, '[trades/[id] PATCH]');
 
     // 4. If players changed, fully replace them (easier than diffing)
     if (body.players && body.players.length > 0) {
@@ -495,29 +472,8 @@ export async function PATCH(request: Request, ctx: { params: Promise<{ id: strin
         };
       });
 
-      // Try insert with v11/v12 columns; if the schema hasn't been
-      // migrated yet, strip the new fields and retry.
-      let insertErr: { message?: string; code?: string } | null = null;
-      const tryFirst = await supabase.from('trade_players').insert(playerRows);
-      insertErr = tryFirst.error as { message?: string; code?: string } | null;
-      if (
-        insertErr &&
-        /column .* does not exist|expected_tier|expected_games_remaining|expected_games_max|player_context|draft_position|draft_pick/i.test(
-          insertErr.message ?? ''
-        )
-      ) {
-        console.warn(
-          '[trades/[id] PATCH] v11/v12 columns missing — retrying without them. Run migration-trades-v11.sql and migration-trades-v12.sql to enable.'
-        );
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const stripped = (playerRows as any[]).map(({ expected_tier, expected_games_remaining, expected_games_max, player_context, draft_position, draft_pick, ...rest }) => {
-          void expected_tier; void expected_games_remaining; void expected_games_max; void player_context; void draft_position; void draft_pick;
-          return rest;
-        });
-        const retry = await supabase.from('trade_players').insert(stripped);
-        insertErr = retry.error as { message?: string; code?: string } | null;
-      }
-      if (insertErr) throw new Error(insertErr.message ?? 'trade_players insert failed');
+      // Iteratively strips any column the schema reports as missing.
+      await insertResilient(supabase, 'trade_players', playerRows, '[trades/[id] PATCH]');
     }
 
     // 5. Wipe old probability rows — they're based on stale assumptions — and recompute fresh
