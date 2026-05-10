@@ -6,6 +6,7 @@ import type {
   NormalizedPosition,
   TradeFactorsBreakdown,
 } from './types';
+import type { InjurySnapshot } from '../afl-injuries';
 import { computeProbability, detectInjury, type PlayerSidePerf } from './compute-probability';
 import { generateTradeNarrative, type LineRanks } from './ai-assessment';
 import { cleanPositionDisplay } from './positions';
@@ -110,18 +111,30 @@ export async function recalculateTradeForRound(
   const buildSidePerf = (perf: PlayerPerformance[]): PlayerSidePerf[] =>
     perf.map((p) => {
       const tp = playerByIdAndSide.get(`${p.player_id}-${p.receiving_team_id}`) as
-        | { expected_avg?: number | null; expected_games?: number | null }
+        | {
+            expected_avg?: number | null;
+            expected_games?: number | null;
+            expected_games_remaining?: number | null;
+            expected_games_max?: number | null;
+          }
         | undefined;
       const expected_avg =
         (tp?.expected_avg as number | null | undefined) ??
         p.pre_trade_avg ??
-        70; // last-ditch baseline
+        70;
       const expected_games =
-        tp?.expected_games != null ? Number(tp.expected_games) : 4;
+        tp?.expected_games_remaining != null
+          ? Number(tp.expected_games_remaining)
+          : tp?.expected_games != null
+            ? Number(tp.expected_games)
+            : 4;
+      const expected_games_max =
+        tp?.expected_games_max != null ? Number(tp.expected_games_max) : null;
       return {
         player_id: p.player_id,
         expected_avg,
         expected_games,
+        expected_games_max,
         rounds_played: p.rounds_played,
         avg_when_played: p.rounds_played > 0 ? p.post_trade_avg : null,
       };
@@ -231,6 +244,9 @@ export async function recalculateTradeForRound(
         expectedAvg?: number | null;
         injuryLine?: string | null;
         statsLine?: string | null;
+        injuryAtTradeLine?: string | null;
+        driftLine?: string | null;
+        availabilityLine?: string | null;
       }
     >();
 
@@ -262,8 +278,13 @@ export async function recalculateTradeForRound(
         }
       }
     }
-    const { formatInjuryForPrompt, formatTrendForPrompt, computeInjuryTrend, fetchSnapshotsForPlayers } =
-      await import('../afl-injuries');
+    const {
+      formatInjuryForPrompt,
+      formatTrendForPrompt,
+      computeInjuryTrend,
+      fetchSnapshotsForPlayers,
+      computeInjuryDrift,
+    } = await import('../afl-injuries');
     const snapshotsByPlayer = await fetchSnapshotsForPlayers(supabase, playerIdsForInjuries);
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -285,6 +306,47 @@ export async function recalculateTradeForRound(
         if (stats.last3_avg != null) parts.push(`last-3 ${Math.round(stats.last3_avg)}`);
         if (parts.length > 0) statsLine = parts.join(', ');
       }
+
+      // v13 — injury at trade time + drift
+      const injAtTrade = tp.injury_at_trade as InjurySnapshot | null | undefined;
+      let injuryAtTradeLine: string | null = null;
+      if (injAtTrade) {
+        injuryAtTradeLine = `INJURY AT TRADE: ${injAtTrade.injury ?? 'unknown'}, ETA ${injAtTrade.estimated_return ?? 'TBC'}`;
+      } else {
+        injuryAtTradeLine = 'INJURY AT TRADE: none (healthy)';
+      }
+
+      let driftLine: string | null = null;
+      const currentSnapshot: InjurySnapshot | null = inj
+        ? {
+            injury: inj.injury,
+            estimated_return: inj.estimated_return,
+            return_min_weeks: null,
+            return_max_weeks: null,
+            return_status: 'unknown',
+            source_updated_at: inj.source_updated_at,
+            trend_status: null,
+            trend_summary: null,
+          }
+        : null;
+      const drift = computeInjuryDrift(injAtTrade, currentSnapshot);
+      if (drift.status !== 'healthy_throughout') {
+        driftLine = `INJURY DRIFT: ${drift.status.toUpperCase()} — ${drift.summary}`;
+      }
+
+      // v13 — availability tracking (pro-rata expected vs actual)
+      let availabilityLine: string | null = null;
+      const expGames = tp.expected_games_remaining as number | null | undefined;
+      const expMax = tp.expected_games_max as number | null | undefined;
+      if (expGames != null && expMax != null && expMax > 0) {
+        const perf = performance.find((pp) => pp.player_id === tp.player_id);
+        if (perf) {
+          const proRata = expGames * (Math.min(roundsSince, expMax) / expMax);
+          const onTrack = proRata <= 0 || perf.rounds_played >= proRata * 0.8;
+          availabilityLine = `AVAILABILITY: ${onTrack ? 'ON_TRACK' : 'OFF_TRACK'} — ${perf.rounds_played}/${Math.round(proRata)} games (pro-rata expected)`;
+        }
+      }
+
       tradePlayerById.set(tp.player_id, {
         tier: tp.expected_tier ?? null,
         ctx: tp.player_context ?? null,
@@ -293,6 +355,9 @@ export async function recalculateTradeForRound(
         expectedAvg: tp.expected_avg ?? null,
         injuryLine,
         statsLine,
+        injuryAtTradeLine,
+        driftLine,
+        availabilityLine,
       });
     }
 
@@ -340,7 +405,10 @@ export async function recalculateTradeForRound(
         : livePos;
       const pickPart = draftPick && draftPick > 0 ? ` · Pick #${draftPick}` : '';
       const posStr = `${posPart}${pickPart}`;
-      return `- ${p.player_name} (${posStr}) → ${p.receiving_team_name}: expected avg ${expectedStr}${tierStr}, pre-trade season-to-date avg ${preStr} (small-sample, NOT a prediction), actual avg ${post}${gapStr}, ${p.rounds_played}/${p.rounds_possible} rounds, ${status}\n    scores: ${perRound}${ctxStr}${injStr}${statsStr}`;
+      const injAtTradeStr = tradeMeta?.injuryAtTradeLine ? `\n    ${tradeMeta.injuryAtTradeLine}` : '';
+      const driftStr = tradeMeta?.driftLine ? `\n    ${tradeMeta.driftLine}` : '';
+      const availStr = tradeMeta?.availabilityLine ? `\n    ${tradeMeta.availabilityLine}` : '';
+      return `- ${p.player_name} (${posStr}) → ${p.receiving_team_name}: expected avg ${expectedStr}${tierStr}, pre-trade season-to-date avg ${preStr} (small-sample, NOT a prediction), actual avg ${post}${gapStr}, ${p.rounds_played}/${p.rounds_possible} rounds, ${status}\n    scores: ${perRound}${ctxStr}${injAtTradeStr}${driftStr}${injStr}${availStr}${statsStr}`;
     });
 
     const teamAReceives = teamA.map((p) => p.player_name);

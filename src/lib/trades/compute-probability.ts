@@ -78,7 +78,8 @@ export function detectInjury(
 export interface PlayerSidePerf {
   player_id: number;
   expected_avg: number;            // locked at trade time (or fallback baseline)
-  expected_games: number;          // 0..4
+  expected_games: number;          // v11: total expected games over the post-trade window
+  expected_games_max: number | null; // v11: max available games at trade execution
   rounds_played: number;            // actual played rounds in the post-trade window
   avg_when_played: number | null;  // null if rounds_played == 0
 }
@@ -111,7 +112,7 @@ interface SideAggregate {
   availCount: number;    // players whose expected_games > 0
 }
 
-function aggregateSide(side: PlayerSidePerf[]): SideAggregate {
+function aggregateSide(side: PlayerSidePerf[], elapsedRounds: number): SideAggregate {
   const agg: SideAggregate = { perfSum: 0, availSum: 0, perfCount: 0, availCount: 0 };
   for (const p of side) {
     if (p.rounds_played > 0 && p.avg_when_played != null) {
@@ -119,8 +120,14 @@ function aggregateSide(side: PlayerSidePerf[]): SideAggregate {
       agg.perfCount += 1;
     }
     if (p.expected_games > 0) {
-      const ratio = Math.min(p.rounds_played / p.expected_games, 1);
-      // avail contribution is negative when ratio < 1 (drag) and 0 when ratio = 1
+      let proRataExpected: number;
+      if (p.expected_games_max && p.expected_games_max > 0) {
+        proRataExpected = p.expected_games * (Math.min(elapsedRounds, p.expected_games_max) / p.expected_games_max);
+      } else {
+        proRataExpected = p.expected_games;
+      }
+      if (proRataExpected <= 0) continue;
+      const ratio = Math.min(p.rounds_played / proRataExpected, 1);
       const drag = p.expected_avg * (ratio - 1);
       agg.availSum += drag;
       agg.availCount += 1;
@@ -134,8 +141,8 @@ export function computeProbability(inputs: ComputeProbabilityInputs): ComputePro
 
   const confidence = Math.min(Math.max(roundsSince, 0) / CONFIDENCE_RAMP_ROUNDS, 1.0);
 
-  const aggA = aggregateSide(teamA);
-  const aggB = aggregateSide(teamB);
+  const aggA = aggregateSide(teamA, roundsSince);
+  const aggB = aggregateSide(teamB, roundsSince);
 
   // Per-side composite (perf 70%, availability 30%). When a side has no
   // played data yet the perf component is 0 — we don't fabricate signal.

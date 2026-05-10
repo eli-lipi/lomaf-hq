@@ -254,9 +254,18 @@ export async function POST(request: Request) {
       };
     });
 
-    // Iteratively strips any column the schema reports as missing — keeps
-    // trade-creation working on partially-migrated DBs without nuking
-    // unrelated fields. See lib/trades/db-resilient.ts.
+    // v13 — snapshot each player's current AFL injury state
+    try {
+      const { buildInjurySnapshotsForPlayers } = await import('@/lib/afl-injuries');
+      const injuryMap = await buildInjurySnapshotsForPlayers(supabase, playerIds);
+      for (const row of playerRows) {
+        (row as Record<string, unknown>).injury_at_trade =
+          injuryMap.get(row.player_id) ?? null;
+      }
+    } catch (e) {
+      console.warn('[trades/create] Injury snapshot capture failed, proceeding without', e);
+    }
+
     await insertResilient(supabase, 'trade_players', playerRows, '[trades/create]');
 
     // 4. Kick off initial recalc across every post-trade round that has data.

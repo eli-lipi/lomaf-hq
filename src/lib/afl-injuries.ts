@@ -719,3 +719,189 @@ export async function fetchSnapshotsForPlayers(
   }
   return out;
 }
+
+// =============================================================
+// v13 — Injury snapshot at trade time + drift detection
+// =============================================================
+
+export interface InjurySnapshot {
+  injury: string | null;
+  estimated_return: string | null;
+  return_min_weeks: number | null;
+  return_max_weeks: number | null;
+  return_status: string;
+  source_updated_at: string | null;
+  trend_status: string | null;
+  trend_summary: string | null;
+}
+
+/**
+ * Build InjurySnapshot objects for a set of player IDs by querying
+ * afl_injuries + afl_injury_snapshots. Only players currently on the
+ * injury list get a snapshot; others are absent from the returned map
+ * (their injury_at_trade will be null, meaning "healthy at trade time").
+ */
+export async function buildInjurySnapshotsForPlayers(
+  supabase: SB,
+  playerIds: number[]
+): Promise<Map<number, InjurySnapshot>> {
+  const out = new Map<number, InjurySnapshot>();
+  if (playerIds.length === 0) return out;
+
+  const { data: injuries } = await supabase
+    .from('afl_injuries')
+    .select('player_id, injury, estimated_return, return_min_weeks, return_max_weeks, return_status, source_updated_at')
+    .in('player_id', playerIds);
+
+  if (!injuries || injuries.length === 0) return out;
+
+  const injuredIds = (injuries as Array<{ player_id: number }>)
+    .map((r) => r.player_id)
+    .filter((id): id is number => id != null);
+
+  const snapshotMap = await fetchSnapshotsForPlayers(supabase, injuredIds);
+
+  for (const inj of injuries as Array<{
+    player_id: number;
+    injury: string | null;
+    estimated_return: string | null;
+    return_min_weeks: number | null;
+    return_max_weeks: number | null;
+    return_status: string;
+    source_updated_at: string | null;
+  }>) {
+    if (inj.player_id == null) continue;
+
+    const snaps = snapshotMap.get(inj.player_id) ?? [];
+    const trend = computeInjuryTrend(snaps);
+
+    out.set(inj.player_id, {
+      injury: inj.injury,
+      estimated_return: inj.estimated_return,
+      return_min_weeks: inj.return_min_weeks,
+      return_max_weeks: inj.return_max_weeks,
+      return_status: inj.return_status,
+      source_updated_at: inj.source_updated_at,
+      trend_status: trend.status,
+      trend_summary: trend.summary,
+    });
+  }
+
+  return out;
+}
+
+// =============================================================
+// v13 — Drift detection (trade-time snapshot vs current state)
+// =============================================================
+
+export type DriftStatus =
+  | 'cleared'
+  | 'on_track'
+  | 'stalled'
+  | 'worsened'
+  | 'new_injury'
+  | 'healthy_throughout';
+
+export interface InjuryDrift {
+  status: DriftStatus;
+  summary: string;
+  injuryAtTrade: InjurySnapshot | null;
+  injuryCurrent: InjurySnapshot | null;
+}
+
+/**
+ * Compare the injury state at trade execution to the current injury
+ * state and produce a drift verdict.
+ *
+ * @param atTrade   - injury_at_trade JSONB from trade_players (null = healthy)
+ * @param current   - current afl_injuries row (null = not on list / healthy)
+ */
+export function computeInjuryDrift(
+  atTrade: InjurySnapshot | null | undefined,
+  current: InjurySnapshot | null | undefined
+): InjuryDrift {
+  const at = atTrade ?? null;
+  const cur = current ?? null;
+
+  if (!at && !cur) {
+    return {
+      status: 'healthy_throughout',
+      summary: 'Healthy at trade time and now',
+      injuryAtTrade: null,
+      injuryCurrent: null,
+    };
+  }
+
+  if (!at && cur) {
+    return {
+      status: 'new_injury',
+      summary: `New injury since trade: ${cur.injury ?? 'unknown'}, ETA ${cur.estimated_return ?? 'TBC'}`,
+      injuryAtTrade: null,
+      injuryCurrent: cur,
+    };
+  }
+
+  if (at && !cur) {
+    return {
+      status: 'cleared',
+      summary: `Cleared — was ${at.injury ?? 'injured'} (${at.estimated_return ?? '?'}) at trade time`,
+      injuryAtTrade: at,
+      injuryCurrent: null,
+    };
+  }
+
+  // Both at and cur are non-null — compare timelines
+  const atMax = at!.return_max_weeks;
+  const curMax = cur!.return_max_weeks;
+
+  // Categorical worsening: went from weeks/months → season/indefinite
+  if (
+    cur!.return_status &&
+    CATEGORICAL_WORSE.has(cur!.return_status) &&
+    at!.return_status &&
+    !CATEGORICAL_WORSE.has(at!.return_status)
+  ) {
+    return {
+      status: 'worsened',
+      summary: `Worsened: ${at!.estimated_return ?? '?'} → ${cur!.estimated_return ?? '?'}`,
+      injuryAtTrade: at,
+      injuryCurrent: cur,
+    };
+  }
+
+  // If we have numeric ETAs, compute slippage
+  if (atMax != null && curMax != null) {
+    // Estimate weeks elapsed since trade-time snapshot
+    const atDate = at!.source_updated_at;
+    const curDate = cur!.source_updated_at;
+    let weeksElapsed = 0;
+    if (atDate && curDate) {
+      weeksElapsed = Math.max(
+        0,
+        Math.round(
+          (Date.parse(curDate + 'T00:00:00Z') - Date.parse(atDate + 'T00:00:00Z')) /
+            (7 * 86_400_000)
+        )
+      );
+    }
+
+    const expectedNow = Math.max(0, atMax - weeksElapsed);
+    const slippage = curMax - expectedNow;
+
+    if (slippage >= 2) {
+      return {
+        status: 'stalled',
+        summary: `Stalled +${slippage}w — was ${atMax}w at trade, now ${curMax}w (${weeksElapsed}w later)`,
+        injuryAtTrade: at,
+        injuryCurrent: cur,
+      };
+    }
+  }
+
+  return {
+    status: 'on_track',
+    summary: `Recovery on track — ${at!.injury ?? 'injury'} progressing as expected`,
+    injuryAtTrade: at,
+    injuryCurrent: cur,
+  };
+}

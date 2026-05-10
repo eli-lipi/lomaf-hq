@@ -161,7 +161,7 @@ export default function TradeDetail({
   // internally then transformed once via probabilityFromAdvantage().
   // Two coaches' probabilities always sum to 100 (Polymarket Yes/No logic).
   const chartData = useMemo(() => {
-    if (!data) return [] as { round: string; roundNum: number; probability: number; deltaPct: number | null }[];
+    if (!data) return [] as { round: string; roundNum: number; probability: number; deltaPct: number | null; pending: boolean; pendingPlayers: string[] }[];
     const positiveIsA = data.trade.positive_team_id == null
       ? true
       : data.trade.positive_team_id === data.trade.team_a_id;
@@ -170,18 +170,41 @@ export default function TradeDetail({
       const aEdge = (Number(p.team_a_probability) - 50) * 2;
       return snap5(positiveIsA ? aEdge : -aEdge);
     };
-    const map = new Map<number, number>(); // round → probability (0..100)
-    map.set(data.trade.round_executed, 50); // anchor at wash
+    const map = new Map<number, number>();
+    map.set(data.trade.round_executed, 50);
     for (const p of data.probabilityHistory) {
       if (p.round_number === data.trade.round_executed) continue;
       map.set(p.round_number, probabilityFromAdvantage(advFromRow(p)));
     }
+
+    // v13 — Identify "pending" rounds where an injured-at-trade player
+    // hadn't yet returned (consecutive DNPs from the start of post-trade).
+    const pendingByRound = new Map<number, string[]>();
+    for (const tp of data.players) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const injAtTrade = (tp as any).injury_at_trade;
+      if (!injAtTrade) continue;
+      const perf = data.playerPerformance.find((pp) => pp.player_id === tp.player_id);
+      if (!perf) continue;
+      const postScores = perf.round_scores
+        .filter((s) => s.round > data.trade.round_executed)
+        .sort((a, b) => a.round - b.round);
+      for (const s of postScores) {
+        if (s.points != null && s.points > 0) break;
+        if (!pendingByRound.has(s.round)) pendingByRound.set(s.round, []);
+        const label = tp.player_name.split(' ').slice(-1)[0];
+        pendingByRound.get(s.round)!.push(label);
+      }
+    }
+
     const sorted = Array.from(map.entries()).sort(([a], [b]) => a - b);
     return sorted.map(([round, prob], idx) => ({
       round: `R${round}`,
       roundNum: round,
       probability: prob,
       deltaPct: idx === 0 ? null : prob - sorted[idx - 1][1],
+      pending: pendingByRound.has(round),
+      pendingPlayers: pendingByRound.get(round) ?? [],
     }));
   }, [data]);
 
@@ -497,20 +520,23 @@ export default function TradeDetail({
                       const cx = dotProps.cx as number | undefined;
                       const cy = dotProps.cy as number | undefined;
                       const index = dotProps.index as number | undefined;
-                      const payload = dotProps.payload as { probability?: number } | undefined;
+                      const payload = dotProps.payload as { probability?: number; pending?: boolean } | undefined;
                       const k = String(dotProps.key ?? index ?? '');
                       if (cx == null || cy == null) return <g key={k} />;
-                      // Team colour by which zone the dot sits in.
                       const dotColor =
                         (payload?.probability ?? 50) >= 50 ? colorPositive : colorNegative;
+                      const isPending = payload?.pending === true;
                       const isLast = index === chartData.length - 1;
                       if (isLast) {
                         return (
                           <g key={k}>
                             <circle cx={cx} cy={cy} r={9} fill={dotColor} opacity={0.25} />
-                            <circle cx={cx} cy={cy} r={5.5} fill={dotColor} stroke={BG} strokeWidth={2} />
+                            <circle cx={cx} cy={cy} r={5.5} fill={isPending ? 'none' : dotColor} stroke={isPending ? dotColor : BG} strokeWidth={2} strokeDasharray={isPending ? '3 2' : 'none'} />
                           </g>
                         );
+                      }
+                      if (isPending) {
+                        return <circle key={k} cx={cx} cy={cy} r={3.5} fill="none" stroke={dotColor} strokeWidth={1.5} strokeDasharray="2 2" />;
                       }
                       return <circle key={k} cx={cx} cy={cy} r={3.5} fill={dotColor} stroke={BG} strokeWidth={1.5} />;
                       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -549,6 +575,15 @@ export default function TradeDetail({
               teamName={negativeTeamName}
               color={colorNegative}
             />
+            {/* v13 — legend note for pending (dashed) dots */}
+            {chartData.some((d) => d.pending) && (
+              <div className="text-[11px] mt-2 flex items-center gap-2" style={{ color: TEXT_MUTED }}>
+                <svg width={14} height={14} viewBox="0 0 14 14">
+                  <circle cx={7} cy={7} r={4} fill="none" stroke={TEXT_MUTED} strokeWidth={1.5} strokeDasharray="2 2" />
+                </svg>
+                Dashed dots = rounds where an injured-at-trade player hadn&apos;t yet returned
+              </div>
+            )}
           </>
         )}
       </TradeSection>
@@ -1284,7 +1319,7 @@ function ChartTooltip(props: {
 }) {
   if (!props.active || !props.payload?.length) return null;
   const p = props.payload[0]?.payload as
-    | { probability: number; deltaPct: number | null; round: string }
+    | { probability: number; deltaPct: number | null; round: string; pending?: boolean; pendingPlayers?: string[] }
     | undefined;
   if (!p) return null;
   const posProb = p.probability;
@@ -1318,6 +1353,11 @@ function ChartTooltip(props: {
         <div className="text-[10px] mt-1.5 tabular-nums" style={{ color: TEXT_MUTED }}>
           {p.deltaPct >= 0 ? '+' : ''}
           {p.deltaPct}pp shift since prev round
+        </div>
+      )}
+      {p.pending && p.pendingPlayers && p.pendingPlayers.length > 0 && (
+        <div className="text-[10px] mt-1.5" style={{ color: '#EF9F27' }}>
+          Awaiting: {p.pendingPlayers.join(', ')}
         </div>
       )}
     </div>
@@ -1777,21 +1817,21 @@ function PlayerVerdictRow({
     return 'Source: Unavailable';
   })();
 
-  // Dynamic post-trade window. The stored expected_games (default 4 from v2)
-  // is treated as a CAP — if the user explicitly said "expect 0" at trade
-  // time, that overrides. Otherwise the window is current_round - executed.
-  // v12 — round defensively so legacy rows that stored 3.5 (old half-game
-  // managed-load heuristic) read as a whole number in the UI.
-  const storedExpected =
-    tradePlayer.expected_games != null
-      ? Math.round(tradePlayer.expected_games)
-      : null;
-  const isUserExplicit = storedExpected != null && storedExpected !== 4;
-  const expectedGames = isUserExplicit
-    ? Math.min(postTradeWindow, storedExpected as number)
-    : postTradeWindow;
-
+  // v13 — Games Played denominator uses pro-rata expected-available instead
+  // of raw elapsed rounds. A player expected to play 15 of 18 available
+  // games who is 3 rounds in should show X/2 (pro-rata 15*(3/18)=2.5→2),
+  // not X/3 (elapsed rounds). This stops the metric penalising players
+  // whose expected availability was honestly set below 100%.
+  const expRemaining = tradePlayer.expected_games_remaining ?? null;
+  const expMax = tradePlayer.expected_games_max ?? null;
   const actualGames = performance?.rounds_played ?? 0;
+  const proRataDenom = (() => {
+    if (expRemaining != null && expMax != null && expMax > 0) {
+      return Math.round(expRemaining * (Math.min(postTradeWindow, expMax) / expMax));
+    }
+    return postTradeWindow;
+  })();
+  const expectedGames = proRataDenom;
   const avgSince = actualGames > 0 ? performance!.post_trade_avg : null;
 
   // v11.2 — the delta in the Avg Before cell now compares pre-trade avg to
@@ -1905,6 +1945,39 @@ function PlayerVerdictRow({
                   )
                 </span>
               </div>
+              {/* v13 — drift chip. Shows the injury recovery trajectory
+                  compared to trade-time state. Hidden for healthy_throughout
+                  and on_track since those are the happy path. */}
+              {(() => {
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                const drift = (tradePlayer as any)._injury_drift as
+                  | { status: string; summary: string }
+                  | null
+                  | undefined;
+                if (!drift || drift.status === 'healthy_throughout' || drift.status === 'on_track') return null;
+                const chipColor: Record<string, { bg: string; text: string }> = {
+                  cleared: { bg: 'rgba(63,191,127,0.15)', text: '#3FBF7F' },
+                  stalled: { bg: 'rgba(239,159,39,0.15)', text: '#EF9F27' },
+                  worsened: { bg: 'rgba(226,75,74,0.15)', text: '#E24B4A' },
+                  new_injury: { bg: 'rgba(226,75,74,0.15)', text: '#E24B4A' },
+                };
+                const c = chipColor[drift.status] ?? { bg: 'rgba(255,255,255,0.08)', text: TEXT_MUTED };
+                const label: Record<string, string> = {
+                  cleared: 'Cleared',
+                  stalled: 'Recovery stalled',
+                  worsened: 'Worsened',
+                  new_injury: 'New injury',
+                };
+                return (
+                  <span
+                    className="inline-flex items-center text-[10px] font-semibold uppercase tracking-wider rounded-full px-2 py-0.5 mt-0.5"
+                    style={{ background: c.bg, color: c.text }}
+                    title={drift.summary}
+                  >
+                    {label[drift.status] ?? drift.status}
+                  </span>
+                );
+              })()}
               {/* v12.4 — form chip with canonical season-wide stats from
                   the players table. Shows season avg + last-3 with an
                   up/down arrow when last-3 has diverged from the season

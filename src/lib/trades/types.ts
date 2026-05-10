@@ -54,6 +54,19 @@ export interface TradePlayer {
   expected_games_remaining?: number | null;   // raw games over the post-trade window
   expected_games_max?: number | null;         // max-available at trade execution
   player_context?: string | null;
+
+  // v13 — JSONB snapshot of the player's AFL injury state at trade execution.
+  // NULL means the player was not on the AFL injury list at trade time.
+  injury_at_trade?: {
+    injury: string | null;
+    estimated_return: string | null;
+    return_min_weeks: number | null;
+    return_max_weeks: number | null;
+    return_status: string;
+    source_updated_at: string | null;
+    trend_status: string | null;
+    trend_summary: string | null;
+  } | null;
 }
 
 export interface TradeFactorsBreakdown {

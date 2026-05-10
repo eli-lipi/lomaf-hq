@@ -199,8 +199,9 @@ export async function GET(_request: Request, ctx: { params: Promise<{ id: string
       };
     });
 
-    // v12.3.1 — official injury + trend per player.
-    const { computeInjuryTrend, fetchSnapshotsForPlayers } = await import('@/lib/afl-injuries');
+    // v12.3.1 — official injury + trend per player. v13 — drift detection.
+    const { computeInjuryTrend, fetchSnapshotsForPlayers, computeInjuryDrift } =
+      await import('@/lib/afl-injuries');
     const playerIdsForInjuries = players.map((p) => p.player_id);
     const injuryByPlayer = new Map<
       number,
@@ -238,6 +239,22 @@ export async function GET(_request: Request, ctx: { params: Promise<{ id: string
     const playersWithFallback = players.map((p) => {
       const inj = injuryByPlayer.get(p.player_id) ?? null;
       const trend = computeInjuryTrend(snapshotsByPlayer.get(p.player_id) ?? []);
+      const currentSnapshot = inj
+        ? {
+            injury: inj.injury,
+            estimated_return: inj.estimated_return,
+            return_min_weeks: null as number | null,
+            return_max_weeks: null as number | null,
+            return_status: 'unknown',
+            source_updated_at: inj.source_updated_at,
+            trend_status: trend.status,
+            trend_summary: trend.summary,
+          }
+        : null;
+      const drift = computeInjuryDrift(
+        (p as unknown as Record<string, unknown>).injury_at_trade as import('@/lib/afl-injuries').InjurySnapshot | null,
+        currentSnapshot
+      );
       return {
         ...p,
         expected_games_remaining: p.expected_games_remaining ?? defaultMaxGames,
@@ -250,6 +267,7 @@ export async function GET(_request: Request, ctx: { params: Promise<{ id: string
           null,
         _official_injury: inj,
         _injury_trend: inj && trend.snapshots.length > 0 ? trend : null,
+        _injury_drift: drift,
         _stats: statsByPlayer.get(p.player_id) ?? null,
       };
     });
@@ -473,7 +491,18 @@ export async function PATCH(request: Request, ctx: { params: Promise<{ id: strin
         };
       });
 
-      // Iteratively strips any column the schema reports as missing.
+      // v13 — snapshot each player's current AFL injury state
+      try {
+        const { buildInjurySnapshotsForPlayers } = await import('@/lib/afl-injuries');
+        const injuryMap = await buildInjurySnapshotsForPlayers(supabase, playerIds);
+        for (const row of playerRows) {
+          (row as Record<string, unknown>).injury_at_trade =
+            injuryMap.get(row.player_id) ?? null;
+        }
+      } catch (e) {
+        console.warn('[trades/[id] PATCH] Injury snapshot capture failed, proceeding without', e);
+      }
+
       await insertResilient(supabase, 'trade_players', playerRows, '[trades/[id] PATCH]');
     }
 

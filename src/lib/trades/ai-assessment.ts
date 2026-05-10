@@ -171,6 +171,21 @@ When the breakdown includes an "AFL FANTASY:" line, that's the canonical season-
 - last-3 = the player's last-3-rounds average. Form indicator.
 USE THESE NUMBERS. They're the cleanest signals available. If last-3 is well above projAvg, the player is in HOT FORM — frame the trade verdict accordingly (the buyer is catching a wave; the seller might regret). If last-3 is well below projAvg, COOLING OFF — the buyer is chasing dropping form. Always weight projAvg as the predictive baseline; season avg and last-3 are the trajectory.
 
+When you see an "INJURY AT TRADE:" line, that's the player's AFL injury-list state at the moment the trade was executed. "none (healthy)" means they were clean at trade time. If an injury is listed, it means the RECEIVING COACH KNOWINGLY TRADED FOR AN INJURED PLAYER — this is critical context for grading the DECISION, not just the outcome. A coach who buys a player listed at "hamstring, 2-3 weeks" and that player misses exactly 2-3 weeks is not unlucky — they priced it in. A coach who buys a healthy player who then gets hurt IS unlucky.
+
+When you see an "INJURY DRIFT:" line, it compares the trade-time injury state to the CURRENT state:
+- CLEARED: Was injured at trade, now healthy. The buyer's patience paid off.
+- ON_TRACK: Recovery progressing as expected. No surprise.
+- STALLED: Recovery taking longer than expected at trade time. Bad sign — the buyer's risk isn't paying off on schedule.
+- WORSENED: Injury has escalated (e.g. from "2-3 weeks" to "season"). Worst case for the buyer.
+- NEW_INJURY: Was healthy at trade, now injured. Pure bad luck for the receiving coach.
+USE DRIFT STATUS to frame the trade verdict. STALLED/WORSENED on a player someone traded FOR makes the trade look worse; CLEARED makes it look better. NEW_INJURY is bad luck, not a bad decision — frame it accordingly.
+
+When you see an "AVAILABILITY:" line, it shows whether the player is hitting their pro-rata expected games:
+- ON_TRACK: Playing at or above the expected rate. e.g. "4/4 games (pro-rata expected)".
+- OFF_TRACK: Missing more games than expected. e.g. "1/4 games (pro-rata expected)".
+Use this to ground your availability commentary in actual numbers rather than vibes. An OFF_TRACK player who was injured at trade time and whose drift is ON_TRACK is different from an OFF_TRACK player who was healthy — the first was priced in, the second wasn't.
+
 The season has 23 rounds. Finals start around R21. A "ton" is 100+, a "zero" is 0/DNP (injury or bye), a solid score is 80+. Typical stars average 90-120. Consider:
 - The original intent (from the context note) and whether it's playing out
 - Each player's actual avg vs. their EXPECTED avg (the explicit bet) — that's the trade's verdict on output. NOT pre-trade season-to-date avg.
