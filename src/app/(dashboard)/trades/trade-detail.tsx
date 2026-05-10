@@ -1637,6 +1637,8 @@ function PlayerVerdictTable({
                 Expected
                 <InfoTip placement="bottom-right">
                   <strong style={{ color: TEXT }}>Expected average:</strong> the bar this player needed to clear for the trade to make sense. Locked at trade execution. Auto-derived from a position-tier baseline blended 60/40 with last-3-rounds form. The delta in parentheses compares Avg Since to Expected.
+                  <br /><br />
+                  <strong style={{ color: TEXT }}>Expected games:</strong> the games-out-of-max the trader bet this player would play across the post-trade window. <span style={{ color: '#3FBF7F' }}>(on track)</span> / <span style={{ color: '#E24B4A' }}>(off track)</span> compares actual games played to the pro-rata expectation at the current round. Blank means the trade was logged before this field existed — Edit the trade to backfill.
                 </InfoTip>
               </span>
             </th>
@@ -1936,9 +1938,9 @@ function PlayerVerdictRow({
           {computedPreAvg != null ? Math.round(computedPreAvg) : '—'}
           <DeltaPill delta={preDelta} teamColor={teamColor} />
         </td>
-        {/* Expected (Δ vs Avg Since) */}
+        {/* Expected (Δ vs Avg Since) — avg on top, games-bet below */}
         <td
-          className="pl-2 text-right text-[18px] tabular-nums"
+          className="pl-2 text-right tabular-nums"
           style={{ color: TEXT }}
           // Per-row ⓘ removed in v10.4 — the column header carries the
           // explanation. Hover the row to inspect via the title attr if needed.
@@ -1948,8 +1950,16 @@ function PlayerVerdictRow({
               : undefined
           }
         >
-          {expectedAvg != null ? Math.round(expectedAvg) : '—'}
-          <DeltaPill delta={sinceDelta} teamColor={teamColor} />
+          <div className="text-[18px]">
+            {expectedAvg != null ? Math.round(expectedAvg) : '—'}
+            <DeltaPill delta={sinceDelta} teamColor={teamColor} />
+          </div>
+          <GamesTrackPill
+            expectedRemaining={tradePlayer.expected_games_remaining ?? null}
+            expectedMax={tradePlayer.expected_games_max ?? null}
+            actualGames={actualGames}
+            elapsedRounds={performance?.rounds_possible ?? 0}
+          />
         </td>
       </tr>
       {expanded && traj.length > 0 && performance && (
@@ -2059,6 +2069,55 @@ function DeltaPill({
       ({sign}
       {magnitude})
     </span>
+  );
+}
+
+/**
+ * Renders the "X/Y games (on track | off track | —)" line under Expected avg.
+ * Returns null when the trade pre-dates the v11 expected_games_remaining field —
+ * blank intentionally signals "this trade needs backfilling via Edit."
+ *
+ * On-track logic: pro-rate expected_games_remaining over the season window
+ * by elapsed rounds; on track if actual games played >= floor(pro-rata).
+ */
+function GamesTrackPill({
+  expectedRemaining,
+  expectedMax,
+  actualGames,
+  elapsedRounds,
+}: {
+  expectedRemaining: number | null;
+  expectedMax: number | null;
+  actualGames: number;
+  elapsedRounds: number;
+}) {
+  if (expectedRemaining == null) return null;
+
+  const denomLabel = expectedMax != null ? `/${expectedMax}` : '';
+
+  let label: string;
+  let labelColor: string;
+  if (elapsedRounds <= 0) {
+    label = '—';
+    labelColor = 'rgba(155,163,181,0.55)';
+  } else if (expectedMax != null && expectedMax > 0) {
+    const proRata = expectedRemaining * (elapsedRounds / expectedMax);
+    const onTrack = actualGames >= Math.floor(proRata);
+    label = onTrack ? 'on track' : 'off track';
+    labelColor = onTrack ? '#3FBF7F' : '#E24B4A';
+  } else {
+    label = '—';
+    labelColor = 'rgba(155,163,181,0.55)';
+  }
+
+  return (
+    <div className="text-[13px] mt-1 tabular-nums" style={{ color: TEXT_MUTED }}>
+      {expectedRemaining}
+      {denomLabel} games
+      <span className="ml-1.5" style={{ color: labelColor }}>
+        ({label})
+      </span>
+    </div>
   );
 }
 
