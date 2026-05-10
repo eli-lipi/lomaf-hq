@@ -1646,7 +1646,7 @@ function PlayerVerdictTable({
               <span className="inline-flex items-center gap-1 justify-end">
                 Expected Games
                 <InfoTip placement="bottom-right">
-                  <strong style={{ color: TEXT }}>Expected games:</strong> the games-out-of-max the trader bet this player would play across the post-trade window. <span style={{ color: '#3FBF7F' }}>(on track)</span> / <span style={{ color: '#E24B4A' }}>(off track)</span> compares actual games played to the pro-rata expectation at the current round. <em>(not set)</em> means the trade was logged before this field existed — Edit the trade to backfill.
+                  <strong style={{ color: TEXT }}>Expected games:</strong> the games-out-of-max the trader bet this player would play across the post-trade window. The bracket shows actual games played out of rounds elapsed since the trade. <span style={{ color: '#3FBF7F' }}>Green</span> = on track vs the pro-rata expectation; <span style={{ color: '#E24B4A' }}>red</span> = off track. <em>(not set)</em> means the trade was logged before this field existed — Edit the trade to backfill.
                 </InfoTip>
               </span>
             </th>
@@ -2082,10 +2082,10 @@ function DeltaPill({
 }
 
 /**
- * Renders the Expected Games column cell — "X/Y" with an "(on track)" /
- * "(off track)" suffix in green/red. Always renders so legacy trades
- * visibly read "— (not set)" — that's the cue to Edit and backfill
- * expected_games_remaining.
+ * Renders the Expected Games column cell — "X/Y (actual/elapsed)".
+ * Whole cell is green when on track, red when off track, muted when
+ * unknown. Legacy trades read "— (not set)" — the cue to Edit and
+ * backfill expected_games_remaining.
  *
  * On-track logic: pro-rate expected_games_remaining over the season window
  * by elapsed rounds; on track if actual games played >= floor(pro-rata).
@@ -2117,27 +2117,21 @@ function GamesTrackPill({
 
   const denomLabel = expectedMax != null ? `/${expectedMax}` : '';
 
-  let label: string;
-  let labelColor: string;
-  if (elapsedRounds <= 0) {
-    label = '—';
-    labelColor = MUTED;
-  } else if (expectedMax != null && expectedMax > 0) {
+  let cellColor: string;
+  if (elapsedRounds <= 0 || expectedMax == null || expectedMax <= 0) {
+    cellColor = MUTED;
+  } else {
     const proRata = expectedRemaining * (elapsedRounds / expectedMax);
     const onTrack = actualGames >= Math.floor(proRata);
-    label = onTrack ? 'on track' : 'off track';
-    labelColor = onTrack ? '#3FBF7F' : '#E24B4A';
-  } else {
-    label = '—';
-    labelColor = MUTED;
+    cellColor = onTrack ? '#3FBF7F' : '#E24B4A';
   }
 
   return (
-    <span>
+    <span style={{ color: cellColor }}>
       {expectedRemaining}
       {denomLabel}
-      <span className="ml-1.5 text-[13px]" style={{ color: labelColor }}>
-        ({label})
+      <span className="ml-1.5 text-[13px]">
+        ({actualGames}/{elapsedRounds})
       </span>
     </span>
   );
