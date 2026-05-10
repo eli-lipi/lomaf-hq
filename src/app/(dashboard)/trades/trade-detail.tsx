@@ -3,6 +3,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   ArrowLeft,
+  ChevronLeft,
+  ChevronRight,
   RefreshCw,
   Trash2,
   Pencil,
@@ -80,6 +82,11 @@ interface Props {
   isAdmin?: boolean;
   onBack: () => void;
   onDeleted: () => void;
+  // Prev/Next navigation. Optional — buttons disabled at list boundaries.
+  // Position context (e.g. "3 of 12") shown when both index + total provided.
+  onPrev?: () => void;
+  onNext?: () => void;
+  positionLabel?: string | null;
 }
 
 // League-avg baseline by position, used when a player has no pre-trade avg
@@ -105,12 +112,40 @@ function baselineForPerformance(p: PlayerPerformance): number {
 // ============================================================
 // Main detail component
 // ============================================================
-export default function TradeDetail({ tradeId, isAdmin = false, onBack, onDeleted }: Props) {
+export default function TradeDetail({
+  tradeId,
+  isAdmin = false,
+  onBack,
+  onDeleted,
+  onPrev,
+  onNext,
+  positionLabel,
+}: Props) {
   const [data, setData] = useState<DetailData | null>(null);
   const [loading, setLoading] = useState(true);
   const [recalculating, setRecalculating] = useState(false);
   const [editing, setEditing] = useState(false);
   const [showDetails, setShowDetails] = useState(false);
+
+  // Keyboard shortcuts: ← prev trade, → next trade. Skip when an input is
+  // focused so users can still type in form fields without navigating away.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement | null)?.tagName ?? '';
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+      if ((e.target as HTMLElement | null)?.isContentEditable) return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.key === 'ArrowLeft' && onPrev) {
+        e.preventDefault();
+        onPrev();
+      } else if (e.key === 'ArrowRight' && onNext) {
+        e.preventDefault();
+        onNext();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onPrev, onNext]);
 
   const load = async () => {
     setLoading(true);
@@ -284,15 +319,28 @@ export default function TradeDetail({ tradeId, isAdmin = false, onBack, onDelete
     >
       {/* ── Page actions row ──────────────────────────────────── */}
       <div className="flex items-center justify-between">
-        <button
-          onClick={onBack}
-          className="flex items-center gap-2 text-sm transition-colors"
-          style={{ color: TEXT_BODY }}
-          onMouseEnter={(e) => (e.currentTarget.style.color = TEXT)}
-          onMouseLeave={(e) => (e.currentTarget.style.color = TEXT_BODY)}
-        >
-          <ArrowLeft size={16} /> Back to all trades
-        </button>
+        <div className="flex items-center gap-4">
+          <button
+            onClick={onBack}
+            className="flex items-center gap-2 text-sm transition-colors"
+            style={{ color: TEXT_BODY }}
+            onMouseEnter={(e) => (e.currentTarget.style.color = TEXT)}
+            onMouseLeave={(e) => (e.currentTarget.style.color = TEXT_BODY)}
+          >
+            <ArrowLeft size={16} /> Back to all trades
+          </button>
+          {(onPrev || onNext) && (
+            <div className="flex items-center gap-1.5 text-sm" style={{ color: TEXT_BODY }}>
+              <NavArrow direction="prev" onClick={onPrev} />
+              {positionLabel && (
+                <span className="px-1 tabular-nums text-[12px]" style={{ color: TEXT_MUTED }}>
+                  {positionLabel}
+                </span>
+              )}
+              <NavArrow direction="next" onClick={onNext} />
+            </div>
+          )}
+        </div>
         <div className="flex items-center gap-2">
           {/* v11 — Edit and Delete are admin-only. Recalculate stays visible
               to all viewers since it just refreshes computation. */}
@@ -2078,6 +2126,48 @@ function DeltaPill({
       ({sign}
       {magnitude})
     </span>
+  );
+}
+
+/**
+ * Prev/next navigation arrow in the trade header. Disabled when no
+ * handler is wired (boundary of the trades list). Square 28px target,
+ * subtle hover state, keyboard ← / → still works regardless.
+ */
+function NavArrow({
+  direction,
+  onClick,
+}: {
+  direction: 'prev' | 'next';
+  onClick: (() => void) | undefined;
+}) {
+  const Icon = direction === 'prev' ? ChevronLeft : ChevronRight;
+  const enabled = !!onClick;
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={!enabled}
+      aria-label={direction === 'prev' ? 'Previous trade (←)' : 'Next trade (→)'}
+      title={direction === 'prev' ? 'Previous trade (←)' : 'Next trade (→)'}
+      className="inline-flex items-center justify-center w-7 h-7 rounded transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+      style={{
+        color: enabled ? TEXT_BODY : TEXT_MUTED,
+        border: `1px solid ${BORDER}`,
+        background: 'transparent',
+      }}
+      onMouseEnter={(e) => {
+        if (!enabled) return;
+        e.currentTarget.style.color = TEXT;
+        e.currentTarget.style.background = 'rgba(255,255,255,0.05)';
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.color = enabled ? TEXT_BODY : TEXT_MUTED;
+        e.currentTarget.style.background = 'transparent';
+      }}
+    >
+      <Icon size={16} />
+    </button>
   );
 }
 

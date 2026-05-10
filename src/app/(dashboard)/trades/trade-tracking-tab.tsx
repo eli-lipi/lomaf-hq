@@ -119,6 +119,16 @@ export default function TradeTrackingTab({ isAdmin = false }: { isAdmin?: boolea
   }, [items, sort]);
 
   if (activeTradeId) {
+    // Compute prev/next based on the current sort. Prev = visually above
+    // (lower index), next = visually below (higher index). Boundary trades
+    // get undefined handlers so the buttons render disabled.
+    const idx = sortedItems.findIndex((it) => it.trade.id === activeTradeId);
+    const prevId = idx > 0 ? sortedItems[idx - 1].trade.id : null;
+    const nextId =
+      idx >= 0 && idx < sortedItems.length - 1 ? sortedItems[idx + 1].trade.id : null;
+    const positionLabel =
+      idx >= 0 && sortedItems.length > 0 ? `${idx + 1} of ${sortedItems.length}` : null;
+
     return (
       <TradeDetail
         tradeId={activeTradeId}
@@ -131,6 +141,9 @@ export default function TradeTrackingTab({ isAdmin = false }: { isAdmin?: boolea
           closeTrade();
           load();
         }}
+        onPrev={prevId ? () => openTrade(prevId) : undefined}
+        onNext={nextId ? () => openTrade(nextId) : undefined}
+        positionLabel={positionLabel}
       />
     );
   }
