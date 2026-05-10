@@ -250,27 +250,27 @@ export async function GET(
           {/* Gradient divider */}
           <div style={{ display: 'flex', width: 400, height: 2, marginBottom: 36, background: 'linear-gradient(90deg, transparent, #00FF87, transparent)' }} />
           {roundData.preview_text && (
-            // v13.3 — Satori collapses whitespace in a single text node,
-            // so a textarea entry with paragraph breaks rendered as one
-            // wall of text. Split on newlines and render each line as
-            // its own flex item; empty lines become a spacer so paragraph
-            // breaks survive into the image.
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', maxWidth: 800 }}>
+            // v13.3 — Satori collapses whitespace in a single text node.
+            // Split on newlines and render each line as its own flex
+            // item so paragraph breaks survive. Two Satori-safety
+            // tweaks: empty lines render   (Satori errors on empty
+            // text children), and each line is width:100% so textAlign
+            // works inside the column container.
+            <div style={{ display: 'flex', flexDirection: 'column', maxWidth: 800, width: '100%' }}>
               {roundData.preview_text.split('\n').map((line: string, i: number) => (
                 <div
                   key={i}
                   style={{
                     display: 'flex',
+                    width: '100%',
+                    justifyContent: 'center',
                     fontSize: ptSize,
                     color: 'rgba(255,255,255,0.7)',
                     textAlign: 'center',
                     lineHeight: ptLH,
-                    // Empty lines act as paragraph spacers — give them a
-                    // line of height so the gap is visible.
-                    height: line.trim() === '' ? ptSize * (ptLH * 0.6) : undefined,
                   }}
                 >
-                  {line}
+                  {line.trim() === '' ? ' ' : line}
                 </div>
               ))}
             </div>
@@ -352,28 +352,30 @@ export async function GET(
         </div>
 
         {/* Week ahead text — v13.3: split on newlines so paragraph
-            breaks survive Satori's whitespace collapse. */}
+            breaks survive Satori's whitespace collapse. Empty lines
+            render a single space so Satori has text content to lay
+            out (it errors on empty children). */}
         {roundData.week_ahead_text && (() => {
           const raw = roundData.week_ahead_text;
           const text = raw.length > 300 ? raw.slice(0, 300) + '...' : raw;
           const lineHeight = 1.5;
           const fontSize = 16;
           return (
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', marginTop: 16 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', width: '100%', marginTop: 16 }}>
               {text.split('\n').map((line: string, i: number) => (
                 <div
                   key={i}
                   style={{
                     display: 'flex',
+                    width: '100%',
+                    justifyContent: 'center',
                     fontSize,
                     color: 'rgba(255,255,255,0.5)',
                     lineHeight,
                     textAlign: 'center',
-                    justifyContent: 'center',
-                    height: line.trim() === '' ? fontSize * (lineHeight * 0.6) : undefined,
                   }}
                 >
-                  {line}
+                  {line.trim() === '' ? ' ' : line}
                 </div>
               ))}
             </div>
