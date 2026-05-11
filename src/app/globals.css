@@ -1,5 +1,10 @@
-@import "tailwindcss";
+/* v13.4 — Google Fonts @import must come before tailwindcss; the CSS
+   spec requires every @import before any other at-rule, and
+   `@import "tailwindcss"` injects rules into the stream that follow
+   it. The build warning ("@import must precede all other rules") is
+   what we're fixing here. */
 @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;600;700;800&display=swap');
+@import "tailwindcss";
 
 :root {
   --background: #F0F2F5;
