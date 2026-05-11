@@ -8,8 +8,7 @@
 
 import Link from 'next/link';
 import { ChevronRight } from 'lucide-react';
-import { getCurrentRoundRow } from '@/lib/round';
-import { createSupabaseServerClient } from '@/lib/supabase-server';
+import { getCachedCurrentRoundRow } from '@/lib/round';
 
 function relativeTime(iso: string): string {
   const t = new Date(iso).getTime();
@@ -25,8 +24,10 @@ function relativeTime(iso: string): string {
 }
 
 export default async function RoundBadge({ isAdmin }: { isAdmin: boolean }) {
-  const supabase = await createSupabaseServerClient();
-  const row = await getCurrentRoundRow(supabase);
+  // v13.4 — uses the unstable_cache wrapper (60s revalidate, tag
+  // 'round_current' invalidated by the advance endpoint). Removes a
+  // Supabase round-trip from every page render.
+  const row = await getCachedCurrentRoundRow();
 
   // Pre-season — show a soft state.
   if (!row || row.round_number === 0) {

@@ -33,6 +33,7 @@ const ROUND_API_PUBLIC_PATHS = ['/api/round/current'];
 const PUBLIC_PATHS = ['/login', '/auth/callback'];
 
 export async function middleware(request: NextRequest) {
+  const path = request.nextUrl.pathname;
   let response = NextResponse.next({ request });
 
   const supabase = createServerClient(
@@ -59,7 +60,6 @@ export async function middleware(request: NextRequest) {
     data: { user },
   } = await supabase.auth.getUser();
 
-  const path = request.nextUrl.pathname;
   const isPublic = PUBLIC_PATHS.some((p) => path.startsWith(p));
 
   // Vercel cron requests don't have a session; let them pass through
@@ -145,6 +145,12 @@ export async function middleware(request: NextRequest) {
 }
 
 export const config = {
-  // Run on everything except static assets.
-  matcher: ['/((?!_next/static|_next/image|favicon.ico|.*\\.(?:png|jpg|jpeg|svg|webp|gif|ico)$).*)'],
+  // v13.4 — narrowed: also excludes /api/heartbeat (high-frequency
+  // endpoint that authenticates itself via the route handler) and
+  // font files. Every match runs supabase.auth.getUser() — a real
+  // network call — so trimming the surface area reduces background
+  // load without changing observable behavior.
+  matcher: [
+    '/((?!_next/static|_next/image|favicon.ico|api/heartbeat|.*\\.(?:png|jpg|jpeg|svg|webp|gif|ico|woff|woff2|ttf|otf)$).*)',
+  ],
 };

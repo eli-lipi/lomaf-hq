@@ -5,6 +5,7 @@ import { useSearchParams } from 'next/navigation';
 import { cn } from '@/lib/utils';
 import TradeTrackingTab from './trade-tracking-tab';
 import TradeRecommendationsTab from './trade-recommendations-tab';
+import type { TradesListItem } from '@/lib/trades/load-list';
 
 const TOP_TABS = [
   { id: 'tracking', label: 'Trade Tracking' },
@@ -13,15 +14,27 @@ const TOP_TABS = [
 
 type TopTab = (typeof TOP_TABS)[number]['id'];
 
-export default function TradesPageClient({ isAdmin }: { isAdmin: boolean }) {
+export default function TradesPageClient({
+  isAdmin,
+  initialTrades,
+}: {
+  isAdmin: boolean;
+  initialTrades: TradesListItem[];
+}) {
   return (
     <Suspense fallback={<div className="py-12 text-center text-muted-foreground">Loading...</div>}>
-      <TradesPageInner isAdmin={isAdmin} />
+      <TradesPageInner isAdmin={isAdmin} initialTrades={initialTrades} />
     </Suspense>
   );
 }
 
-function TradesPageInner({ isAdmin }: { isAdmin: boolean }) {
+function TradesPageInner({
+  isAdmin,
+  initialTrades,
+}: {
+  isAdmin: boolean;
+  initialTrades: TradesListItem[];
+}) {
   const searchParams = useSearchParams();
   const tabParam = searchParams.get('tab');
 
@@ -58,7 +71,7 @@ function TradesPageInner({ isAdmin }: { isAdmin: boolean }) {
         ))}
       </div>
 
-      {topTab === 'tracking' && <TradeTrackingTab isAdmin={isAdmin} />}
+      {topTab === 'tracking' && <TradeTrackingTab isAdmin={isAdmin} initialTrades={initialTrades} />}
       {topTab === 'recommendations' && <TradeRecommendationsTab />}
     </div>
   );

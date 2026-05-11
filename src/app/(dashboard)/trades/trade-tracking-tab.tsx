@@ -44,9 +44,20 @@ type SortKey = 'recent' | 'largest' | 'oldest' | 'closest';
 
 // snap5 imported from @/lib/trades/scale (single source of truth).
 
-export default function TradeTrackingTab({ isAdmin = false }: { isAdmin?: boolean }) {
-  const [items, setItems] = useState<ListItem[]>([]);
-  const [loading, setLoading] = useState(true);
+export default function TradeTrackingTab({
+  isAdmin = false,
+  initialTrades,
+}: {
+  isAdmin?: boolean;
+  initialTrades?: ListItem[];
+}) {
+  // v13.4 — server passes the initial list during SSR so the table
+  // renders immediately. The client-side `load()` path stays for
+  // post-mutation refresh (after create/edit/delete/recalculate).
+  const [items, setItems] = useState<ListItem[]>(
+    (initialTrades as ListItem[] | undefined) ?? []
+  );
+  const [loading, setLoading] = useState(!initialTrades);
   const [modalOpen, setModalOpen] = useState(false);
   const [activeTradeId, setActiveTradeId] = useState<string | null>(null);
   const [sort, setSort] = useState<SortKey>('recent');
@@ -62,8 +73,12 @@ export default function TradeTrackingTab({ isAdmin = false }: { isAdmin?: boolea
   }, []);
 
   useEffect(() => {
-    load();
-  }, [load]);
+    // Skip the initial fetch when SSR already gave us the list. Any
+    // in-flight create/edit/delete will still trigger a refresh via
+    // the explicit `load()` calls in those handlers.
+    if (!initialTrades) load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // ── Browser-back integration ─────────────────────────────────────
   // Without this, opening a trade is a pure React state change — no URL

@@ -1,7 +1,13 @@
 import { NextResponse } from 'next/server';
+import { revalidateTag } from 'next/cache';
 import { getCurrentUser, isRealAdmin } from '@/lib/auth';
 import { createSupabaseServerClient } from '@/lib/supabase-server';
-import { advanceToRound, verifyRoundReady, getCurrentRound } from '@/lib/round';
+import {
+  advanceToRound,
+  verifyRoundReady,
+  getCurrentRound,
+  ROUND_CURRENT_TAG,
+} from '@/lib/round';
 
 export const maxDuration = 300; // recalc + AI narratives can take a few minutes
 
@@ -68,6 +74,12 @@ export async function POST(req: Request) {
       sendEmail: body.sendEmail !== false,
       advancedBy: user!.id,
     });
+    // v13.4 — drop the cached round-current lookup so RoundBadge and
+    // any other surface reading the cached round see the new number
+    // immediately instead of waiting up to 60s for revalidation. Next
+    // 16's revalidateTag takes a CacheLifeConfig profile; { expire: 0 }
+    // purges immediately.
+    revalidateTag(ROUND_CURRENT_TAG, { expire: 0 });
     return NextResponse.json(result);
   } catch (err) {
     console.error('[round/advance]', err);

@@ -12,7 +12,44 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { createClient } from '@supabase/supabase-js';
+import { unstable_cache } from 'next/cache';
 import { recalculateAllTradesForRound } from '@/lib/trades/recalculate';
+
+// v13.4 — round_advances changes about once a week (when admin clicks
+// Advance). Caching the latest-row lookup avoids hitting Supabase on
+// every page render, every middleware refresh, every trade list load,
+// etc. Tagged so the advance endpoint can invalidate immediately.
+export const ROUND_CURRENT_TAG = 'round_current';
+
+async function fetchCurrentRoundRow(): Promise<RoundAdvanceRow | null> {
+  const sb = createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+  );
+  const { data } = await sb
+    .from('round_advances')
+    .select('*')
+    .order('round_number', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  return (data as RoundAdvanceRow | null) ?? null;
+}
+
+export const getCachedCurrentRoundRow = unstable_cache(
+  fetchCurrentRoundRow,
+  ['round_current_row'],
+  { revalidate: 60, tags: [ROUND_CURRENT_TAG] }
+);
+
+export const getCachedCurrentRound = unstable_cache(
+  async (): Promise<number> => {
+    const row = await fetchCurrentRoundRow();
+    return row?.round_number ?? 0;
+  },
+  ['round_current_num'],
+  { revalidate: 60, tags: [ROUND_CURRENT_TAG] }
+);
 
 // All-team count used by verifyRoundReady. LOMAF is 10 coaches.
 const TEAM_COUNT = 10;
