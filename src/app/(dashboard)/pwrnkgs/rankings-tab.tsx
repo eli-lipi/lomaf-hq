@@ -25,6 +25,7 @@ import { supabase } from '@/lib/supabase';
 import type { PwrnkgsRound, TeamSnapshot } from '@/lib/types';
 import { computeSlideData, type SlideTeamData } from '@/lib/compute-slide-data';
 import { computeLineupDiff, type LineupDiff } from '@/lib/compute-lineup-diff';
+import { computeTeamInjuries, type InjuredPlayer } from '@/lib/compute-team-injuries';
 import SlidePreview, { getRankTheme, type SlidePreviewData } from './slide-preview';
 import { getWorkingRound } from '@/lib/get-working-round';
 
@@ -54,6 +55,7 @@ export default function RankingsTab() {
   const [coachPhotoMap, setCoachPhotoMap] = useState<Map<string, string>>(new Map());
   const [computedData, setComputedData] = useState<Map<number, SlideTeamData>>(new Map());
   const [lineupDiffMap, setLineupDiffMap] = useState<Map<number, LineupDiff>>(new Map());
+  const [injuriesMap, setInjuriesMap] = useState<Map<number, InjuredPlayer[]>>(new Map());
 
   // Preview scaling
   const previewContainerRef = useRef<HTMLDivElement>(null);
@@ -187,6 +189,10 @@ export default function RankingsTab() {
       // ── Compute lineup ins/outs vs previous round ──
       const diffs = await computeLineupDiff(supabase, currentRound);
       setLineupDiffMap(diffs);
+
+      // ── Compute current injuries per team ──
+      const injuries = await computeTeamInjuries(supabase, currentRound);
+      setInjuriesMap(injuries);
 
       // ── Fetch sparkline data ──
       const { data: allRankings } = await supabase
@@ -379,6 +385,7 @@ export default function RankingsTab() {
       roundNumber: latestRound,
       ins: lineupDiffMap.get(item.team_id)?.ins.map(c => ({ player_name: c.player_name, pos: c.pos })) ?? [],
       outs: lineupDiffMap.get(item.team_id)?.outs.map(c => ({ player_name: c.player_name, pos: c.pos })) ?? [],
+      injuries: injuriesMap.get(item.team_id) ?? [],
     };
   };
 

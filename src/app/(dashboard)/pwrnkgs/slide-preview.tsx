@@ -33,6 +33,7 @@ export interface SlidePreviewData {
   roundNumber: number;
   ins: { player_name: string; pos: string }[];
   outs: { player_name: string; pos: string }[];
+  injuries: { player_name: string; duration_label: string }[];
 }
 
 // ── Theme helpers ──
@@ -221,24 +222,67 @@ function renderWriteup(text: string) {
   return elements;
 }
 
-// ── Ins / Outs row (at 540px scale) ──
+// ── Roster row: chip-based IN/OUT/INJ (at 540px scale) ──
 
-function InOutRow({ label, color, players }: { label: string; color: string; players: { player_name: string; pos: string }[] }) {
-  const text = players.length === 0
-    ? '—'
-    : players.map(p => p.player_name).join(' · ');
+interface RosterChip { player_name: string; duration_label?: string }
+
+function rgbaFromHex(hex: string, alpha: number): string {
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  return `rgba(${r},${g},${b},${alpha})`;
+}
+
+function RosterRow({ label, color, players }: {
+  label: string;
+  color: string; // #RRGGBB hex
+  players: RosterChip[];
+}) {
+  const tintBg = rgbaFromHex(color, 0.10);
+  const tintBorder = rgbaFromHex(color, 0.30);
+  const chipBg = rgbaFromHex(color, 0.06);
+  const chipBorder = rgbaFromHex(color, 0.22);
+  const isEmpty = players.length === 0;
+
   return (
-    <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, lineHeight: 1.25 }}>
-      <span style={{
-        fontSize: 7, fontWeight: 800, letterSpacing: 1, color,
-        fontFamily: "'JetBrains Mono', monospace", textTransform: 'uppercase' as const,
-        width: 22, flexShrink: 0,
-      }}>{label}</span>
-      <span style={{
-        fontSize: 9, fontWeight: 600, color: players.length === 0 ? '#5A6577' : color,
-        lineHeight: 1.3, flex: 1, minWidth: 0,
-        overflow: 'hidden', textOverflow: 'ellipsis',
-      }}>{text}</span>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6, minHeight: 16 }}>
+      {/* Tinted label pill */}
+      <div style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        width: 28, height: 14,
+        fontSize: 7, fontWeight: 800, letterSpacing: 0.8, color,
+        fontFamily: "'JetBrains Mono', monospace",
+        background: tintBg, border: `1px solid ${tintBorder}`,
+        borderRadius: 4, flexShrink: 0,
+      }}>{label}</div>
+
+      {/* Chips (or em dash if empty) */}
+      {isEmpty ? (
+        <span style={{ fontSize: 9, color: '#3A4A5A', fontWeight: 500 }}>—</span>
+      ) : (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3, flex: 1, minWidth: 0 }}>
+          {players.map((p, i) => (
+            <div key={i} style={{
+              display: 'flex', alignItems: 'center', gap: 4,
+              padding: '1px 6px', borderRadius: 8,
+              background: chipBg, border: `1px solid ${chipBorder}`,
+              whiteSpace: 'nowrap',
+            }}>
+              <span style={{ fontSize: 8.5, fontWeight: 600, color, lineHeight: 1.1 }}>
+                {p.player_name}
+              </span>
+              {p.duration_label && (
+                <span style={{
+                  fontSize: 7, fontWeight: 700, color: rgbaFromHex(color, 0.7),
+                  fontFamily: "'JetBrains Mono', monospace", lineHeight: 1.1,
+                }}>
+                  {p.duration_label}
+                </span>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -384,11 +428,19 @@ export default function SlidePreview({ data }: { data: SlidePreviewData }) {
             {renderWriteup(d.writeup)}
           </div>
 
-          {/* Ins / Outs — hidden only on R1 (no prior round to diff against) */}
+          {/* Roster status — IN / OUT / INJ. Hidden on R1 (no prior round to diff against) */}
           {d.roundNumber >= 2 && (
-            <div style={{ flexShrink: 0, marginTop: 8, paddingTop: 6, borderTop: '1px solid rgba(255,255,255,0.06)', display: 'flex', flexDirection: 'column', gap: 3 }}>
-              <InOutRow label="IN" color="#00FF87" players={d.ins} />
-              <InOutRow label="OUT" color="#FF4757" players={d.outs} />
+            <div style={{ flexShrink: 0, marginTop: 10, display: 'flex', flexDirection: 'column' }}>
+              {/* Gradient divider */}
+              <div style={{
+                height: 1, marginBottom: 7, flexShrink: 0,
+                background: `linear-gradient(90deg, ${theme.border}, rgba(255,255,255,0.04) 60%, transparent)`,
+              }} />
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                <RosterRow label="IN" color="#00FF87" players={d.ins} />
+                <RosterRow label="OUT" color="#FF4757" players={d.outs} />
+                <RosterRow label="INJ" color="#FFB800" players={d.injuries.map(i => ({ player_name: i.player_name, duration_label: i.duration_label }))} />
+              </div>
             </div>
           )}
         </div>

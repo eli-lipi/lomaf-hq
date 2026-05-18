@@ -3,6 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 import { TEAMS, SEASON } from '@/lib/constants';
 import { computeSlideData } from '@/lib/compute-slide-data';
 import { computeLineupDiff } from '@/lib/compute-lineup-diff';
+import { computeTeamInjuries } from '@/lib/compute-team-injuries';
 import { readFileSync } from 'fs';
 import { join } from 'path';
 
@@ -119,19 +120,64 @@ function SatoriLineCircle({ label, rank }: { label: string; rank: number | null 
   );
 }
 
-function SatoriInOutRow({ label, color, players }: { label: string; color: string; players: { player_name: string }[] }) {
-  const text = players.length === 0 ? '—' : players.map(p => p.player_name).join(' · ');
+function rgbaFromHex(hex: string, alpha: number): string {
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  return `rgba(${r},${g},${b},${alpha})`;
+}
+
+function SatoriRosterRow({ label, color, players }: {
+  label: string;
+  color: string; // #RRGGBB
+  players: { player_name: string; duration_label?: string }[];
+}) {
+  const tintBg = rgbaFromHex(color, 0.10);
+  const tintBorder = rgbaFromHex(color, 0.30);
+  const chipBg = rgbaFromHex(color, 0.06);
+  const chipBorder = rgbaFromHex(color, 0.22);
+  const isEmpty = players.length === 0;
+
   return (
-    <div style={{ display: 'flex', alignItems: 'baseline', gap: 14 }}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 12, minHeight: 32 }}>
+      {/* Tinted label pill */}
       <div style={{
-        display: 'flex', fontSize: 14, fontWeight: 800, letterSpacing: 2, color,
-        fontFamily: "'JetBrains Mono', monospace", width: 44, flexShrink: 0,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        width: 56, height: 28,
+        fontSize: 14, fontWeight: 800, letterSpacing: 1.6, color,
+        fontFamily: "'JetBrains Mono', monospace",
+        background: tintBg, border: `1px solid ${tintBorder}`,
+        borderRadius: 8, flexShrink: 0,
       }}>{label}</div>
-      <div style={{
-        display: 'flex', fontSize: 18, fontWeight: 600,
-        color: players.length === 0 ? '#5A6577' : color,
-        lineHeight: 1.35, flex: 1, minWidth: 0,
-      }}>{text}</div>
+
+      {/* Chips (or em dash) */}
+      {isEmpty ? (
+        <div style={{ display: 'flex', fontSize: 18, color: '#3A4A5A', fontWeight: 500 }}>—</div>
+      ) : (
+        <div style={{ display: 'flex', flexWrap: 'wrap', flex: 1, minWidth: 0 }}>
+          {players.map((p, i) => (
+            <div key={i} style={{
+              display: 'flex', alignItems: 'center',
+              padding: '3px 12px', borderRadius: 16,
+              background: chipBg, border: `1px solid ${chipBorder}`,
+              marginRight: 6, marginBottom: 6,
+            }}>
+              <div style={{ display: 'flex', fontSize: 17, fontWeight: 600, color, lineHeight: 1.1 }}>
+                {p.player_name}
+              </div>
+              {p.duration_label && (
+                <div style={{
+                  display: 'flex', marginLeft: 8,
+                  fontSize: 14, fontWeight: 700, color: rgbaFromHex(color, 0.7),
+                  fontFamily: "'JetBrains Mono', monospace", lineHeight: 1.1,
+                }}>
+                  {p.duration_label}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -428,6 +474,10 @@ export async function GET(
     const lineupDiffs = await computeLineupDiff(supabase, roundNumber);
     const lineupDiff = lineupDiffs.get(ranking.team_id) ?? { ins: [], outs: [] };
 
+    // ── Injuries on the current roster ──
+    const teamInjuries = await computeTeamInjuries(supabase, roundNumber);
+    const injuries = teamInjuries.get(ranking.team_id) ?? [];
+
     // Log data for debugging
     console.log(`[Slide ${slideIndex}] Team: ${ranking.team_name}, Data:`, JSON.stringify({
       scoreThisWeek: cd?.scoreThisWeek,
@@ -652,15 +702,22 @@ export async function GET(
               )}
             </div>
 
-            {/* Ins / Outs — hidden only on R1 (no prior round to diff against) */}
+            {/* Roster status — IN / OUT / INJ. Hidden on R1 (no prior round to diff against) */}
             {roundNumber >= 2 && (
               <div style={{
                 display: 'flex', flexDirection: 'column',
-                flexShrink: 0, marginTop: 16, paddingTop: 12,
-                borderTop: '1px solid rgba(255,255,255,0.06)', gap: 6,
+                flexShrink: 0, marginTop: 20,
               }}>
-                <SatoriInOutRow label="IN" color="#00FF87" players={lineupDiff.ins} />
-                <SatoriInOutRow label="OUT" color="#FF4757" players={lineupDiff.outs} />
+                {/* Gradient divider */}
+                <div style={{
+                  display: 'flex', height: 1, marginBottom: 12,
+                  background: `linear-gradient(90deg, ${theme.border}, rgba(255,255,255,0.04) 60%, transparent)`,
+                }} />
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <SatoriRosterRow label="IN"  color="#00FF87" players={lineupDiff.ins} />
+                  <SatoriRosterRow label="OUT" color="#FF4757" players={lineupDiff.outs} />
+                  <SatoriRosterRow label="INJ" color="#FFB800" players={injuries.map(i => ({ player_name: i.player_name, duration_label: i.duration_label }))} />
+                </div>
               </div>
             )}
           </div>
