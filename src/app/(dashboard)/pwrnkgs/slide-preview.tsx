@@ -31,6 +31,8 @@ export interface SlidePreviewData {
   pwrnkgsHistory: { round: string; ranking: number }[];
   writeup: string;
   roundNumber: number;
+  ins: { player_name: string; pos: string }[];
+  outs: { player_name: string; pos: string }[];
 }
 
 // ── Theme helpers ──
@@ -219,6 +221,28 @@ function renderWriteup(text: string) {
   return elements;
 }
 
+// ── Ins / Outs row (at 540px scale) ──
+
+function InOutRow({ label, color, players }: { label: string; color: string; players: { player_name: string; pos: string }[] }) {
+  const text = players.length === 0
+    ? '—'
+    : players.map(p => p.player_name).join(' · ');
+  return (
+    <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, lineHeight: 1.25 }}>
+      <span style={{
+        fontSize: 7, fontWeight: 800, letterSpacing: 1, color,
+        fontFamily: "'JetBrains Mono', monospace", textTransform: 'uppercase' as const,
+        width: 22, flexShrink: 0,
+      }}>{label}</span>
+      <span style={{
+        fontSize: 9, fontWeight: 600, color: players.length === 0 ? '#5A6577' : color,
+        lineHeight: 1.3, flex: 1, minWidth: 0,
+        overflow: 'hidden', textOverflow: 'ellipsis',
+      }}>{text}</span>
+    </div>
+  );
+}
+
 // ── Main component ──
 
 export default function SlidePreview({ data }: { data: SlidePreviewData }) {
@@ -356,9 +380,17 @@ export default function SlidePreview({ data }: { data: SlidePreviewData }) {
           <div style={{ height: 1, background: `linear-gradient(90deg, ${theme.border}, transparent)`, marginBottom: 10, flexShrink: 0 }} />
 
           {/* Writeup */}
-          <div style={{ flex: 1, overflowY: 'auto', paddingRight: 4 }}>
+          <div style={{ flex: 1, overflowY: 'auto', paddingRight: 4, minHeight: 0 }}>
             {renderWriteup(d.writeup)}
           </div>
+
+          {/* Ins / Outs — hidden on R1 (no prior round) and when both sides are empty */}
+          {(d.ins.length > 0 || d.outs.length > 0) && (
+            <div style={{ flexShrink: 0, marginTop: 8, paddingTop: 6, borderTop: '1px solid rgba(255,255,255,0.06)', display: 'flex', flexDirection: 'column', gap: 3 }}>
+              <InOutRow label="IN" color="#00FF87" players={d.ins} />
+              <InOutRow label="OUT" color="#FF4757" players={d.outs} />
+            </div>
+          )}
         </div>
       </div>
 

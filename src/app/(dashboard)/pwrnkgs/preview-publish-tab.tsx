@@ -7,6 +7,7 @@ import { cn } from '@/lib/utils';
 import { TEAMS } from '@/lib/constants';
 import { getWorkingRound } from '@/lib/get-working-round';
 import { computeSlideData, type SlideTeamData } from '@/lib/compute-slide-data';
+import { computeLineupDiff } from '@/lib/compute-lineup-diff';
 import SlidePreview, { type SlidePreviewData } from './slide-preview';
 
 export default function PreviewPublishTab() {
@@ -69,6 +70,7 @@ export default function PreviewPublishTab() {
 
       // Compute slide data (same as Rankings Editor)
       const computed = await computeSlideData(supabase, currentRound);
+      const lineupDiffs = await computeLineupDiff(supabase, currentRound);
 
       // Fetch sparkline data
       const { data: allRankings } = await supabase
@@ -121,6 +123,8 @@ export default function PreviewPublishTab() {
           pwrnkgsHistory: sparkMap.get(r.team_id) || [],
           writeup: r.writeup || '',
           roundNumber: currentRound,
+          ins: lineupDiffs.get(r.team_id)?.ins.map(c => ({ player_name: c.player_name, pos: c.pos })) ?? [],
+          outs: lineupDiffs.get(r.team_id)?.outs.map(c => ({ player_name: c.player_name, pos: c.pos })) ?? [],
         };
 
         // Slide index: rank 10 → slide 1, rank 1 → slide 10

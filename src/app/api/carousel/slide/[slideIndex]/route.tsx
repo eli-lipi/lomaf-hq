@@ -2,6 +2,7 @@ import { ImageResponse } from 'next/og';
 import { createClient } from '@supabase/supabase-js';
 import { TEAMS, SEASON } from '@/lib/constants';
 import { computeSlideData } from '@/lib/compute-slide-data';
+import { computeLineupDiff } from '@/lib/compute-lineup-diff';
 import { readFileSync } from 'fs';
 import { join } from 'path';
 
@@ -114,6 +115,23 @@ function SatoriLineCircle({ label, rank }: { label: string; rank: number | null 
           {rank !== null ? ord(rank) : '—'}
         </div>
       </div>
+    </div>
+  );
+}
+
+function SatoriInOutRow({ label, color, players }: { label: string; color: string; players: { player_name: string }[] }) {
+  const text = players.length === 0 ? '—' : players.map(p => p.player_name).join(' · ');
+  return (
+    <div style={{ display: 'flex', alignItems: 'baseline', gap: 14 }}>
+      <div style={{
+        display: 'flex', fontSize: 14, fontWeight: 800, letterSpacing: 2, color,
+        fontFamily: "'JetBrains Mono', monospace", width: 44, flexShrink: 0,
+      }}>{label}</div>
+      <div style={{
+        display: 'flex', fontSize: 18, fontWeight: 600,
+        color: players.length === 0 ? '#5A6577' : color,
+        lineHeight: 1.35, flex: 1, minWidth: 0,
+      }}>{text}</div>
     </div>
   );
 }
@@ -406,6 +424,10 @@ export async function GET(
     const allComputedData = await computeSlideData(supabase, roundNumber);
     const cd = allComputedData.get(ranking.team_id);
 
+    // ── Lineup ins/outs vs previous round ──
+    const lineupDiffs = await computeLineupDiff(supabase, roundNumber);
+    const lineupDiff = lineupDiffs.get(ranking.team_id) ?? { ins: [], outs: [] };
+
     // Log data for debugging
     console.log(`[Slide ${slideIndex}] Team: ${ranking.team_name}, Data:`, JSON.stringify({
       scoreThisWeek: cd?.scoreThisWeek,
@@ -629,6 +651,18 @@ export async function GET(
                 <div style={{ display: 'flex', fontSize: 25, color: '#5A6577', fontStyle: 'italic' }}>No writeup yet</div>
               )}
             </div>
+
+            {/* Ins / Outs — hidden on R1 and when both sides empty */}
+            {(lineupDiff.ins.length > 0 || lineupDiff.outs.length > 0) && (
+              <div style={{
+                display: 'flex', flexDirection: 'column',
+                flexShrink: 0, marginTop: 16, paddingTop: 12,
+                borderTop: '1px solid rgba(255,255,255,0.06)', gap: 6,
+              }}>
+                <SatoriInOutRow label="IN" color="#00FF87" players={lineupDiff.ins} />
+                <SatoriInOutRow label="OUT" color="#FF4757" players={lineupDiff.outs} />
+              </div>
+            )}
           </div>
         </div>
 
