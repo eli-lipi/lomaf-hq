@@ -533,7 +533,10 @@ export async function GET(
     let writeupBodySize: number, writeupHeaderSize: number, writeupLineHeight: number, writeupSectionGap: number;
     if (totalWriteupChars > 1200)     { writeupBodySize = 19; writeupHeaderSize = 17; writeupLineHeight = 1.55; writeupSectionGap = 26; }
     else if (totalWriteupChars > 900) { writeupBodySize = 21; writeupHeaderSize = 18; writeupLineHeight = 1.60; writeupSectionGap = 30; }
-    else                              { writeupBodySize = 24; writeupHeaderSize = 21; writeupLineHeight = 1.65; writeupSectionGap = 36; }
+    else if (totalWriteupChars > 600) { writeupBodySize = 24; writeupHeaderSize = 21; writeupLineHeight = 1.65; writeupSectionGap = 36; }
+    else if (totalWriteupChars > 300) { writeupBodySize = 29; writeupHeaderSize = 24; writeupLineHeight = 1.70; writeupSectionGap = 40; }
+    else if (totalWriteupChars > 120) { writeupBodySize = 35; writeupHeaderSize = 28; writeupLineHeight = 1.75; writeupSectionGap = 44; }
+    else                              { writeupBodySize = 42; writeupHeaderSize = 32; writeupLineHeight = 1.80; writeupSectionGap = 48; }
 
     // Previous round label for movement badge
     const prevRound = sparklineData.length >= 2 ? sparklineData[sparklineData.length - 2].round : null;
@@ -675,8 +678,8 @@ export async function GET(
             {/* Divider */}
             <div style={{ display: 'flex', height: 2, background: `linear-gradient(90deg, ${theme.border}, transparent)`, marginBottom: 24, flexShrink: 0 }} />
 
-            {/* Writeup (auto-fit font size) */}
-            <div style={{ display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden' }}>
+            {/* Writeup — auto-fit font, vertically centered so short writeups fill the space */}
+            <div style={{ display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden', justifyContent: 'center' }}>
               {writeupBlocks.length > 0 ? (
                 writeupBlocks.map((block, i) => (
                   block.type === 'header' ? (

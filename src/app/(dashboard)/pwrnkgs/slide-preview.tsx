@@ -182,7 +182,10 @@ function renderWriteup(text: string) {
   let bodySize: number, headerSize: number, lineH: number, headerMargin: number;
   if (totalChars > 1200)     { bodySize = 9.5;  headerSize = 8.5;  lineH = 1.55; headerMargin = 13; }
   else if (totalChars > 900) { bodySize = 10.5; headerSize = 9;    lineH = 1.60; headerMargin = 15; }
-  else                       { bodySize = 12;   headerSize = 10.5; lineH = 1.65; headerMargin = 18; }
+  else if (totalChars > 600) { bodySize = 12;   headerSize = 10.5; lineH = 1.65; headerMargin = 18; }
+  else if (totalChars > 300) { bodySize = 14.5; headerSize = 12;   lineH = 1.70; headerMargin = 20; }
+  else if (totalChars > 120) { bodySize = 17.5; headerSize = 14;   lineH = 1.75; headerMargin = 22; }
+  else                       { bodySize = 21;   headerSize = 16;   lineH = 1.80; headerMargin = 24; }
 
   const lines = text.split('\n');
   const elements: React.ReactElement[] = [];
@@ -423,8 +426,11 @@ export default function SlidePreview({ data }: { data: SlidePreviewData }) {
           {/* Divider */}
           <div style={{ height: 1, background: `linear-gradient(90deg, ${theme.border}, transparent)`, marginBottom: 10, flexShrink: 0 }} />
 
-          {/* Writeup */}
-          <div style={{ flex: 1, overflowY: 'auto', paddingRight: 4, minHeight: 0 }}>
+          {/* Writeup — vertically centered so short writeups fill the space */}
+          <div style={{
+            flex: 1, overflowY: 'auto', paddingRight: 4, minHeight: 0,
+            display: 'flex', flexDirection: 'column', justifyContent: 'center',
+          }}>
             {renderWriteup(d.writeup)}
           </div>
 
