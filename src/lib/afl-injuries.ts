@@ -182,11 +182,31 @@ function parseUpdated(raw: string): string | null {
  * Parse the AFL.com.au injury-list HTML into a flat array of injuries.
  *
  * Strategy (the page is dead simple):
- *   1. Find every banner image whose src contains 'Editorial-GFX_Straps-Badge-Refresh_<CODE>_'.
- *   2. The next <table>...</table> below it is that club's injuries.
+ *   1. Find every banner image whose src identifies a club. Two patterns:
+ *      - Standard: 'Editorial-GFX_Straps-Badge-Refresh_<CODE>_FA*-1x'
+ *      - Indigenous banners (introduced 2026 for cultural rounds): the file
+ *        stem is the club's Indigenous name (e.g. kuwarna_2026.jpg for ADEL).
+ *        Six clubs use these and have no standard banner on the page at all,
+ *        so they must be matched explicitly or their tables are silently
+ *        dropped from the result.
+ *   2. The next <table>...</table> below the marker is that club's injuries.
  *   3. Inside the table, the last row is 'Updated: <date>' (strip with colspan).
  *   4. Every other <tr> with 3 <td> cells is an injury row.
  */
+// AFL.com.au has been rotating in Indigenous-language banner images for
+// certain clubs (e.g. for Sir Doug Nicholls Round). When a club gets one,
+// its standard 'Editorial-GFX_Straps-Badge-Refresh_<CODE>_FA*-1x' banner
+// disappears from the page — so the parser needs to also recognise these.
+// Keys are the lowercase file stem as it appears in the photo-resources URL.
+const INDIGENOUS_BANNER_STEM_TO_CODE: Record<string, string> = {
+  'kuwarna': 'ADEL',
+  'walyalup': 'FREM',
+  'narrm': 'MELB',
+  'yartapuulti': 'PA',
+  'euro-yroke': 'STK',
+  'waalitj-marawar': 'WCE',
+};
+
 export function parseInjuryListHtml(html: string): ParsedInjury[] {
   const result: ParsedInjury[] = [];
 
@@ -194,12 +214,37 @@ export function parseInjuryListHtml(html: string): ParsedInjury[] {
   // `_FA-1x`. Each banner appears ~16 times (one per srcset variant);
   // we dedupe by keeping only the LAST index per club code, which is
   // the marker immediately preceding the club's injury <table>.
-  const markerRe = /Editorial-GFX_Straps-Badge-Refresh_([A-Z]+)_FA(?:_v\d+)?-1x/g;
   const lastIndexByCode = new Map<string, number>();
-  for (const m of html.matchAll(markerRe)) {
+
+  const standardRe = /Editorial-GFX_Straps-Badge-Refresh_([A-Z]+)_FA(?:_v\d+)?-1x/g;
+  for (const m of html.matchAll(standardRe)) {
     lastIndexByCode.set(m[1], m.index ?? 0);
   }
+
+  // Indigenous-named banners. Pattern: '<stem>_<year>.jpg' inside the
+  // photo-resources URL. Track the LAST occurrence per stem just like
+  // the standard banners.
+  for (const [stem, code] of Object.entries(INDIGENOUS_BANNER_STEM_TO_CODE)) {
+    const re = new RegExp(`/${stem}_\\d{4}\\.jpg`, 'g');
+    let lastIdx: number | null = null;
+    for (const m of html.matchAll(re)) {
+      lastIdx = m.index ?? 0;
+    }
+    if (lastIdx !== null) lastIndexByCode.set(code, lastIdx);
+  }
+
   if (lastIndexByCode.size === 0) return result;
+
+  // Sanity check: the AFL has 18 clubs. If we detect fewer, AFL has likely
+  // swapped in a new banner pattern (Indigenous-language or otherwise) for
+  // the missing club(s). Log which ones are missing so the gap is visible
+  // in Vercel logs without needing the slide bug to resurface first.
+  if (lastIndexByCode.size < 18) {
+    const all = Object.keys(CLUB_NAME_BY_CODE);
+    const missing = all.filter(c => !lastIndexByCode.has(c));
+    console.warn(`[afl-injuries] Detected only ${lastIndexByCode.size}/18 club section markers. Missing: ${missing.join(', ')}. AFL may have introduced a new banner pattern.`);
+  }
+
   const markers = Array.from(lastIndexByCode.entries())
     .map(([code, index]) => ({ code, index }))
     .sort((a, b) => a.index - b.index);
