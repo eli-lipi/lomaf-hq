@@ -1,16 +1,20 @@
 /**
- * "Who's out for each team this round" — driven by the lineup CSV
- * (player_rounds.points IS NULL ⇒ player did not take the field),
- * with afl_injuries used only to add a "weeks out" badge where one
- * is known. Source-of-truth is player_rounds because the AFL injury
- * scrape is incomplete: well-known injuries like Salem/Rozee/Bergman
- * are routinely missing from afl_injuries, while players who passed
- * a fitness test and played (e.g. Curnow) can linger as stale entries.
+ * "Who's injured on each team's roster this round" — the intersection of:
+ *   1. afl_injuries  (the AFL's official injury list — comprehensive after
+ *      the 18-club Indigenous-banner parsing fix)
+ *   2. player_rounds with points IS NULL for the round (didn't take the
+ *      field — so a player who passed a fitness test and played is dropped
+ *      immediately, e.g. Curnow scoring 27pts in R10 despite still being
+ *      listed as "Test" in afl_injuries)
+ *
+ * Players who simply weren't selected (omissions, rests, retirements,
+ * AFL byes) have points IS NULL but no afl_injuries row — they're
+ * correctly excluded, so Treloar / Pendlebury / etc. don't show up.
  */
 
 export interface InjuredPlayer {
   player_name: string;
-  duration_label: string; // '' when unknown
+  duration_label: string;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -41,9 +45,8 @@ function formatDuration(inj: {
 }
 
 // Sort key: numeric weeks first (ascending), then status keywords,
-// then unknown (no duration), then by name.
+// then by name.
 function weight(label: string): number {
-  if (!label) return 200;
   if (/^\d+(-\d+)?w$/.test(label)) {
     const n = parseInt(label, 10);
     return isFinite(n) ? n : 99;
@@ -86,33 +89,34 @@ export async function computeTeamInjuries(
   const dnp = roster.filter(r => r.points === null);
   if (dnp.length === 0) return result;
 
-  // Look up duration context from afl_injuries (best-effort).
+  // Look up the DNP players in afl_injuries. Anyone not present is treated
+  // as "not injured" — omissions, rests, byes, retirements all land here.
   const playerIds = Array.from(new Set(dnp.map(r => r.player_id).filter((id): id is number => id != null)));
+  if (playerIds.length === 0) return result;
+
   type InjuryRow = {
     player_id: number | null;
     return_min_weeks: number | null;
     return_max_weeks: number | null;
     return_status: string | null;
   };
-  let injuryRows: InjuryRow[] = [];
-  if (playerIds.length > 0) {
-    const { data } = await supabase
-      .from('afl_injuries')
-      .select('player_id, return_min_weeks, return_max_weeks, return_status')
-      .in('player_id', playerIds);
-    injuryRows = (data ?? []) as InjuryRow[];
-  }
+  const { data: injuryRowsData } = await supabase
+    .from('afl_injuries')
+    .select('player_id, return_min_weeks, return_max_weeks, return_status')
+    .in('player_id', playerIds);
   const byPlayer = new Map<number, InjuryRow>();
-  for (const inj of injuryRows) {
+  for (const inj of (injuryRowsData ?? []) as InjuryRow[]) {
     if (inj.player_id != null) byPlayer.set(inj.player_id, inj);
   }
 
   for (const row of dnp) {
-    const inj = row.player_id != null ? byPlayer.get(row.player_id) : undefined;
+    if (row.player_id == null) continue;
+    const inj = byPlayer.get(row.player_id);
+    if (!inj) continue; // DNP but not on the AFL injury list — likely a selection call, not an injury
     if (!result.has(row.team_id)) result.set(row.team_id, []);
     result.get(row.team_id)!.push({
       player_name: row.player_name,
-      duration_label: inj ? formatDuration(inj) : '',
+      duration_label: formatDuration(inj),
     });
   }
 
