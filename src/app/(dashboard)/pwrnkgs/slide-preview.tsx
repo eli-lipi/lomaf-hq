@@ -384,8 +384,8 @@ export default function SlidePreview({ data }: { data: SlidePreviewData }) {
             {renderWriteup(d.writeup)}
           </div>
 
-          {/* Ins / Outs — hidden on R1 (no prior round) and when both sides are empty */}
-          {(d.ins.length > 0 || d.outs.length > 0) && (
+          {/* Ins / Outs — hidden only on R1 (no prior round to diff against) */}
+          {d.roundNumber >= 2 && (
             <div style={{ flexShrink: 0, marginTop: 8, paddingTop: 6, borderTop: '1px solid rgba(255,255,255,0.06)', display: 'flex', flexDirection: 'column', gap: 3 }}>
               <InOutRow label="IN" color="#00FF87" players={d.ins} />
               <InOutRow label="OUT" color="#FF4757" players={d.outs} />

@@ -652,8 +652,8 @@ export async function GET(
               )}
             </div>
 
-            {/* Ins / Outs — hidden on R1 and when both sides empty */}
-            {(lineupDiff.ins.length > 0 || lineupDiff.outs.length > 0) && (
+            {/* Ins / Outs — hidden only on R1 (no prior round to diff against) */}
+            {roundNumber >= 2 && (
               <div style={{
                 display: 'flex', flexDirection: 'column',
                 flexShrink: 0, marginTop: 16, paddingTop: 12,
