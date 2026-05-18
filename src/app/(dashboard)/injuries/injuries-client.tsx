@@ -9,6 +9,13 @@ import { TrendingDown, TrendingUp, AlertTriangle, Clock } from 'lucide-react';
 
 type ViewMode = 'lomaf' | 'afl';
 
+// True if the lineups CSV shows the player took the field in the current
+// round. Used both for the "Played" badge and to push these players to
+// the bottom of each section since they're already cleared.
+function playedInRound(player: InjuryListPlayer, round: number): boolean {
+  return player.rounds.some((r) => r.round === round && r.points !== null);
+}
+
 function formatRelative(iso: string | null): string {
   if (!iso) return 'Never';
   const t = new Date(iso).getTime();
@@ -176,8 +183,18 @@ function ByLomafView({
       if (!m.has(p.lomaf_team_id)) m.set(p.lomaf_team_id, []);
       m.get(p.lomaf_team_id)!.push(p);
     }
+    // Within each team: push "Played this round" entries to the bottom
+    // so the genuinely-still-out players surface at the top.
+    for (const list of m.values()) {
+      list.sort((a, b) => {
+        const ap = playedInRound(a, currentRound) ? 1 : 0;
+        const bp = playedInRound(b, currentRound) ? 1 : 0;
+        if (ap !== bp) return ap - bp;
+        return a.player_name.localeCompare(b.player_name);
+      });
+    }
     return m;
-  }, [onLomaf]);
+  }, [onLomaf, currentRound]);
 
   // v12.4 — sort coaches by total projAvg lost (highest first), so the
   // worst-hit roster surfaces at the top. Falls back to count if the
@@ -263,17 +280,21 @@ function OffRosterSection({
 }) {
   const [expanded, setExpanded] = useState(false);
   if (players.length === 0) return null;
-  // v12.4 — sort waiver-pool injuries by projAvg desc so the highest-
-  // value targets surface first. Tie-break on player_name.
+  // Played-this-round entries drop to the bottom; within the still-out
+  // group, sort by projAvg desc so the highest-value waiver targets
+  // surface first. Tie-break on player_name.
   const sorted = useMemo(
     () =>
       [...players].sort((a, b) => {
+        const ap = playedInRound(a, currentRound) ? 1 : 0;
+        const bp = playedInRound(b, currentRound) ? 1 : 0;
+        if (ap !== bp) return ap - bp;
         const av = a.proj_avg ?? -1;
         const bv = b.proj_avg ?? -1;
         if (bv !== av) return bv - av;
         return a.player_name.localeCompare(b.player_name);
       }),
-    [players]
+    [players, currentRound]
   );
   return (
     <section className="bg-card/40 border border-border rounded-lg p-5">
@@ -312,8 +333,17 @@ function ByAflView({ data, currentRound }: { data: InjuryListResponse; currentRo
       if (!m.has(p.club_code)) m.set(p.club_code, []);
       m.get(p.club_code)!.push(p);
     }
+    // Played-this-round entries drop to the bottom of each club.
+    for (const list of m.values()) {
+      list.sort((a, b) => {
+        const ap = playedInRound(a, currentRound) ? 1 : 0;
+        const bp = playedInRound(b, currentRound) ? 1 : 0;
+        if (ap !== bp) return ap - bp;
+        return a.player_name.localeCompare(b.player_name);
+      });
+    }
     return m;
-  }, [data]);
+  }, [data, currentRound]);
   const codes = Array.from(byClub.keys()).sort((a, b) => {
     const aName = byClub.get(a)![0].club_name;
     const bName = byClub.get(b)![0].club_name;
@@ -357,11 +387,17 @@ function PlayerRow({
   compact?: boolean;
   currentRound: number;
 }) {
+  // If the lineups CSV shows the player took the field in the current
+  // round, surface a "Played" tag — the AFL list lags by up to a week
+  // after a return so this is the earliest signal that the listing is
+  // out of date.
+  const playedThisRound = playedInRound(player, currentRound);
   return (
     <div
       className={cn(
         'flex items-start gap-3 px-3 py-3 rounded-md border border-border',
-        compact ? '' : 'bg-background'
+        compact ? '' : 'bg-background',
+        playedThisRound && 'opacity-70'
       )}
     >
       <div className="min-w-0 flex-1">
@@ -375,6 +411,11 @@ function PlayerRow({
           </span>
           {showLomaf && player.lomaf_team_name && (
             <span className="text-[11px] text-primary">→ {player.lomaf_team_name}</span>
+          )}
+          {playedThisRound && (
+            <span className="text-[11px] font-semibold px-1.5 py-0.5 rounded-md bg-green-50 text-green-700 border border-green-200">
+              R{currentRound} · Played
+            </span>
           )}
         </div>
         <p className="text-xs text-muted-foreground mt-0.5">
