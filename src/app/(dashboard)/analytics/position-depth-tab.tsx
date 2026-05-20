@@ -30,9 +30,13 @@ function classifyTier(avg: number): TierId {
 // Hierarchy (user's rule): a player with any FWD eligibility resolves
 // as Forward; otherwise DEF wins; otherwise RUC; otherwise MID. This
 // matches AFL Fantasy convention where DPP players are usually played
-// in their scarcer slot (forwards/rucks are scarce).
+// in their scarcer slot (forwards / rucks are scarce).
 type Position = 'FWD' | 'DEF' | 'RUC' | 'MID';
 const POSITION_ORDER: Position[] = ['FWD', 'DEF', 'RUC', 'MID'];
+const ALL_POSITIONS = new Set<Position>(['DEF', 'MID', 'RUC', 'FWD']);
+// AFL Fantasy display convention — list in DEF, MID, RUC, FWD order
+// so DPPs render as "MID/FWD", "DEF/MID", etc. (not "FWD/MID").
+const POSITION_DISPLAY_ORDER: Position[] = ['DEF', 'MID', 'RUC', 'FWD'];
 
 function classifyPosition(raw: string): Position {
   const parts = raw.toUpperCase().split(/[\s/,|]+/).map((s) => s.trim()).filter(Boolean);
@@ -40,6 +44,30 @@ function classifyPosition(raw: string): Position {
   if (parts.some((p) => p.startsWith('DEF') || p.startsWith('BAC'))) return 'DEF';
   if (parts.some((p) => p.startsWith('RUC') || p.startsWith('RUK'))) return 'RUC';
   return 'MID';
+}
+
+/**
+ * Build a canonical eligibility string from any combination of inputs:
+ *   - The draft-pick position (pre-season eligibility, may be stale)
+ *   - Lineup slots the player has actually been played in this season
+ *     (catches mid-season position grants — e.g. a MID-only draftee
+ *     who gained FWD eligibility after a few games up front)
+ *
+ * Returns a slash-joined string in DEF/MID/RUC/FWD order, e.g.
+ *   "MID/FWD", "DEF/MID/FWD", "RUC", "DEF/FWD". Empty input → "MID".
+ */
+function deriveEligibility(draftRaw: string, observedSlots: Set<string>): string {
+  const found = new Set<Position>();
+  for (const raw of draftRaw.toUpperCase().split(/[\s/,|]+/)) {
+    const t = raw.trim();
+    if ((ALL_POSITIONS as Set<string>).has(t)) found.add(t as Position);
+  }
+  for (const slot of observedSlots) {
+    const t = slot.trim().toUpperCase();
+    if ((ALL_POSITIONS as Set<string>).has(t)) found.add(t as Position);
+  }
+  if (found.size === 0) return 'MID';
+  return POSITION_DISPLAY_ORDER.filter((p) => found.has(p)).join('/');
 }
 
 const POSITION_META: Record<Position, { label: string; color: string; bg: string }> = {
@@ -101,9 +129,12 @@ export default function PositionDepthTab() {
         offset += 1000;
       }
 
-      // 3. Position lookup — draft_picks is the canonical source. We
+      // 3. Position lookup — draft_picks is the pre-season source. We
       //    keep the first non-empty entry per player_id (dupes happen
-      //    when a player gets traded mid-season).
+      //    when a player gets traded mid-season). The draft positions
+      //    can be STALE — players gain DPP eligibility through the
+      //    season and the draft CSV doesn't reflect that — so step 4
+      //    augments these with actually-observed lineup slots.
       const { data: draftPicks } = await supabase
         .from('draft_picks')
         .select('player_id, position');
@@ -114,7 +145,32 @@ export default function PositionDepthTab() {
         }
       }
 
-      // 4. Season averages — `players.avg_pts` is the league-canonical
+      // 4. Lineup-slot history across ALL rounds — every position
+      //    slot a player has been played in this season reveals an
+      //    eligibility. Catches mid-season DPP grants (e.g. Chad
+      //    Warner gaining FWD after the draft). UTL/BN/EMG are
+      //    position-agnostic slots so we ignore them; only DEF/MID/
+      //    RUC/FWD slot strings reveal real eligibility.
+      const slotsByPlayer = new Map<number, Set<string>>();
+      let slotOffset = 0;
+      while (true) {
+        const { data: batch } = await supabase
+          .from('player_rounds')
+          .select('player_id, pos')
+          .range(slotOffset, slotOffset + 999);
+        if (!batch || batch.length === 0) break;
+        for (const r of batch) {
+          if (!r.pos || r.player_id == null) continue;
+          const p = String(r.pos).toUpperCase().trim();
+          if (!ALL_POSITIONS.has(p as Position)) continue;
+          if (!slotsByPlayer.has(r.player_id)) slotsByPlayer.set(r.player_id, new Set());
+          slotsByPlayer.get(r.player_id)!.add(p);
+        }
+        if (batch.length < 1000) break;
+        slotOffset += 1000;
+      }
+
+      // 5. Season averages — `players.avg_pts` is the league-canonical
       //    season-to-date average (same field byes/injuries use).
       const { data: playersData } = await supabase
         .from('players')
@@ -124,10 +180,12 @@ export default function PositionDepthTab() {
         if (p.avg_pts != null) avgByPlayer.set(p.player_id, p.avg_pts);
       }
 
-      // 5. Assemble.
+      // 6. Assemble.
       const out: RosterRow[] = [];
       for (const r of rosters) {
-        const rawPosition = posByPlayer.get(r.player_id) ?? 'MID';
+        const draftRaw = posByPlayer.get(r.player_id) ?? '';
+        const observedSlots = slotsByPlayer.get(r.player_id) ?? new Set<string>();
+        const rawPosition = deriveEligibility(draftRaw, observedSlots);
         const avg = avgByPlayer.get(r.player_id) ?? 0;
         out.push({
           team_id: r.team_id,
