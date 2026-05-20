@@ -121,36 +121,48 @@ export interface VerifyRoundResult {
 export async function verifyRoundReady(supabase: SB, round: number): Promise<VerifyRoundResult> {
   const checks: RoundCheck[] = [];
 
-  // 0. Players directory — a Players CSV upload row tagged with this
-  //    round must exist. Without it, every downstream feature
-  //    (positions, averages, ownership context) reads stale data from
-  //    the previous round's snapshot, which has caused real
-  //    misclassifications (Howe → MID, Stanley → MID, etc.). Gate is
-  //    placed first because the upload happens first chronologically
-  //    in the round-rhythm.
+  // 0. Players directory — must be fresher than the most recent
+  //    round_advances row. Drives positions / averages / ownership
+  //    for every downstream feature; if it's stale, you get the
+  //    Howe-as-MID / Walsh-at-101 / etc. class of bug. We check the
+  //    players table directly (not csv_uploads) because the upsert
+  //    that lands the upload is the unambiguous source of freshness —
+  //    csv_uploads is just an audit log.
   {
-    const { data: rows } = await supabase
-      .from('csv_uploads')
+    const { data: latestAdvance } = await supabase
+      .from('round_advances')
+      .select('advanced_at')
+      .order('advanced_at', { ascending: false })
+      .limit(1);
+    const advancedAt = ((latestAdvance ?? [])[0] as { advanced_at?: string } | undefined)?.advanced_at ?? null;
+
+    const { data: latestUpload } = await supabase
+      .from('players')
       .select('uploaded_at')
-      .eq('round_number', round)
-      .eq('upload_type', 'players')
       .order('uploaded_at', { ascending: false })
       .limit(1);
-    const latest = (rows ?? [])[0] as { uploaded_at?: string } | undefined;
-    if (!latest) {
+    const uploadedAt = ((latestUpload ?? [])[0] as { uploaded_at?: string } | undefined)?.uploaded_at ?? null;
+
+    if (!uploadedAt) {
       checks.push({
         key: 'players-directory',
         label: 'Players directory uploaded',
         status: 'missing',
-        detail: `Upload the Players CSV for R${round} on /upload before advancing.`,
+        detail: `No Players CSV uploaded yet. Drop it on /upload before advancing R${round}.`,
+      });
+    } else if (advancedAt && new Date(uploadedAt).getTime() < new Date(advancedAt).getTime()) {
+      checks.push({
+        key: 'players-directory',
+        label: 'Players directory uploaded',
+        status: 'missing',
+        detail: `Players CSV is stale (uploaded ${new Date(uploadedAt).toLocaleString()}, before the latest round advance at ${new Date(advancedAt).toLocaleString()}). Upload a fresh one for R${round}.`,
       });
     } else {
-      const when = latest.uploaded_at ? new Date(latest.uploaded_at).toLocaleString() : 'recently';
       checks.push({
         key: 'players-directory',
         label: 'Players directory uploaded',
         status: 'ok',
-        detail: `Tagged for R${round}, uploaded ${when}.`,
+        detail: `Uploaded ${new Date(uploadedAt).toLocaleString()}.`,
       });
     }
   }
