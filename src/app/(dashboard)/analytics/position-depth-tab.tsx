@@ -184,33 +184,57 @@ export default function PositionDepthTab() {
         }
       }
 
-      // Observed lineup slots — augments draft positions with any
-      // mid-season DPP grants the coach has actually deployed.
+      // Single pass over all player_rounds — collects TWO things at
+      // once to avoid a second round-trip:
+      //   1. Observed lineup slots (DEF/MID/RUC/FWD) per player, used
+      //      to derive current DPP eligibility (catches mid-season
+      //      position grants the draft CSV doesn't know about).
+      //   2. Live per-round scores per player, summed below into a
+      //      season-to-date average. We compute this from raw scores
+      //      instead of reading `players.avg_pts` because that field
+      //      is populated by a CSV upload and lags real-time data —
+      //      between uploads (or during a live round before the CSV
+      //      is re-imported) it can drift several points from the
+      //      actual season average that Keeper shows.
       const slotsByPlayer = new Map<number, Set<string>>();
-      let slotOffset = 0;
+      const scoresByPlayer = new Map<number, number[]>();
+      let pass2Offset = 0;
       while (true) {
         const { data: batch } = await supabase
           .from('player_rounds')
-          .select('player_id, pos')
-          .range(slotOffset, slotOffset + 999);
+          .select('player_id, pos, points')
+          .range(pass2Offset, pass2Offset + 999);
         if (!batch || batch.length === 0) break;
         for (const r of batch) {
-          if (!r.pos || r.player_id == null) continue;
-          const p = String(r.pos).toUpperCase().trim();
-          if (!ALL_POSITIONS.has(p as Position)) continue;
-          if (!slotsByPlayer.has(r.player_id)) slotsByPlayer.set(r.player_id, new Set());
-          slotsByPlayer.get(r.player_id)!.add(p);
+          if (r.player_id == null) continue;
+          // Position eligibility from the slot they were played in.
+          if (r.pos) {
+            const p = String(r.pos).toUpperCase().trim();
+            if (ALL_POSITIONS.has(p as Position)) {
+              if (!slotsByPlayer.has(r.player_id)) slotsByPlayer.set(r.player_id, new Set());
+              slotsByPlayer.get(r.player_id)!.add(p);
+            }
+          }
+          // Score accumulation — only count rounds the player
+          // actually scored in (points > 0). Zeros / nulls mean
+          // 'did not play' for AFL purposes (bye, injury, omitted)
+          // and shouldn't drag the season average down.
+          if (r.points != null) {
+            const s = Number(r.points);
+            if (Number.isFinite(s) && s > 0) {
+              if (!scoresByPlayer.has(r.player_id)) scoresByPlayer.set(r.player_id, []);
+              scoresByPlayer.get(r.player_id)!.push(s);
+            }
+          }
         }
         if (batch.length < 1000) break;
-        slotOffset += 1000;
+        pass2Offset += 1000;
       }
 
-      const { data: playersData } = await supabase
-        .from('players')
-        .select('player_id, avg_pts');
       const avgByPlayer = new Map<number, number>();
-      for (const p of playersData ?? []) {
-        if (p.avg_pts != null) avgByPlayer.set(p.player_id, p.avg_pts);
+      for (const [pid, scores] of scoresByPlayer) {
+        if (scores.length === 0) continue;
+        avgByPlayer.set(pid, scores.reduce((a, b) => a + b, 0) / scores.length);
       }
 
       const out: RosterRow[] = [];
