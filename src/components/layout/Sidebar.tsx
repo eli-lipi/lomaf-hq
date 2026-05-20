@@ -77,17 +77,15 @@ const NAV_ITEMS: NavItem[] = [
     icon: HeartPulse,
   },
   {
-    // Phase 1 — admin-only while we validate the data + UI. Once approved
-    // we drop `adminOnly` and remove the role gate in byes/page.tsx.
+    // Open to all coaches (post-phase-1).
     href: '/byes',
     label: 'Byes',
     icon: CalendarOff,
-    adminOnly: true,
     children: [
-      { href: '/byes?tab=overview', label: 'Overview', adminOnly: true },
-      { href: '/byes?tab=fixture', label: 'Fixture', adminOnly: true },
-      { href: '/byes?tab=opposition', label: 'Opposition', adminOnly: true },
-      { href: '/byes?tab=my-team', label: 'My Team', adminOnly: true },
+      { href: '/byes?tab=overview', label: 'Overview' },
+      { href: '/byes?tab=fixture', label: 'Fixture' },
+      { href: '/byes?tab=opposition', label: 'Opposition' },
+      { href: '/byes?tab=my-team', label: 'My Team' },
     ],
   },
   {
