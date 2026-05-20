@@ -174,13 +174,41 @@ export default function PositionDepthTab() {
         offset += 1000;
       }
 
+      // Position eligibility comes from THREE sources, unioned
+      // together — none of them is complete on its own:
+      //   1. draft_picks.position  — pre-season draft snapshot. Misses
+      //      waiver pickups (who weren't drafted) and is stale for
+      //      anyone who picked up DPP eligibility post-draft.
+      //   2. players.position      — refreshed every Keeper CSV upload.
+      //      Has current eligibility for every player in the league,
+      //      including waiver pickups, but only as accurate as the
+      //      latest upload.
+      //   3. player_rounds.pos     — actual lineup slots used this
+      //      season. Catches mid-season DPP grants the coach has
+      //      already deployed, but misses bench-warmers (whose only
+      //      rows are BN/EMG, which we skip as position-agnostic).
+      //
+      // Concretely: Jeremy Howe (DEF) and Rhys Stanley (RUC) were
+      // both showing as MID because they're waiver pickups (no
+      // draft_picks row) and have been benched all season (no DEF/RUC
+      // slot history). Adding players.position closes that gap.
       const { data: draftPicks } = await supabase
         .from('draft_picks')
         .select('player_id, position');
-      const posByPlayer = new Map<number, string>();
+      const draftPosByPlayer = new Map<number, string>();
       for (const dp of draftPicks ?? []) {
-        if (dp.position && !posByPlayer.has(dp.player_id)) {
-          posByPlayer.set(dp.player_id, dp.position);
+        if (dp.position && !draftPosByPlayer.has(dp.player_id)) {
+          draftPosByPlayer.set(dp.player_id, dp.position);
+        }
+      }
+
+      const { data: playerPositions } = await supabase
+        .from('players')
+        .select('player_id, position');
+      const livePosByPlayer = new Map<number, string>();
+      for (const p of playerPositions ?? []) {
+        if (p.position && !livePosByPlayer.has(p.player_id)) {
+          livePosByPlayer.set(p.player_id, p.position);
         }
       }
 
@@ -239,9 +267,18 @@ export default function PositionDepthTab() {
 
       const out: RosterRow[] = [];
       for (const r of rosters) {
-        const draftRaw = posByPlayer.get(r.player_id) ?? '';
+        // Combine draft + live position strings so deriveEligibility
+        // sees every eligibility either source knows about. Empty
+        // strings get filtered inside deriveEligibility's tokenizer
+        // so joining unconditionally is safe.
+        const combinedRaw = [
+          draftPosByPlayer.get(r.player_id) ?? '',
+          livePosByPlayer.get(r.player_id) ?? '',
+        ]
+          .filter(Boolean)
+          .join('/');
         const observedSlots = slotsByPlayer.get(r.player_id) ?? new Set<string>();
-        const rawPosition = deriveEligibility(draftRaw, observedSlots);
+        const rawPosition = deriveEligibility(combinedRaw, observedSlots);
         const avg = avgByPlayer.get(r.player_id) ?? 0;
         out.push({
           team_id: r.team_id,
