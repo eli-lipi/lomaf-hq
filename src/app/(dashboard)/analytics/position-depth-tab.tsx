@@ -687,15 +687,28 @@ function BreakdownContent({
       {players.length === 0 ? (
         <p className="px-5 pb-3 text-xs italic text-muted-foreground">No players in this slice.</p>
       ) : (
-        <ul className="px-5 pb-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-x-4 gap-y-1.5">
+        <ul className="px-5 pb-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-x-5 gap-y-1.5">
           {players.map((p) => {
             const teamColor = TEAM_COLOR_MAP[p.team_id] ?? '#6B7280';
             const isDpp = /[/,]|\s/.test(p.rawPosition.trim());
             return (
-              <li key={`${p.team_id}-${p.player_id}`} className="flex items-center gap-2 text-xs leading-snug min-w-0">
-                {/* Only render team marker when the selection spans
-                    multiple teams. For cell / row selections the team
-                    is implicit from the row above. */}
+              <li
+                key={`${p.team_id}-${p.player_id}`}
+                className="flex items-center gap-2 text-xs leading-snug min-w-0"
+              >
+                {/* Avg score leads the line — tight to the name, so
+                    there's no awkward gap. Right-aligned in a fixed
+                    box so all numbers stack vertically for easy
+                    column-scanning. */}
+                <span
+                  className="text-sm font-bold tabular-nums shrink-0 w-7 text-right"
+                  style={{ color: meta.color }}
+                >
+                  {p.avg}
+                </span>
+                {/* Team marker only shows for multi-team selections
+                    (column / grand total). Cell / row selections
+                    inherit team identity from the anchoring row. */}
                 {!isSingleTeam && (
                   <>
                     <span
@@ -705,22 +718,23 @@ function BreakdownContent({
                       title={TEAM_SHORT_NAMES[p.team_id] ?? ''}
                     />
                     <span
-                      className="text-[10px] font-semibold uppercase tracking-wider shrink-0 w-12 truncate"
+                      className="text-[10px] font-semibold uppercase tracking-wider shrink-0 w-10 truncate"
                       style={{ color: teamColor }}
                     >
                       {TEAM_SHORT_NAMES[p.team_id] ?? ''}
                     </span>
                   </>
                 )}
-                <span className="truncate flex-1 text-foreground">{p.player_name}</span>
+                {/* Name takes whatever space remains; truncate with
+                    ellipsis if the grid cell isn't wide enough. */}
+                <span className="truncate min-w-0 flex-1 text-foreground">
+                  {p.player_name}
+                </span>
                 {isDpp && (
                   <span className="text-[9px] font-semibold uppercase tracking-wider px-1 py-px rounded bg-muted text-muted-foreground shrink-0">
                     {p.rawPosition}
                   </span>
                 )}
-                <span className="text-xs font-bold tabular-nums shrink-0 w-8 text-right" style={{ color: meta.color }}>
-                  {p.avg}
-                </span>
               </li>
             );
           })}
