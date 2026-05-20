@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Trophy, BarChart3, ArrowLeftRight, Settings, Menu, X, ChevronDown, ChevronRight, HeartPulse, CalendarOff } from 'lucide-react';
+import { Trophy, BarChart3, ArrowLeftRight, Settings, Menu, X, ChevronDown, ChevronRight, HeartPulse, CalendarOff, Upload } from 'lucide-react';
 import { useState } from 'react';
 import { cn } from '@/lib/utils';
 import type { AppUser } from '@/lib/auth';
@@ -102,6 +102,11 @@ const NAV_ITEMS: NavItem[] = [
       // v14.0 — Player Directory: canonical source of truth for
       // positions / averages, refreshed via the weekly Players CSV.
       { href: '/admin/player-directory', label: 'Player Directory', adminOnly: true },
+      // v14.0 — Data Upload available directly so the admin can
+      // refresh the Player Directory (or any other CSV) outside the
+      // round-advance ceremony. Round Control still embeds the same
+      // uploader for the ceremony flow.
+      { href: '/upload', label: 'Data Upload', adminOnly: true },
       { href: '/settings?tab=photos', label: 'Coach Photos', adminOnly: true },
       { href: '/settings?tab=adjustments', label: 'Score Adjustments', adminOnly: true },
       { href: '/settings?tab=prompts', label: 'AI Prompts', adminOnly: true },
