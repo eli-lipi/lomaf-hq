@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, Fragment } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { TEAMS } from '@/lib/constants';
@@ -450,8 +450,15 @@ function PositionMatrix({
             {sortedTeams.map((team) => {
               const teamColor = TEAM_COLOR_MAP[team.team_id] ?? '#6B7280';
               const total = rowTotals.get(team.team_id) ?? 0;
+              // Whether this team's row should be followed by an
+              // inline breakdown panel (cell or row selection that
+              // targets this team).
+              const inlineForThisTeam =
+                (selection?.kind === 'cell' || selection?.kind === 'row') &&
+                selection.teamId === team.team_id;
               return (
-                <tr key={team.team_id} className="border-b border-border/60 last:border-b-0 hover:bg-muted/20">
+                <Fragment key={team.team_id}>
+                <tr className="border-b border-border/60 last:border-b-0 hover:bg-muted/20">
                   <td className="px-4 py-2.5">
                     <div className="flex items-center gap-2 min-w-0">
                       <span aria-hidden className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: teamColor }} />
@@ -517,6 +524,22 @@ function PositionMatrix({
                     {total > 0 ? total : ''}
                   </td>
                 </tr>
+                {/* Inline breakdown — sits directly under the clicked
+                    team's row so the eye doesn't have to travel. Only
+                    shows for cell / row selections (single team). */}
+                {inlineForThisTeam && (
+                  <tr className="border-b border-border/60 last:border-b-0">
+                    <td colSpan={TIERS.length + 2} className="p-0">
+                      <BreakdownContent
+                        selection={selection!}
+                        matrix={matrix}
+                        meta={meta}
+                        onClose={() => setSelection(null)}
+                      />
+                    </td>
+                  </tr>
+                )}
+                </Fragment>
               );
             })}
             {/* Bottom totals row — tier totals + grand total. Stronger
@@ -559,27 +582,43 @@ function PositionMatrix({
                 {grandTotal > 0 ? grandTotal : ''}
               </td>
             </tr>
+            {/* Column / grand-total selections don't have a single
+                team row to anchor to, so they render directly below
+                the Tier Total band. */}
+            {(selection?.kind === 'col' || selection?.kind === 'all') && (
+              <tr>
+                <td colSpan={TIERS.length + 2} className="p-0">
+                  <BreakdownContent
+                    selection={selection}
+                    matrix={matrix}
+                    meta={meta}
+                    onClose={() => setSelection(null)}
+                  />
+                </td>
+              </tr>
+            )}
           </tbody>
         </table>
       </div>
       )}
-      {/* Breakdown panel — visible when something is selected and the
-          section is expanded. Lives inside the section card so the
-          matrix and its drill-down stay visually attached. */}
-      {!collapsed && selection && (
-        <BreakdownPanel
-          selection={selection}
-          matrix={matrix}
-          meta={meta}
-          onClose={() => setSelection(null)}
-        />
+      {/* Insights footer — high-level takeaways computed from the
+          matrix. Hidden when collapsed; always shown when expanded
+          (independent of selection so coaches keep the overview
+          while drilling in). */}
+      {!collapsed && (
+        <InsightsFooter matrix={matrix} meta={meta} />
       )}
     </section>
   );
 }
 
-// ─── Breakdown panel ────────────────────────────────────────────────────────
-function BreakdownPanel({
+// ─── Breakdown content ──────────────────────────────────────────────────────
+// Renders inside a <td colSpan={...}> in the table — sits directly
+// below the clicked row (cell / row selection) or below the Tier
+// Total band (col / all selection). Team labels are dropped when the
+// selection only spans one team, since that context is implicit
+// from the row above.
+function BreakdownContent({
   selection,
   matrix,
   meta,
@@ -590,6 +629,11 @@ function BreakdownPanel({
   meta: (typeof POSITION_META)[Position];
   onClose: () => void;
 }) {
+  // True when the selection spans only one team — we drop the
+  // team-color dot and short-code from each player line since the
+  // anchoring row already makes it obvious whose roster this is.
+  const isSingleTeam = selection.kind === 'cell' || selection.kind === 'row';
+
   // Resolve which (team, tier) pairs are in scope, then flatten to a
   // sorted list of player rows.
   const players = useMemo(() => {
@@ -607,32 +651,30 @@ function BreakdownPanel({
       }
     }
     return out.sort((a, b) => {
-      // Highest average first across the whole list.
       if (b.avg !== a.avg) return b.avg - a.avg;
       return a.player_name.localeCompare(b.player_name);
     });
   }, [selection, matrix]);
 
-  // Build the human title from the selection shape.
+  // Build a compact title — drop redundant team info when single-team.
   const title = useMemo(() => {
     if (selection.kind === 'all') return `All ${meta.label.toLowerCase()} (${players.length})`;
-    if (selection.kind === 'row') {
-      const team = TEAMS.find((t) => t.team_id === selection.teamId);
-      return `${team?.team_name ?? '?'} — ${meta.label.toLowerCase()} (${players.length})`;
-    }
+    if (selection.kind === 'row') return `All tiers (${players.length})`;
     if (selection.kind === 'col') {
       const tier = TIERS.find((t) => t.id === selection.tier);
       return `${meta.label} in ${tier?.label ?? '?'} (${players.length})`;
     }
-    const team = TEAMS.find((t) => t.team_id === selection.teamId);
     const tier = TIERS.find((t) => t.id === selection.tier);
-    return `${team?.team_name ?? '?'} — ${meta.label.toLowerCase()} ${tier?.label ?? '?'} (${players.length})`;
+    return `${tier?.label ?? '?'} (${players.length})`;
   }, [selection, meta.label, players.length]);
 
   return (
-    <div className="border-t border-border bg-muted/10">
-      <div className="px-5 py-3 flex items-baseline justify-between gap-2 flex-wrap">
-        <p className="text-xs font-bold uppercase tracking-wider" style={{ color: meta.color }}>
+    <div
+      className="bg-muted/10 border-l-4"
+      style={{ borderLeftColor: meta.color }}
+    >
+      <div className="px-5 py-2.5 flex items-baseline justify-between gap-2 flex-wrap">
+        <p className="text-[11px] font-bold uppercase tracking-wider" style={{ color: meta.color }}>
           {title}
         </p>
         <button
@@ -643,29 +685,33 @@ function BreakdownPanel({
         </button>
       </div>
       {players.length === 0 ? (
-        <p className="px-5 pb-4 text-xs italic text-muted-foreground">No players in this slice.</p>
+        <p className="px-5 pb-3 text-xs italic text-muted-foreground">No players in this slice.</p>
       ) : (
-        <ul className="px-5 pb-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-x-4 gap-y-1.5">
+        <ul className="px-5 pb-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-x-4 gap-y-1.5">
           {players.map((p) => {
             const teamColor = TEAM_COLOR_MAP[p.team_id] ?? '#6B7280';
-            // DPP tag — only show if the player's raw eligibility
-            // mentions more than one position, so the user can spot
-            // who's flexible vs. who's locked in.
             const isDpp = /[/,]|\s/.test(p.rawPosition.trim());
             return (
               <li key={`${p.team_id}-${p.player_id}`} className="flex items-center gap-2 text-xs leading-snug min-w-0">
-                <span
-                  aria-hidden
-                  className="w-2 h-2 rounded-full shrink-0"
-                  style={{ background: teamColor }}
-                  title={TEAM_SHORT_NAMES[p.team_id] ?? ''}
-                />
-                <span
-                  className="text-[10px] font-semibold uppercase tracking-wider shrink-0 w-12 truncate"
-                  style={{ color: teamColor }}
-                >
-                  {TEAM_SHORT_NAMES[p.team_id] ?? ''}
-                </span>
+                {/* Only render team marker when the selection spans
+                    multiple teams. For cell / row selections the team
+                    is implicit from the row above. */}
+                {!isSingleTeam && (
+                  <>
+                    <span
+                      aria-hidden
+                      className="w-2 h-2 rounded-full shrink-0"
+                      style={{ background: teamColor }}
+                      title={TEAM_SHORT_NAMES[p.team_id] ?? ''}
+                    />
+                    <span
+                      className="text-[10px] font-semibold uppercase tracking-wider shrink-0 w-12 truncate"
+                      style={{ color: teamColor }}
+                    >
+                      {TEAM_SHORT_NAMES[p.team_id] ?? ''}
+                    </span>
+                  </>
+                )}
                 <span className="truncate flex-1 text-foreground">{p.player_name}</span>
                 {isDpp && (
                   <span className="text-[9px] font-semibold uppercase tracking-wider px-1 py-px rounded bg-muted text-muted-foreground shrink-0">
@@ -682,4 +728,156 @@ function BreakdownPanel({
       )}
     </div>
   );
+}
+
+// ─── Insights footer ────────────────────────────────────────────────────────
+// Pulls a few high-signal takeaways out of the matrix and renders
+// them as a compact bullet list at the bottom of each section. Only
+// surfaces insights that meet a meaningfulness threshold (no
+// "lightest" callout when everyone's even; no "cliff risk" when no
+// one qualifies).
+function InsightsFooter({
+  matrix,
+  meta,
+}: {
+  matrix: Map<string, RosterRow[]>;
+  meta: (typeof POSITION_META)[Position];
+}) {
+  const insights = useMemo(() => buildInsights(matrix), [matrix]);
+  if (insights.length === 0) return null;
+
+  return (
+    <div className="border-t border-border bg-muted/5 px-5 py-3">
+      <p
+        className="text-[11px] font-bold uppercase tracking-wider mb-2"
+        style={{ color: meta.color }}
+      >
+        Insights
+      </p>
+      <ul className="grid grid-cols-1 sm:grid-cols-2 gap-x-5 gap-y-1.5">
+        {insights.map((i, idx) => (
+          <li key={idx} className="flex items-baseline gap-2 text-xs text-foreground leading-snug">
+            <span aria-hidden className="shrink-0 text-sm leading-none">
+              {i.icon}
+            </span>
+            <span className="min-w-0">
+              <span className="font-semibold">{i.label}: </span>
+              <span className="text-muted-foreground">{i.text}</span>
+            </span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+interface TeamSlice {
+  team: (typeof TEAMS)[number];
+  total: number;
+  premiums: number; // 100+
+  highs: number;    // 90s
+  mids: number;     // 80s
+  lows: number;     // 70s
+  bench: number;    // <70
+}
+
+function buildInsights(matrix: Map<string, RosterRow[]>): { icon: string; label: string; text: string }[] {
+  const slices: TeamSlice[] = TEAMS.map((team) => {
+    const get = (tier: TierId) => matrix.get(`${team.team_id}-${tier}`)?.length ?? 0;
+    const premiums = get('100+');
+    const highs = get('90s');
+    const mids = get('80s');
+    const lows = get('70s');
+    const bench = get('<70');
+    return {
+      team,
+      total: premiums + highs + mids + lows + bench,
+      premiums,
+      highs,
+      mids,
+      lows,
+      bench,
+    };
+  });
+
+  const insights: { icon: string; label: string; text: string }[] = [];
+  const active = slices.filter((s) => s.total > 0);
+  if (active.length === 0) return insights;
+
+  const leagueTotal = slices.reduce((s, x) => s + x.total, 0);
+  const leaguePremiums = slices.reduce((s, x) => s + x.premiums, 0);
+  const avgTotal = leagueTotal / TEAMS.length;
+
+  // 🏆 Deepest line — only one team named (skip if tie among 3+).
+  {
+    const maxTotal = Math.max(...active.map((s) => s.total));
+    const winners = active.filter((s) => s.total === maxTotal);
+    if (winners.length <= 2) {
+      const names = winners.map((s) => s.team.team_name).join(' & ');
+      insights.push({
+        icon: '🏆',
+        label: 'Deepest line',
+        text: `${names} (${maxTotal} player${maxTotal === 1 ? '' : 's'})`,
+      });
+    }
+  }
+
+  // 💎 Most premiums — only if someone has a clear lead.
+  {
+    const maxPrem = Math.max(...active.map((s) => s.premiums));
+    if (maxPrem > 0) {
+      const winners = active.filter((s) => s.premiums === maxPrem);
+      if (winners.length <= 2) {
+        const names = winners.map((s) => s.team.team_name).join(' & ');
+        insights.push({
+          icon: '💎',
+          label: 'Most premiums (100+)',
+          text: `${names} (${maxPrem})`,
+        });
+      }
+    }
+  }
+
+  // ⚠️ Lightest — only flag when notably below the league average.
+  {
+    const minTotal = Math.min(...active.map((s) => s.total));
+    if (minTotal < avgTotal * 0.7 && minTotal < avgTotal - 1) {
+      const losers = active.filter((s) => s.total === minTotal);
+      if (losers.length <= 2) {
+        const names = losers.map((s) => s.team.team_name).join(' & ');
+        insights.push({
+          icon: '⚠️',
+          label: 'Thinnest line',
+          text: `${names} (${minTotal} vs league avg ${avgTotal.toFixed(1)})`,
+        });
+      }
+    }
+  }
+
+  // 📉 Cliff risk — premium dependence with no 80-99 fallback.
+  {
+    const cliffs = active.filter((s) => s.premiums >= 1 && s.highs + s.mids === 0);
+    if (cliffs.length > 0 && cliffs.length <= 3) {
+      const names = cliffs
+        .map((s) => `${s.team.team_name} (${s.premiums} prem, no 80–99)`)
+        .join(' · ');
+      insights.push({
+        icon: '📉',
+        label: 'Cliff risk',
+        text: names,
+      });
+    }
+  }
+
+  // 🌐 League snapshot — always last.
+  {
+    const pct = leagueTotal > 0 ? Math.round((leaguePremiums / leagueTotal) * 100) : 0;
+    insights.push({
+      icon: '🌐',
+      label: 'League',
+      text: `${leagueTotal} total · ${leaguePremiums} premium (${pct}%)`,
+    });
+  }
+
+  return insights;
 }
