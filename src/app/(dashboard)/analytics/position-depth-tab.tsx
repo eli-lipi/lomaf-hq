@@ -249,7 +249,12 @@ export default function PositionDepthTab() {
           player_name: r.player_name,
           position: classifyPosition(rawPosition),
           rawPosition,
-          avg: Math.round(avg),
+          // Keep one decimal of precision so a player like Nic Newman
+          // averaging 89.7 displays as 89.7 — making it obvious he's
+          // in the 80–89 tier, not the 90+ tier that 'round to 90'
+          // would imply. Tier classification still uses the raw
+          // (unrounded) value below.
+          avg: Math.round(avg * 10) / 10,
           tier: classifyTier(avg),
         });
       }
@@ -816,9 +821,11 @@ function SlideOverPanel({
                         )}
                         {/* Avg score — neutral dark slate, NOT
                             position-coloured. Coloured numbers were
-                            reading as warning flags. */}
-                        <span className="text-sm font-bold tabular-nums shrink-0 w-7 text-right text-slate-800">
-                          {p.avg}
+                            reading as warning flags. One decimal so
+                            the tier boundary is unambiguous (89.7 vs
+                            90.0). Wider box (w-11) to fit '100.5'. */}
+                        <span className="text-sm font-bold tabular-nums shrink-0 w-11 text-right text-slate-800">
+                          {p.avg.toFixed(1)}
                         </span>
                         {/* Team marker — only for multi-team selections. */}
                         {!isSingleTeam && (
