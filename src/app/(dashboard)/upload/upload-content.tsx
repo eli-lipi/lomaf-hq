@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useCallback, useEffect } from 'react';
-import { Upload, CheckCircle, AlertCircle, FileText, Loader2 } from 'lucide-react';
+import { Upload, CheckCircle, AlertCircle, FileText, Loader2, Database } from 'lucide-react';
 import Papa from 'papaparse';
 import { cn } from '@/lib/utils';
 import { supabase } from '@/lib/supabase';
@@ -68,6 +68,11 @@ export default function UploadContent({
   const [roundStatuses, setRoundStatuses] = useState<Record<number, RoundStatus>>({});
   const [hasDraft, setHasDraft] = useState(false);
   const [loadingDb, setLoadingDb] = useState(true);
+  // Latest 'players' upload — drives the staleness banner that warns
+  // when the Player Directory hasn't been refreshed for the target
+  // round. Round Control enforces this hard via verifyRoundReady;
+  // this UI surface is the friendly nudge before they hit Advance.
+  const [playersUpload, setPlayersUpload] = useState<{ round: number; at: string } | null>(null);
   const [internalTargetRound, setInternalTargetRound] = useState<number | null>(null);
   const isControlled = controlledTargetRound !== undefined;
   const targetRound = isControlled ? controlledTargetRound : internalTargetRound;
@@ -107,6 +112,26 @@ export default function UploadContent({
 
       setRoundStatuses(statuses);
       setHasDraft((draftCount || 0) > 0);
+
+      // Latest 'players' upload — used by the staleness banner. We
+      // pick the row with the highest round_number (most recent round
+      // it was uploaded for), then break ties on uploaded_at.
+      const { data: playerUploads } = await supabase
+        .from('csv_uploads')
+        .select('round_number, uploaded_at')
+        .eq('upload_type', 'players')
+        .order('round_number', { ascending: false })
+        .order('uploaded_at', { ascending: false })
+        .limit(1);
+      const latestPlayers = (playerUploads ?? [])[0] as { round_number?: number; uploaded_at?: string } | undefined;
+      if (latestPlayers) {
+        setPlayersUpload({
+          round: latestPlayers.round_number ?? 0,
+          at: latestPlayers.uploaded_at ?? '',
+        });
+      } else {
+        setPlayersUpload(null);
+      }
     } catch (err) {
       console.error('Failed to load DB summary:', err);
     } finally {
@@ -348,6 +373,14 @@ export default function UploadContent({
       </div>
       )}
 
+      {/* Player Directory staleness banner — warns when the canonical
+          players table hasn't been refreshed for the target round.
+          Round Control hard-gates this via verifyRoundReady; this is
+          the friendly UI heads-up before the admin tries to advance. */}
+      {targetRound != null && (
+        <PlayersFreshnessBanner targetRound={targetRound} latestUpload={playersUpload} />
+      )}
+
       {/* Target round picker — source of truth for which round this batch
           applies to. Hidden when the parent owns the round (Round Control). */}
       {!isControlled && (
@@ -499,6 +532,79 @@ export default function UploadContent({
           {processResult}
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * PlayersFreshnessBanner — surfaces whether the canonical Player
+ * Directory has been refreshed for the target round being prepared.
+ *
+ * Three states:
+ *   1. No upload ever     → red 'missing' banner
+ *   2. Upload stale       → amber 'outdated' banner (latest upload's
+ *                           round < targetRound)
+ *   3. Fresh for round    → green 'fresh' banner (latest upload's
+ *                           round === targetRound)
+ *
+ * The hard gate is in verifyRoundReady (Round Control blocks Advance
+ * until the upload exists for the target round); this is the friendly
+ * heads-up so admins notice before they try to advance.
+ */
+function PlayersFreshnessBanner({
+  targetRound,
+  latestUpload,
+}: {
+  targetRound: number;
+  latestUpload: { round: number; at: string } | null;
+}) {
+  if (!latestUpload) {
+    return (
+      <div className="bg-red-50 border border-red-200 rounded-lg p-4 mb-6 flex items-start gap-3">
+        <AlertCircle size={18} className="text-red-600 shrink-0 mt-0.5" />
+        <div className="min-w-0">
+          <p className="text-sm font-semibold text-red-800">
+            Player Directory has never been uploaded
+          </p>
+          <p className="text-xs text-red-700 mt-0.5">
+            Every feature on the platform reads canonical position + average data from this
+            upload. Drop the Players CSV into the slots below before advancing R{targetRound}.
+          </p>
+        </div>
+      </div>
+    );
+  }
+  if (latestUpload.round < targetRound) {
+    return (
+      <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 mb-6 flex items-start gap-3">
+        <Database size={18} className="text-amber-700 shrink-0 mt-0.5" />
+        <div className="min-w-0">
+          <p className="text-sm font-semibold text-amber-900">
+            Player Directory is stale for R{targetRound}
+          </p>
+          <p className="text-xs text-amber-800 mt-0.5">
+            Last uploaded for R{latestUpload.round}
+            {latestUpload.at ? ` (${new Date(latestUpload.at).toLocaleString()})` : ''}.
+            Upload a fresh Players CSV — Round Control will block the R{targetRound} advance
+            until you do.
+          </p>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-4 mb-6 flex items-start gap-3">
+      <CheckCircle size={18} className="text-emerald-700 shrink-0 mt-0.5" />
+      <div className="min-w-0">
+        <p className="text-sm font-semibold text-emerald-900">
+          Player Directory is fresh for R{targetRound}
+        </p>
+        <p className="text-xs text-emerald-800 mt-0.5">
+          Uploaded {latestUpload.at ? new Date(latestUpload.at).toLocaleString() : 'recently'}.
+          Position-aware features (Position Depth, Byes, Injuries, Trades) will read from this
+          snapshot.
+        </p>
+      </div>
     </div>
   );
 }

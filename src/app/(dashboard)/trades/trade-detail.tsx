@@ -22,7 +22,7 @@ import {
   ReferenceLine,
   ReferenceArea,
 } from 'recharts';
-import { cleanPositionDisplay } from '@/lib/trades/positions';
+import { cleanPositionDisplay, normalizePosition as normalizeTradePosition } from '@/lib/trades/positions';
 import { autoExpectedAvg } from '@/lib/trades/expected';
 import {
   resolvePlayerPosition,
@@ -103,8 +103,12 @@ function displayPosition(p: {
 
 function baselineForPerformance(p: PlayerPerformance): number {
   if (p.pre_trade_avg != null && p.pre_trade_avg > 0) return p.pre_trade_avg;
+  // Route the DPP fallback through the trades' rarity-weighted
+  // normalizer (RUC > FWD > DEF > MID) instead of the ad-hoc
+  // .split('/')[0] which silently picked whatever happened to be
+  // listed first in the source string.
   const cleaned = cleanPositionDisplay(p.draft_position) ?? cleanPositionDisplay(p.raw_position);
-  const pos = p.position || (cleaned?.split('/')[0] ?? '');
+  const pos = p.position || normalizeTradePosition(cleaned) || '';
   return POSITION_BASELINE[pos] ?? 70;
 }
 

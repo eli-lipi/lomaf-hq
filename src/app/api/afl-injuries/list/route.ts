@@ -3,6 +3,7 @@ import { getCurrentUser } from '@/lib/auth';
 import { createSupabaseServerClient } from '@/lib/supabase-server';
 import { computeInjuryTrend, resolveInjuryPlayerIds, type SnapshotPoint, type InjuryTrend } from '@/lib/afl-injuries';
 import { getCurrentRound } from '@/lib/round';
+import { normalizePosition } from '@/lib/positions';
 import { cleanPositionDisplay } from '@/lib/trades/positions';
 import { TEAMS } from '@/lib/constants';
 
@@ -397,13 +398,15 @@ export async function GET() {
       source_updated_at: r.source_updated_at,
       lomaf_team_id: roster?.team_id ?? null,
       lomaf_team_name: lomafTeam?.team_name ?? roster?.team_name ?? null,
-      // BN / UTL are lineup slots, not positions — strip them so the
-      // display only shows DEF / MID / FWD / RUC (or DPP combos). When
-      // the round-specific lineup slot is missing or non-positional,
-      // fall back to the canonical players table.
+      // v14 — canonical position from the players table (full
+      // eligibility, e.g. 'MID/FWD'), normalised through the shared
+      // positions lib so the display order is canonical
+      // (DEF/MID/RUC/FWD). Falls back to the latest round's lineup
+      // slot only if the players table doesn't know about them
+      // (extremely rare with the new weekly upload gate).
       lomaf_position:
-        cleanPositionDisplay(roster?.position ?? null) ??
-        positionFromPlayers(r.player_name, r.club_code),
+        normalizePosition(positionFromPlayers(r.player_name, r.club_code)) ??
+        cleanPositionDisplay(roster?.position ?? null),
       trend,
       rounds,
       proj_avg: projAvgFromPlayers(r.player_name, r.club_code),
