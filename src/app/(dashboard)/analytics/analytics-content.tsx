@@ -44,6 +44,10 @@ const StabilityTab = dynamic(() => import('./stability-tab'), {
   ssr: false,
   loading: TabLoading,
 });
+const PositionDepthTab = dynamic(() => import('./position-depth-tab'), {
+  ssr: false,
+  loading: TabLoading,
+});
 
 const TABS = [
   { id: 'overview', label: 'Overview' },
@@ -54,6 +58,7 @@ const TABS = [
   { id: 'players', label: 'Player Rankings' },
   { id: 'concentration', label: 'AFL Concentration' },
   { id: 'stability', label: 'Team Stability' },
+  { id: 'position-depth', label: 'Position Depth' },
 ] as const;
 
 type TabId = (typeof TABS)[number]['id'];
@@ -114,6 +119,7 @@ function AnalyticsContentInner({ isAdmin }: { isAdmin: boolean }) {
       {activeTab === 'players' && <PlayersTab />}
       {activeTab === 'concentration' && <ConcentrationTab />}
       {activeTab === 'stability' && <StabilityTab />}
+      {activeTab === 'position-depth' && <PositionDepthTab />}
     </div>
   );
 }

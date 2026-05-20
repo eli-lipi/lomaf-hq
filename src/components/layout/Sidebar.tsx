@@ -55,6 +55,7 @@ const NAV_ITEMS: NavItem[] = [
       { href: '/analytics?tab=players', label: 'Player Rankings' },
       { href: '/analytics?tab=concentration', label: 'AFL Concentration' },
       { href: '/analytics?tab=stability', label: 'Team Stability' },
+      { href: '/analytics?tab=position-depth', label: 'Position Depth' },
     ],
   },
   {
