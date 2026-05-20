@@ -6,6 +6,14 @@ import { supabase } from '@/lib/supabase';
 import { TEAMS } from '@/lib/constants';
 import { TEAM_COLOR_MAP, TEAM_SHORT_NAMES } from '@/lib/team-colors';
 import { cn } from '@/lib/utils';
+import {
+  classifyPosition,
+  normalizePosition,
+  POSITION_COLOR,
+  POSITION_LABEL_PLURAL,
+  POSITION_HIERARCHY,
+  type Position,
+} from '@/lib/positions';
 
 // ─── Tiers ──────────────────────────────────────────────────────────────────
 // Average buckets — half-open intervals [min, max). The catch-all '<70'
@@ -27,49 +35,15 @@ function classifyTier(avg: number): TierId {
   return '<70';
 }
 
-// ─── Positions ──────────────────────────────────────────────────────────────
-// Hierarchy (user's rule): a player with any FWD eligibility resolves
-// as Forward; otherwise DEF wins; otherwise RUC; otherwise MID. This
-// matches AFL Fantasy convention where DPP players are usually played
-// in their scarcer slot (forwards / rucks are scarce).
-type Position = 'FWD' | 'DEF' | 'RUC' | 'MID';
-const POSITION_ORDER: Position[] = ['FWD', 'DEF', 'RUC', 'MID'];
-const ALL_POSITIONS = new Set<Position>(['DEF', 'MID', 'RUC', 'FWD']);
-// AFL Fantasy display convention — list in DEF, MID, RUC, FWD order
-// so DPPs render as "MID/FWD", "DEF/MID", etc. (not "FWD/MID").
-const POSITION_DISPLAY_ORDER: Position[] = ['DEF', 'MID', 'RUC', 'FWD'];
-
-function classifyPosition(raw: string): Position {
-  const parts = raw.toUpperCase().split(/[\s/,|]+/).map((s) => s.trim()).filter(Boolean);
-  if (parts.some((p) => p.startsWith('FWD') || p.startsWith('FOR'))) return 'FWD';
-  if (parts.some((p) => p.startsWith('DEF') || p.startsWith('BAC'))) return 'DEF';
-  if (parts.some((p) => p.startsWith('RUC') || p.startsWith('RUK'))) return 'RUC';
-  return 'MID';
-}
-
-/**
- * Build a canonical eligibility string from any combination of inputs:
- *   - The draft-pick position (pre-season eligibility, may be stale)
- *   - Lineup slots the player has actually been played in this season
- *     (catches mid-season position grants — e.g. a MID-only draftee
- *     who gained FWD eligibility after a few games up front)
- *
- * Returns a slash-joined string in DEF/MID/RUC/FWD order, e.g.
- *   "MID/FWD", "DEF/MID/FWD", "RUC", "DEF/FWD". Empty input → "MID".
- */
-function deriveEligibility(draftRaw: string, observedSlots: Set<string>): string {
-  const found = new Set<Position>();
-  for (const raw of draftRaw.toUpperCase().split(/[\s/,|]+/)) {
-    const t = raw.trim();
-    if ((ALL_POSITIONS as Set<string>).has(t)) found.add(t as Position);
-  }
-  for (const slot of observedSlots) {
-    const t = slot.trim().toUpperCase();
-    if ((ALL_POSITIONS as Set<string>).has(t)) found.add(t as Position);
-  }
-  if (found.size === 0) return 'MID';
-  return POSITION_DISPLAY_ORDER.filter((p) => found.has(p)).join('/');
-}
+// Position colours mapped to a `bg` rgba for section card tinting.
+// Single point of override for visualisation chrome; the canonical
+// hex colour lives in `@/lib/positions`.
+const POSITION_BG_TINT: Record<Position, string> = {
+  FWD: 'rgba(220,38,38,0.06)',
+  DEF: 'rgba(26,86,219,0.06)',
+  RUC: 'rgba(124,58,237,0.06)',
+  MID: 'rgba(5,150,105,0.06)',
+};
 
 // Section metadata — `noun` is interpolated into AI prompt context
 // ('analyzing the forward line' vs 'analyzing the whole roster').
@@ -80,12 +54,21 @@ interface SectionMeta {
   noun: string;
 }
 
-const POSITION_META: Record<Position, SectionMeta> = {
-  FWD: { label: 'Forwards', color: '#DC2626', bg: 'rgba(220,38,38,0.06)', noun: 'forward line' },
-  DEF: { label: 'Defenders', color: '#1A56DB', bg: 'rgba(26,86,219,0.06)', noun: 'defender line' },
-  RUC: { label: 'Rucks', color: '#7C3AED', bg: 'rgba(124,58,237,0.06)', noun: 'ruck line' },
-  MID: { label: 'Midfielders', color: '#059669', bg: 'rgba(5,150,105,0.06)', noun: 'midfield' },
+const POSITION_NOUN: Record<Position, string> = {
+  FWD: 'forward line',
+  DEF: 'defender line',
+  RUC: 'ruck line',
+  MID: 'midfield',
 };
+
+const POSITION_META: Record<Position, SectionMeta> = {
+  FWD: { label: POSITION_LABEL_PLURAL.FWD, color: POSITION_COLOR.FWD, bg: POSITION_BG_TINT.FWD, noun: POSITION_NOUN.FWD },
+  DEF: { label: POSITION_LABEL_PLURAL.DEF, color: POSITION_COLOR.DEF, bg: POSITION_BG_TINT.DEF, noun: POSITION_NOUN.DEF },
+  RUC: { label: POSITION_LABEL_PLURAL.RUC, color: POSITION_COLOR.RUC, bg: POSITION_BG_TINT.RUC, noun: POSITION_NOUN.RUC },
+  MID: { label: POSITION_LABEL_PLURAL.MID, color: POSITION_COLOR.MID, bg: POSITION_BG_TINT.MID, noun: POSITION_NOUN.MID },
+};
+
+const POSITION_ORDER = POSITION_HIERARCHY;
 
 const SUMMARY_META: SectionMeta = {
   label: 'Roster Overview',
@@ -174,112 +157,42 @@ export default function PositionDepthTab() {
         offset += 1000;
       }
 
-      // Position eligibility comes from THREE sources, unioned
-      // together — none of them is complete on its own:
-      //   1. draft_picks.position  — pre-season draft snapshot. Misses
-      //      waiver pickups (who weren't drafted) and is stale for
-      //      anyone who picked up DPP eligibility post-draft.
-      //   2. players.position      — refreshed every Keeper CSV upload.
-      //      Has current eligibility for every player in the league,
-      //      including waiver pickups, but only as accurate as the
-      //      latest upload.
-      //   3. player_rounds.pos     — actual lineup slots used this
-      //      season. Catches mid-season DPP grants the coach has
-      //      already deployed, but misses bench-warmers (whose only
-      //      rows are BN/EMG, which we skip as position-agnostic).
+      // Single source of truth as of v14: the `players` table, which
+      // is refreshed every round via the mandatory Players CSV upload
+      // (gated by verifyRoundReady before round-advance). One read
+      // gives us both the canonical eligibility string and the
+      // season-to-date average — no more amalgamating draft_picks,
+      // observed lineup slots, and live point-rounds computation.
       //
-      // Concretely: Jeremy Howe (DEF) and Rhys Stanley (RUC) were
-      // both showing as MID because they're waiver pickups (no
-      // draft_picks row) and have been benched all season (no DEF/RUC
-      // slot history). Adding players.position closes that gap.
-      const { data: draftPicks } = await supabase
-        .from('draft_picks')
-        .select('player_id, position');
-      const draftPosByPlayer = new Map<number, string>();
-      for (const dp of draftPicks ?? []) {
-        if (dp.position && !draftPosByPlayer.has(dp.player_id)) {
-          draftPosByPlayer.set(dp.player_id, dp.position);
-        }
-      }
-
-      const { data: playerPositions } = await supabase
-        .from('players')
-        .select('player_id, position');
-      const livePosByPlayer = new Map<number, string>();
-      for (const p of playerPositions ?? []) {
-        if (p.position && !livePosByPlayer.has(p.player_id)) {
-          livePosByPlayer.set(p.player_id, p.position);
-        }
-      }
-
-      // Single pass over all player_rounds — collects TWO things at
-      // once to avoid a second round-trip:
-      //   1. Observed lineup slots (DEF/MID/RUC/FWD) per player, used
-      //      to derive current DPP eligibility (catches mid-season
-      //      position grants the draft CSV doesn't know about).
-      //   2. Live per-round scores per player, summed below into a
-      //      season-to-date average. We compute this from raw scores
-      //      instead of reading `players.avg_pts` because that field
-      //      is populated by a CSV upload and lags real-time data —
-      //      between uploads (or during a live round before the CSV
-      //      is re-imported) it can drift several points from the
-      //      actual season average that Keeper shows.
-      const slotsByPlayer = new Map<number, Set<string>>();
-      const scoresByPlayer = new Map<number, number[]>();
-      let pass2Offset = 0;
+      // If a player isn't in the players table (extremely rare —
+      // would imply the CSV is missing them), we fall back to a
+      // neutral 'MID' classification and 0 avg so they land in the
+      // lowest tier without crashing.
+      const playerDataById = new Map<number, { position: string | null; avg: number }>();
+      let pOffset = 0;
       while (true) {
         const { data: batch } = await supabase
-          .from('player_rounds')
-          .select('player_id, pos, points')
-          .range(pass2Offset, pass2Offset + 999);
+          .from('players')
+          .select('player_id, position, avg_pts')
+          .range(pOffset, pOffset + 999);
         if (!batch || batch.length === 0) break;
-        for (const r of batch) {
-          if (r.player_id == null) continue;
-          // Position eligibility from the slot they were played in.
-          if (r.pos) {
-            const p = String(r.pos).toUpperCase().trim();
-            if (ALL_POSITIONS.has(p as Position)) {
-              if (!slotsByPlayer.has(r.player_id)) slotsByPlayer.set(r.player_id, new Set());
-              slotsByPlayer.get(r.player_id)!.add(p);
-            }
-          }
-          // Score accumulation — only count rounds the player
-          // actually scored in (points > 0). Zeros / nulls mean
-          // 'did not play' for AFL purposes (bye, injury, omitted)
-          // and shouldn't drag the season average down.
-          if (r.points != null) {
-            const s = Number(r.points);
-            if (Number.isFinite(s) && s > 0) {
-              if (!scoresByPlayer.has(r.player_id)) scoresByPlayer.set(r.player_id, []);
-              scoresByPlayer.get(r.player_id)!.push(s);
-            }
-          }
+        for (const p of batch as Array<{ player_id: number | null; position: string | null; avg_pts: number | string | null }>) {
+          if (p.player_id == null) continue;
+          const avgRaw = p.avg_pts == null ? 0 : Number(p.avg_pts);
+          playerDataById.set(p.player_id, {
+            position: p.position,
+            avg: Number.isFinite(avgRaw) ? avgRaw : 0,
+          });
         }
         if (batch.length < 1000) break;
-        pass2Offset += 1000;
-      }
-
-      const avgByPlayer = new Map<number, number>();
-      for (const [pid, scores] of scoresByPlayer) {
-        if (scores.length === 0) continue;
-        avgByPlayer.set(pid, scores.reduce((a, b) => a + b, 0) / scores.length);
+        pOffset += 1000;
       }
 
       const out: RosterRow[] = [];
       for (const r of rosters) {
-        // Combine draft + live position strings so deriveEligibility
-        // sees every eligibility either source knows about. Empty
-        // strings get filtered inside deriveEligibility's tokenizer
-        // so joining unconditionally is safe.
-        const combinedRaw = [
-          draftPosByPlayer.get(r.player_id) ?? '',
-          livePosByPlayer.get(r.player_id) ?? '',
-        ]
-          .filter(Boolean)
-          .join('/');
-        const observedSlots = slotsByPlayer.get(r.player_id) ?? new Set<string>();
-        const rawPosition = deriveEligibility(combinedRaw, observedSlots);
-        const avg = avgByPlayer.get(r.player_id) ?? 0;
+        const pd = playerDataById.get(r.player_id);
+        const rawPosition = normalizePosition(pd?.position) ?? 'MID';
+        const avg = pd?.avg ?? 0;
         out.push({
           team_id: r.team_id,
           player_id: r.player_id,
@@ -289,8 +202,8 @@ export default function PositionDepthTab() {
           // Keep one decimal of precision so a player like Nic Newman
           // averaging 89.7 displays as 89.7 — making it obvious he's
           // in the 80–89 tier, not the 90+ tier that 'round to 90'
-          // would imply. Tier classification still uses the raw
-          // (unrounded) value below.
+          // would imply. Tier classification uses the raw (unrounded)
+          // value below.
           avg: Math.round(avg * 10) / 10,
           tier: classifyTier(avg),
         });

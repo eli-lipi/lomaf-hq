@@ -26,9 +26,22 @@ const supabase = createClient(
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const { data } = body as { data: Record<string, unknown>[] };
+    const { data, roundNumber } = body as { data: Record<string, unknown>[]; roundNumber?: number };
     if (!data || !Array.isArray(data)) {
       return NextResponse.json({ error: 'Missing data' }, { status: 400 });
+    }
+
+    // Round the upload is "for" — the round-rhythm now requires a
+    // fresh Players CSV per round before advance is permitted, and
+    // we tag the csv_uploads row with that round so verifyRoundReady
+    // can find it.
+    //
+    // Falls back to fetching the next round server-side if the caller
+    // didn't pass one (backward compat with any older client + the
+    // historical "season-wide, round_number: 0" semantics).
+    let roundForUpload: number | null = null;
+    if (typeof roundNumber === 'number' && Number.isFinite(roundNumber) && roundNumber >= 0) {
+      roundForUpload = Math.floor(roundNumber);
     }
 
     // Resolve player_id by joining on (player_name, club) against the
@@ -124,10 +137,12 @@ export async function POST(request: Request) {
       resolved += batch.filter((r) => r.player_id != null).length;
     }
 
-    // Log the upload — rest of the codebase reads csv_uploads for
-    // bookkeeping.
+    // Log the upload. The round_number stamp is what the round-rhythm
+    // gate (verifyRoundReady) checks for — a Players CSV upload row
+    // with round_number === target round must exist before that round
+    // can be advanced.
     await supabase.from('csv_uploads').insert({
-      round_number: 0, // season-wide, not round-specific
+      round_number: roundForUpload ?? 0,
       upload_type: 'players',
     }).select();
 

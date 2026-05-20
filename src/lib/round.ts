@@ -121,6 +121,40 @@ export interface VerifyRoundResult {
 export async function verifyRoundReady(supabase: SB, round: number): Promise<VerifyRoundResult> {
   const checks: RoundCheck[] = [];
 
+  // 0. Players directory — a Players CSV upload row tagged with this
+  //    round must exist. Without it, every downstream feature
+  //    (positions, averages, ownership context) reads stale data from
+  //    the previous round's snapshot, which has caused real
+  //    misclassifications (Howe → MID, Stanley → MID, etc.). Gate is
+  //    placed first because the upload happens first chronologically
+  //    in the round-rhythm.
+  {
+    const { data: rows } = await supabase
+      .from('csv_uploads')
+      .select('uploaded_at')
+      .eq('round_number', round)
+      .eq('upload_type', 'players')
+      .order('uploaded_at', { ascending: false })
+      .limit(1);
+    const latest = (rows ?? [])[0] as { uploaded_at?: string } | undefined;
+    if (!latest) {
+      checks.push({
+        key: 'players-directory',
+        label: 'Players directory uploaded',
+        status: 'missing',
+        detail: `Upload the Players CSV for R${round} on /upload before advancing.`,
+      });
+    } else {
+      const when = latest.uploaded_at ? new Date(latest.uploaded_at).toLocaleString() : 'recently';
+      checks.push({
+        key: 'players-directory',
+        label: 'Players directory uploaded',
+        status: 'ok',
+        detail: `Tagged for R${round}, uploaded ${when}.`,
+      });
+    }
+  }
+
   // 1. Lineups — distinct team_ids in player_rounds for this round.
   {
     const { data } = await supabase

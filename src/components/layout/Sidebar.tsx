@@ -99,6 +99,9 @@ const NAV_ITEMS: NavItem[] = [
       // ceremony). Data Upload tab is gone — uploaders live inside
       // Round Control now.
       { href: '/round-control', label: 'Round Control', adminOnly: true },
+      // v14.0 — Player Directory: canonical source of truth for
+      // positions / averages, refreshed via the weekly Players CSV.
+      { href: '/admin/player-directory', label: 'Player Directory', adminOnly: true },
       { href: '/settings?tab=photos', label: 'Coach Photos', adminOnly: true },
       { href: '/settings?tab=adjustments', label: 'Score Adjustments', adminOnly: true },
       { href: '/settings?tab=prompts', label: 'AI Prompts', adminOnly: true },

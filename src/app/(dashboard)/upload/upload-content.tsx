@@ -225,15 +225,17 @@ export default function UploadContent({
         setStepLog((prev) => [...prev, logMsg]);
       }
 
-      // Process players (season-wide canonical roster) if parsed.
-      // Round-agnostic; uses its own endpoint.
+      // Process players (canonical roster) if parsed. Now uploaded
+      // weekly as part of the round-rhythm ceremony — tagged with the
+      // target round so verifyRoundReady can confirm the directory is
+      // fresh before allowing the advance.
       if (uploads.players.status === 'parsed' && uploads.players.data) {
         setStepLog((prev) => [...prev, `Uploading players... (${uploads.players.rowCount} players)`]);
         setUploads((prev) => ({ ...prev, players: { ...prev.players, status: 'uploading' } }));
         const res = await fetch('/api/upload/players', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ data: uploads.players.data }),
+          body: JSON.stringify({ data: uploads.players.data, roundNumber: targetRound }),
         });
         if (!res.ok) {
           const err = await res.json();
