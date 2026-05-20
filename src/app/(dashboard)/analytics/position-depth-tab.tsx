@@ -1,7 +1,7 @@
 'use client';
 
-import { useState, useEffect, useMemo, Fragment } from 'react';
-import { ChevronDown, ChevronRight } from 'lucide-react';
+import { useState, useEffect, useMemo } from 'react';
+import { ChevronDown, ChevronRight, X, Sparkles, RefreshCw } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { TEAMS } from '@/lib/constants';
 import { TEAM_COLOR_MAP, TEAM_SHORT_NAMES } from '@/lib/team-colors';
@@ -71,13 +71,12 @@ function deriveEligibility(draftRaw: string, observedSlots: Set<string>): string
   return POSITION_DISPLAY_ORDER.filter((p) => found.has(p)).join('/');
 }
 
-// Section metadata — `noun` is interpolated into insight labels
-// ('Deepest forward line' vs 'Deepest roster' for the summary view).
+// Section metadata — `noun` is interpolated into AI prompt context
+// ('analyzing the forward line' vs 'analyzing the whole roster').
 interface SectionMeta {
   label: string;
   color: string;
   bg: string;
-  /** Singular noun used in insight strings, e.g. 'forward line', 'roster'. */
   noun: string;
 }
 
@@ -88,9 +87,6 @@ const POSITION_META: Record<Position, SectionMeta> = {
   MID: { label: 'Midfielders', color: '#059669', bg: 'rgba(5,150,105,0.06)', noun: 'midfield' },
 };
 
-// Summary view sits above the four position tables and aggregates
-// every rostered player by team × tier. Neutral slate so it doesn't
-// fight with the four position accents below.
 const SUMMARY_META: SectionMeta = {
   label: 'Roster Overview',
   color: '#1F2937',
@@ -109,11 +105,42 @@ interface RosterRow {
   tier: TierId;
 }
 
+// A selection identifies a slice of one matrix. Selection state is
+// lifted up to PositionDepthTab so only one section can be active at
+// a time — clicking in Forwards clears anything that was active in
+// Defenders (and the slide-over panel reflects the most recent click).
+type Selection =
+  | { kind: 'cell'; teamId: number; tier: TierId }
+  | { kind: 'row'; teamId: number }
+  | { kind: 'col'; tier: TierId }
+  | { kind: 'all' };
+
+interface ActiveSlice {
+  sectionKey: string;
+  selection: Selection;
+  meta: SectionMeta;
+  matrix: Map<string, RosterRow[]>;
+  isSummary: boolean;
+}
+
+function selectionsEqual(a: Selection, b: Selection): boolean {
+  if (a.kind !== b.kind) return false;
+  if (a.kind === 'cell' && b.kind === 'cell') return a.teamId === b.teamId && a.tier === b.tier;
+  if (a.kind === 'row' && b.kind === 'row') return a.teamId === b.teamId;
+  if (a.kind === 'col' && b.kind === 'col') return a.tier === b.tier;
+  return a.kind === 'all' && b.kind === 'all';
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Tab root
+// ────────────────────────────────────────────────────────────────────────────
 export default function PositionDepthTab() {
   const [rows, setRows] = useState<RosterRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [latestRound, setLatestRound] = useState<number>(0);
   const [sortMode, setSortMode] = useState<'depth' | 'team'>('depth');
+  // Globally lifted selection — slide-over panel reads from this.
+  const [activeSlice, setActiveSlice] = useState<ActiveSlice | null>(null);
 
   useEffect(() => {
     void load();
@@ -121,7 +148,6 @@ export default function PositionDepthTab() {
 
   const load = async () => {
     try {
-      // 1. Latest round.
       const { data: roundCheck } = await supabase
         .from('player_rounds')
         .select('round_number')
@@ -134,10 +160,8 @@ export default function PositionDepthTab() {
       const maxRound = roundCheck[0].round_number;
       setLatestRound(maxRound);
 
-      // 2. Rosters at the latest round (paginated).
       const rosters: { team_id: number; player_id: number; player_name: string }[] = [];
       let offset = 0;
-      // Loop guard — Supabase REST capped at 1000 rows per request.
       while (true) {
         const { data: batch } = await supabase
           .from('player_rounds')
@@ -150,12 +174,6 @@ export default function PositionDepthTab() {
         offset += 1000;
       }
 
-      // 3. Position lookup — draft_picks is the pre-season source. We
-      //    keep the first non-empty entry per player_id (dupes happen
-      //    when a player gets traded mid-season). The draft positions
-      //    can be STALE — players gain DPP eligibility through the
-      //    season and the draft CSV doesn't reflect that — so step 4
-      //    augments these with actually-observed lineup slots.
       const { data: draftPicks } = await supabase
         .from('draft_picks')
         .select('player_id, position');
@@ -166,12 +184,8 @@ export default function PositionDepthTab() {
         }
       }
 
-      // 4. Lineup-slot history across ALL rounds — every position
-      //    slot a player has been played in this season reveals an
-      //    eligibility. Catches mid-season DPP grants (e.g. Chad
-      //    Warner gaining FWD after the draft). UTL/BN/EMG are
-      //    position-agnostic slots so we ignore them; only DEF/MID/
-      //    RUC/FWD slot strings reveal real eligibility.
+      // Observed lineup slots — augments draft positions with any
+      // mid-season DPP grants the coach has actually deployed.
       const slotsByPlayer = new Map<number, Set<string>>();
       let slotOffset = 0;
       while (true) {
@@ -191,8 +205,6 @@ export default function PositionDepthTab() {
         slotOffset += 1000;
       }
 
-      // 5. Season averages — `players.avg_pts` is the league-canonical
-      //    season-to-date average (same field byes/injuries use).
       const { data: playersData } = await supabase
         .from('players')
         .select('player_id, avg_pts');
@@ -201,7 +213,6 @@ export default function PositionDepthTab() {
         if (p.avg_pts != null) avgByPlayer.set(p.player_id, p.avg_pts);
       }
 
-      // 6. Assemble.
       const out: RosterRow[] = [];
       for (const r of rosters) {
         const draftRaw = posByPlayer.get(r.player_id) ?? '';
@@ -226,7 +237,6 @@ export default function PositionDepthTab() {
     }
   };
 
-  // Group rows by position → keyed by `${team_id}-${tier}`.
   const matricesByPos = useMemo(() => {
     const result: Record<Position, Map<string, RosterRow[]>> = {
       FWD: new Map(),
@@ -243,10 +253,6 @@ export default function PositionDepthTab() {
     return result;
   }, [rows]);
 
-  // Summary matrix — same shape as the per-position ones but
-  // aggregated across every position. Each player still classifies
-  // into exactly one position table (via the hierarchy), so this is
-  // just "all rostered players keyed by team × tier".
   const summaryMatrix = useMemo(() => {
     const m = new Map<string, RosterRow[]>();
     for (const r of rows) {
@@ -256,6 +262,22 @@ export default function PositionDepthTab() {
     }
     return m;
   }, [rows]);
+
+  // Build a stable handler that takes section context + a selection
+  // and either sets or clears the active slice. Called by each
+  // matrix's click handlers via the SectionContainer wrapper.
+  const handleSelect = (sectionKey: string, meta: SectionMeta, matrix: Map<string, RosterRow[]>, isSummary: boolean) => (next: Selection | null) => {
+    if (next === null) {
+      setActiveSlice(null);
+      return;
+    }
+    setActiveSlice((current) => {
+      if (current && current.sectionKey === sectionKey && selectionsEqual(current.selection, next)) {
+        return null; // toggle off when re-clicking the same target
+      }
+      return { sectionKey, selection: next, meta, matrix, isSummary };
+    });
+  };
 
   if (loading) {
     return <div className="py-12 text-center text-muted-foreground">Loading position depth…</div>;
@@ -268,9 +290,18 @@ export default function PositionDepthTab() {
     );
   }
 
+  const sections = [
+    { key: 'position-depth-summary', meta: SUMMARY_META, matrix: summaryMatrix, isSummary: true },
+    ...POSITION_ORDER.map((pos) => ({
+      key: `position-depth-${pos.toLowerCase()}`,
+      meta: POSITION_META[pos],
+      matrix: matricesByPos[pos],
+      isSummary: false,
+    })),
+  ];
+
   return (
     <div className="space-y-5 max-w-5xl mx-auto">
-      {/* Intro panel — explains the lens and the sort toggle. */}
       <div className="bg-card border border-border rounded-lg p-4">
         <div className="flex items-baseline justify-between gap-3 flex-wrap">
           <div>
@@ -279,8 +310,8 @@ export default function PositionDepthTab() {
               How each coach&apos;s roster is distributed across season-average tiers, split by
               position. Players with dual eligibility resolve as <strong>Forward → Defender → Ruck → Mid</strong>{' '}
               (forwards / rucks are scarcer, so DPPs land in their scarcer slot). Click any cell,
-              row total, column total, or grand total to see the players underneath. Click a
-              section title to collapse it. Darker cell = more players.
+              row total, column total, or grand total to open the player list in a side panel.
+              Click a section title to collapse it. Darker cell = more players.
               {latestRound > 0 && (
                 <span className="block mt-1 text-[10px] text-muted-foreground/80">
                   Rosters as of R{latestRound}. Averages from season-to-date.
@@ -314,68 +345,97 @@ export default function PositionDepthTab() {
         </div>
       </div>
 
-      {/* Summary first — aggregates every rostered player by tier.
-          Coaches use it to spot overall depth/balance before drilling
-          into individual position lines. */}
-      <PositionMatrix
-        meta={SUMMARY_META}
-        matrix={summaryMatrix}
-        sortMode={sortMode}
-      />
-
-      {POSITION_ORDER.map((pos) => (
-        <PositionMatrix
-          key={pos}
-          meta={POSITION_META[pos]}
-          matrix={matricesByPos[pos]}
+      {sections.map((s) => (
+        <SectionContainer
+          key={s.key}
+          sectionKey={s.key}
+          meta={s.meta}
+          matrix={s.matrix}
           sortMode={sortMode}
+          latestRound={latestRound}
+          isSummary={s.isSummary}
+          activeSelection={activeSlice?.sectionKey === s.key ? activeSlice.selection : null}
+          onSelect={handleSelect(s.key, s.meta, s.matrix, s.isSummary)}
         />
       ))}
+
+      <SlideOverPanel slice={activeSlice} onClose={() => setActiveSlice(null)} />
     </div>
   );
 }
 
-// ─── Per-position matrix ────────────────────────────────────────────────────
-// A 'selection' is what the user clicked. Cells, row totals, column
-// totals, and the grand total are all selectable — each maps to a
-// different slice of the position's players that we render in the
-// breakdown panel below the table.
-type Selection =
-  | { kind: 'cell'; teamId: number; tier: TierId }
-  | { kind: 'row'; teamId: number }
-  | { kind: 'col'; tier: TierId }
-  | { kind: 'all' }
-  | null;
+// ────────────────────────────────────────────────────────────────────────────
+// SectionContainer — bundles the matrix + an AI insights card. Both
+// are independent visual cards with their own padding/borders, so
+// the insights aren't trapped against the bottom of the table.
+// ────────────────────────────────────────────────────────────────────────────
+function SectionContainer({
+  sectionKey,
+  meta,
+  matrix,
+  sortMode,
+  latestRound,
+  isSummary,
+  activeSelection,
+  onSelect,
+}: {
+  sectionKey: string;
+  meta: SectionMeta;
+  matrix: Map<string, RosterRow[]>;
+  sortMode: 'depth' | 'team';
+  latestRound: number;
+  isSummary: boolean;
+  activeSelection: Selection | null;
+  onSelect: (selection: Selection | null) => void;
+}) {
+  const [collapsed, setCollapsed] = useState(false);
 
-function selectionsEqual(a: NonNullable<Selection>, b: NonNullable<Selection>): boolean {
-  if (a.kind !== b.kind) return false;
-  if (a.kind === 'cell' && b.kind === 'cell') return a.teamId === b.teamId && a.tier === b.tier;
-  if (a.kind === 'row' && b.kind === 'row') return a.teamId === b.teamId;
-  if (a.kind === 'col' && b.kind === 'col') return a.tier === b.tier;
-  return a.kind === 'all' && b.kind === 'all';
+  return (
+    <>
+      <PositionMatrix
+        meta={meta}
+        matrix={matrix}
+        sortMode={sortMode}
+        collapsed={collapsed}
+        onToggleCollapse={() => setCollapsed((c) => !c)}
+        activeSelection={activeSelection}
+        onSelect={onSelect}
+      />
+      {!collapsed && latestRound > 0 && (
+        <AIInsightsCard
+          roundNumber={latestRound}
+          sectionKey={sectionKey}
+          sectionName={meta.label}
+          matrix={matrix}
+          meta={meta}
+          isSummary={isSummary}
+        />
+      )}
+    </>
+  );
 }
 
+// ────────────────────────────────────────────────────────────────────────────
+// PositionMatrix — header + table only. Selection state is external,
+// no inline breakdown (the slide-over panel handles that).
+// ────────────────────────────────────────────────────────────────────────────
 function PositionMatrix({
   meta,
   matrix,
   sortMode,
+  collapsed,
+  onToggleCollapse,
+  activeSelection,
+  onSelect,
 }: {
   meta: SectionMeta;
   matrix: Map<string, RosterRow[]>;
   sortMode: 'depth' | 'team';
+  collapsed: boolean;
+  onToggleCollapse: () => void;
+  activeSelection: Selection | null;
+  onSelect: (selection: Selection | null) => void;
 }) {
-  // Selection state is local to each matrix so clicking around in
-  // Forwards doesn't reset the user's exploration in Defenders.
-  const [selection, setSelection] = useState<Selection>(null);
-  const [collapsed, setCollapsed] = useState(false);
-
-  const toggleSelection = (next: NonNullable<Selection>) => {
-    setSelection((current) => {
-      if (current && selectionsEqual(current, next)) return null;
-      return next;
-    });
-  };
-
   const { rowTotals, colTotals, grandTotal, maxCellCount } = useMemo(() => {
     const rowTotals = new Map<number, number>();
     const colTotals = new Map<TierId, number>();
@@ -400,9 +460,6 @@ function PositionMatrix({
     if (sortMode === 'team') {
       return [...TEAMS].sort((a, b) => a.team_name.localeCompare(b.team_name));
     }
-    // 'depth' — primary = total at this position desc, secondary =
-    // weighted-by-tier (so two teams with 5 each are tiebroken by who
-    // has more premiums). Lower tier ordinal = more premium.
     const tierOrdinal: Record<TierId, number> = { '100+': 4, '90s': 3, '80s': 2, '70s': 1, '<70': 0 };
     const weighted = (teamId: number) => {
       let w = 0;
@@ -421,13 +478,21 @@ function PositionMatrix({
 
   // Opacity scale:
   //   - Empty cells (count = 0) get a faint 4% tint so the grid feels
-  //     cohesive (vs the section's color floating on white).
-  //   - Populated cells map count → [22%, 75%]. Min floor ensures even
-  //     a single player is visually distinct from empty.
+  //     cohesive (vs the section's colour floating on white).
+  //   - Populated cells map count → [22%, 75%].
   const cellOpacityPercent = (count: number): number => {
     if (count === 0) return 4;
     if (maxCellCount === 0) return 4;
     return Math.round(22 + (count / Math.max(1, maxCellCount)) * 53);
+  };
+
+  // Toggle selection — clicking the same target clears it.
+  const toggle = (next: Selection) => {
+    if (activeSelection && selectionsEqual(activeSelection, next)) {
+      onSelect(null);
+    } else {
+      onSelect(next);
+    }
   };
 
   return (
@@ -435,509 +500,525 @@ function PositionMatrix({
       className="bg-card border border-border rounded-lg shadow-sm overflow-hidden"
       style={{ borderTop: `3px solid ${meta.color}` }}
     >
-      {/* Header doubles as the collapse trigger — whole bar is
-          clickable so the affordance is obvious without needing the
-          chevron to be the only target. */}
+      {/* Header bundles chevron + label + player count on the left so
+          all metadata reads as one block. Whole bar is clickable. */}
       <button
         type="button"
-        onClick={() => setCollapsed((c) => !c)}
+        onClick={onToggleCollapse}
         aria-expanded={!collapsed}
-        className="w-full px-5 py-3 border-b border-border flex items-baseline justify-between flex-wrap gap-2 text-left hover:brightness-95 transition-all"
+        className="w-full px-5 py-3 border-b border-border flex items-center gap-2 text-left hover:brightness-95 transition-all"
         style={{ background: meta.bg }}
       >
-        <div className="flex items-center gap-2 min-w-0">
-          {collapsed ? (
-            <ChevronRight size={16} className="shrink-0" style={{ color: meta.color }} />
-          ) : (
-            <ChevronDown size={16} className="shrink-0" style={{ color: meta.color }} />
-          )}
-          <h3 className="text-base font-bold" style={{ color: meta.color }}>
-            {meta.label}
-          </h3>
-        </div>
-        <p className="text-xs text-muted-foreground">
-          {grandTotal} player{grandTotal === 1 ? '' : 's'} across the league
-        </p>
+        {collapsed ? (
+          <ChevronRight size={16} className="shrink-0" style={{ color: meta.color }} />
+        ) : (
+          <ChevronDown size={16} className="shrink-0" style={{ color: meta.color }} />
+        )}
+        <h3 className="text-base font-bold" style={{ color: meta.color }}>
+          {meta.label}{' '}
+          <span className="text-sm font-medium opacity-80">({grandTotal})</span>
+        </h3>
       </button>
       {!collapsed && (
-      <div className="overflow-x-auto">
-        <table className="w-full text-sm border-collapse">
-          <thead>
-            <tr className="border-b border-border bg-muted/30">
-              {/* Coach header indented by an invisible dot-width spacer
-                  so the word 'Coach' lines up with the team-name text
-                  in the rows below (which sit after the color dot). */}
-              <th className="text-left px-4 py-2 text-[11px] font-bold uppercase tracking-wider text-muted-foreground">
-                <span className="inline-flex items-center gap-2">
-                  <span aria-hidden className="w-2.5 h-2.5 shrink-0" />
-                  Coach
-                </span>
-              </th>
-              {TIERS.map((tier) => (
-                <th
-                  key={tier.id}
-                  className="text-center px-2 py-2 text-[11px] font-bold uppercase tracking-wider text-muted-foreground border-l border-border/40 tabular-nums"
-                >
-                  {tier.label}
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm border-collapse">
+            <thead>
+              <tr className="border-b border-border bg-muted/30">
+                <th className="text-left px-4 py-2 text-[11px] font-bold uppercase tracking-wider text-muted-foreground">
+                  <span className="inline-flex items-center gap-2">
+                    <span aria-hidden className="w-2.5 h-2.5 shrink-0" />
+                    Coach
+                  </span>
                 </th>
-              ))}
-              <th className="text-center px-3 py-2 text-[11px] font-bold uppercase tracking-wider text-foreground border-l-2 border-border bg-muted/70">
-                Total
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            {sortedTeams.map((team) => {
-              const teamColor = TEAM_COLOR_MAP[team.team_id] ?? '#6B7280';
-              const total = rowTotals.get(team.team_id) ?? 0;
-              // Whether this team's row should be followed by an
-              // inline breakdown panel (cell or row selection that
-              // targets this team).
-              const inlineForThisTeam =
-                (selection?.kind === 'cell' || selection?.kind === 'row') &&
-                selection.teamId === team.team_id;
-              return (
-                <Fragment key={team.team_id}>
-                <tr className="border-b border-border/60 last:border-b-0 hover:bg-muted/20">
-                  <td className="px-4 py-2.5">
-                    <div className="flex items-center gap-2 min-w-0">
-                      <span aria-hidden className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: teamColor }} />
-                      <span className="text-sm font-bold truncate" style={{ color: teamColor }}>
-                        {TEAM_SHORT_NAMES[team.team_id] ?? team.team_name}
-                      </span>
-                    </div>
-                  </td>
-                  {TIERS.map((tier) => {
-                    const key = `${team.team_id}-${tier.id}`;
-                    const players = matrix.get(key) ?? [];
-                    const count = players.length;
-                    const op = cellOpacityPercent(count);
-                    const isSelected =
-                      selection?.kind === 'cell' &&
-                      selection.teamId === team.team_id &&
-                      selection.tier === tier.id;
-                    const isInSelectedRow =
-                      selection?.kind === 'row' && selection.teamId === team.team_id;
-                    const isInSelectedCol =
-                      selection?.kind === 'col' && selection.tier === tier.id;
-                    const isClickable = count > 0;
-                    return (
-                      <td
-                        key={tier.id}
-                        onClick={isClickable ? () => toggleSelection({ kind: 'cell', teamId: team.team_id, tier: tier.id }) : undefined}
-                        className={cn(
-                          'text-center px-2 py-2.5 align-middle border-l border-border/40 transition-all',
-                          isClickable && 'cursor-pointer hover:brightness-110',
-                          isSelected && 'ring-2 ring-offset-1 ring-foreground/60 relative z-10',
-                          (isInSelectedRow || isInSelectedCol) && !isSelected && 'outline outline-1 outline-foreground/30'
-                        )}
-                        style={{ background: `color-mix(in srgb, ${meta.color} ${op}%, transparent)` }}
-                      >
-                        <span
-                          className={cn(
-                            'text-sm font-bold tabular-nums',
-                            // Flip to white text + heavier shadow once
-                            // the cell tint passes ~45% — keeps the
-                            // count legible against the saturated end
-                            // of the scale (was 50, dropped so dark
-                            // cells are readable).
-                            count > 0 && op >= 45 && 'text-white drop-shadow-[0_1px_1px_rgba(0,0,0,0.45)]'
-                          )}
-                        >
-                          {/* Blank cell when count = 0 — the faint
-                              4% tint is enough to anchor the grid
-                              structure without needing a placeholder
-                              glyph. */}
-                          {count > 0 ? count : ''}
-                        </span>
-                      </td>
-                    );
-                  })}
-                  <td
-                    onClick={total > 0 ? () => toggleSelection({ kind: 'row', teamId: team.team_id }) : undefined}
-                    className={cn(
-                      'text-center px-3 py-2.5 align-middle border-l-2 border-border bg-muted/70 font-bold tabular-nums transition-colors',
-                      total > 0 && 'cursor-pointer hover:bg-muted',
-                      selection?.kind === 'row' && selection.teamId === team.team_id && 'ring-2 ring-offset-1 ring-foreground/60 relative z-10'
-                    )}
+                {TIERS.map((tier) => (
+                  <th
+                    key={tier.id}
+                    className="text-center px-2 py-2 text-[11px] font-bold uppercase tracking-wider text-muted-foreground border-l border-border/40 tabular-nums"
                   >
-                    {total > 0 ? total : ''}
-                  </td>
-                </tr>
-                {/* Inline breakdown — sits directly under the clicked
-                    team's row so the eye doesn't have to travel. Only
-                    shows for cell / row selections (single team). */}
-                {inlineForThisTeam && (
-                  <tr className="border-b border-border/60 last:border-b-0">
-                    <td colSpan={TIERS.length + 2} className="p-0">
-                      <BreakdownContent
-                        selection={selection!}
-                        matrix={matrix}
-                        meta={meta}
-                        onClose={() => setSelection(null)}
-                      />
+                    {tier.label}
+                  </th>
+                ))}
+                <th className="text-center px-3 py-2 text-[11px] font-bold uppercase tracking-wider text-foreground border-l-2 border-border bg-muted/70">
+                  Total
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {sortedTeams.map((team) => {
+                const teamColor = TEAM_COLOR_MAP[team.team_id] ?? '#6B7280';
+                const total = rowTotals.get(team.team_id) ?? 0;
+                return (
+                  <tr key={team.team_id} className="border-b border-border/60 last:border-b-0 hover:bg-muted/20">
+                    <td className="px-4 py-2.5">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span aria-hidden className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: teamColor }} />
+                        <span className="text-sm font-bold truncate" style={{ color: teamColor }}>
+                          {TEAM_SHORT_NAMES[team.team_id] ?? team.team_name}
+                        </span>
+                      </div>
+                    </td>
+                    {TIERS.map((tier) => {
+                      const key = `${team.team_id}-${tier.id}`;
+                      const count = matrix.get(key)?.length ?? 0;
+                      const op = cellOpacityPercent(count);
+                      const isSelected =
+                        activeSelection?.kind === 'cell' &&
+                        activeSelection.teamId === team.team_id &&
+                        activeSelection.tier === tier.id;
+                      const isClickable = count > 0;
+                      return (
+                        <td
+                          key={tier.id}
+                          onClick={isClickable ? () => toggle({ kind: 'cell', teamId: team.team_id, tier: tier.id }) : undefined}
+                          className={cn(
+                            'text-center px-2 py-2.5 align-middle border-l border-border/40 transition-all',
+                            isClickable && 'cursor-pointer hover:brightness-110',
+                            isSelected && 'ring-2 ring-offset-1 ring-foreground/70 relative z-10'
+                          )}
+                          style={{ background: `color-mix(in srgb, ${meta.color} ${op}%, transparent)` }}
+                        >
+                          <span
+                            className={cn(
+                              'text-sm font-bold tabular-nums',
+                              count > 0 && op >= 45 && 'text-white drop-shadow-[0_1px_1px_rgba(0,0,0,0.45)]'
+                            )}
+                          >
+                            {count > 0 ? count : ''}
+                          </span>
+                        </td>
+                      );
+                    })}
+                    <td
+                      onClick={total > 0 ? () => toggle({ kind: 'row', teamId: team.team_id }) : undefined}
+                      className={cn(
+                        'text-center px-3 py-2.5 align-middle border-l-2 border-border bg-muted/70 font-bold tabular-nums transition-colors',
+                        total > 0 && 'cursor-pointer hover:bg-muted',
+                        activeSelection?.kind === 'row' && activeSelection.teamId === team.team_id && 'ring-2 ring-offset-1 ring-foreground/70 relative z-10'
+                      )}
+                    >
+                      {total > 0 ? total : ''}
                     </td>
                   </tr>
-                )}
-                </Fragment>
-              );
-            })}
-            {/* Bottom totals row — tier totals + grand total. Stronger
-                background tint + heavier top border so the summary
-                row reads as a distinct band, not just another data row. */}
-            <tr className="border-t-2 border-border bg-muted font-bold">
-              <td className="px-4 py-2.5 text-[11px] uppercase tracking-wider text-foreground">
-                <span className="inline-flex items-center gap-2">
-                  <span aria-hidden className="w-2.5 h-2.5 shrink-0" />
-                  Tier Total
-                </span>
-              </td>
-              {TIERS.map((tier) => {
-                const tierTotal = colTotals.get(tier.id) ?? 0;
-                const isColSelected = selection?.kind === 'col' && selection.tier === tier.id;
-                return (
-                  <td
-                    key={tier.id}
-                    onClick={tierTotal > 0 ? () => toggleSelection({ kind: 'col', tier: tier.id }) : undefined}
-                    className={cn(
-                      'text-center px-2 py-2.5 tabular-nums border-l border-border/40 transition-colors',
-                      tierTotal > 0 && 'cursor-pointer hover:bg-muted/60',
-                      isColSelected && 'ring-2 ring-offset-1 ring-foreground/60 relative z-10'
-                    )}
-                  >
-                    {tierTotal > 0 ? tierTotal : ''}
-                  </td>
                 );
               })}
-              {/* Grand total cell — strongest neutral so the corner
-                  reads as the apex of both summary axes. */}
-              <td
-                onClick={grandTotal > 0 ? () => toggleSelection({ kind: 'all' }) : undefined}
-                className={cn(
-                  'text-center px-3 py-2.5 tabular-nums border-l-2 border-border bg-slate-200 transition-colors',
-                  grandTotal > 0 && 'cursor-pointer hover:bg-slate-300',
-                  selection?.kind === 'all' && 'ring-2 ring-offset-1 ring-foreground/60 relative z-10'
-                )}
-              >
-                {grandTotal > 0 ? grandTotal : ''}
-              </td>
-            </tr>
-            {/* Column / grand-total selections don't have a single
-                team row to anchor to, so they render directly below
-                the Tier Total band. */}
-            {(selection?.kind === 'col' || selection?.kind === 'all') && (
-              <tr>
-                <td colSpan={TIERS.length + 2} className="p-0">
-                  <BreakdownContent
-                    selection={selection}
-                    matrix={matrix}
-                    meta={meta}
-                    onClose={() => setSelection(null)}
-                  />
+              <tr className="border-t-2 border-border bg-muted font-bold">
+                <td className="px-4 py-2.5 text-[11px] uppercase tracking-wider text-foreground">
+                  <span className="inline-flex items-center gap-2">
+                    <span aria-hidden className="w-2.5 h-2.5 shrink-0" />
+                    Tier Total
+                  </span>
+                </td>
+                {TIERS.map((tier) => {
+                  const tierTotal = colTotals.get(tier.id) ?? 0;
+                  const isColSelected = activeSelection?.kind === 'col' && activeSelection.tier === tier.id;
+                  return (
+                    <td
+                      key={tier.id}
+                      onClick={tierTotal > 0 ? () => toggle({ kind: 'col', tier: tier.id }) : undefined}
+                      className={cn(
+                        'text-center px-2 py-2.5 tabular-nums border-l border-border/40 transition-colors',
+                        tierTotal > 0 && 'cursor-pointer hover:bg-muted/60',
+                        isColSelected && 'ring-2 ring-offset-1 ring-foreground/70 relative z-10'
+                      )}
+                    >
+                      {tierTotal > 0 ? tierTotal : ''}
+                    </td>
+                  );
+                })}
+                <td
+                  onClick={grandTotal > 0 ? () => toggle({ kind: 'all' }) : undefined}
+                  className={cn(
+                    'text-center px-3 py-2.5 tabular-nums border-l-2 border-border bg-slate-200 transition-colors',
+                    grandTotal > 0 && 'cursor-pointer hover:bg-slate-300',
+                    activeSelection?.kind === 'all' && 'ring-2 ring-offset-1 ring-foreground/70 relative z-10'
+                  )}
+                >
+                  {grandTotal > 0 ? grandTotal : ''}
                 </td>
               </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
-      )}
-      {/* Insights footer — high-level takeaways computed from the
-          matrix. Hidden when collapsed; always shown when expanded
-          (independent of selection so coaches keep the overview
-          while drilling in). */}
-      {!collapsed && (
-        <InsightsFooter matrix={matrix} meta={meta} />
+            </tbody>
+          </table>
+        </div>
       )}
     </section>
   );
 }
 
-// ─── Breakdown content ──────────────────────────────────────────────────────
-// Renders inside a <td colSpan={...}> in the table — sits directly
-// below the clicked row (cell / row selection) or below the Tier
-// Total band (col / all selection). Team labels are dropped when the
-// selection only spans one team, since that context is implicit
-// from the row above.
-function BreakdownContent({
-  selection,
-  matrix,
-  meta,
+// ────────────────────────────────────────────────────────────────────────────
+// SlideOverPanel — right-anchored drawer. Renders globally, opens
+// whenever there's an active slice. Player scores use neutral slate
+// so they don't read as warnings; in the summary view a small
+// position-colored dot leads each line so the position mix is still
+// glanceable.
+// ────────────────────────────────────────────────────────────────────────────
+function SlideOverPanel({
+  slice,
   onClose,
 }: {
-  selection: NonNullable<Selection>;
-  matrix: Map<string, RosterRow[]>;
-  meta: SectionMeta;
+  slice: ActiveSlice | null;
   onClose: () => void;
 }) {
-  // True when the selection spans only one team — we drop the
-  // team-color dot and short-code from each player line since the
-  // anchoring row already makes it obvious whose roster this is.
-  const isSingleTeam = selection.kind === 'cell' || selection.kind === 'row';
+  // Keep the most recently shown slice during close animation so the
+  // panel content doesn't blink to empty before it slides out.
+  const [displaySlice, setDisplaySlice] = useState<ActiveSlice | null>(slice);
+  useEffect(() => {
+    if (slice) {
+      setDisplaySlice(slice);
+    } else {
+      const t = setTimeout(() => setDisplaySlice(null), 300);
+      return () => clearTimeout(t);
+    }
+  }, [slice]);
 
-  // Resolve which (team, tier) pairs are in scope, then flatten to a
-  // sorted list of player rows.
+  // Escape closes the panel.
+  useEffect(() => {
+    if (!slice) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [slice, onClose]);
+
   const players = useMemo(() => {
+    if (!displaySlice) return [];
     const out: RosterRow[] = [];
     for (const team of TEAMS) {
       for (const tier of TIERS) {
         const inScope =
-          selection.kind === 'all' ||
-          (selection.kind === 'row' && selection.teamId === team.team_id) ||
-          (selection.kind === 'col' && selection.tier === tier.id) ||
-          (selection.kind === 'cell' && selection.teamId === team.team_id && selection.tier === tier.id);
+          displaySlice.selection.kind === 'all' ||
+          (displaySlice.selection.kind === 'row' && displaySlice.selection.teamId === team.team_id) ||
+          (displaySlice.selection.kind === 'col' && displaySlice.selection.tier === tier.id) ||
+          (displaySlice.selection.kind === 'cell' && displaySlice.selection.teamId === team.team_id && displaySlice.selection.tier === tier.id);
         if (!inScope) continue;
         const key = `${team.team_id}-${tier.id}`;
-        out.push(...(matrix.get(key) ?? []));
+        out.push(...(displaySlice.matrix.get(key) ?? []));
       }
     }
     return out.sort((a, b) => {
       if (b.avg !== a.avg) return b.avg - a.avg;
       return a.player_name.localeCompare(b.player_name);
     });
-  }, [selection, matrix]);
+  }, [displaySlice]);
 
-  // Build a compact title — drop redundant team info when single-team.
   const title = useMemo(() => {
-    if (selection.kind === 'all') return `All ${meta.label.toLowerCase()} (${players.length})`;
-    if (selection.kind === 'row') return `All tiers (${players.length})`;
-    if (selection.kind === 'col') {
-      const tier = TIERS.find((t) => t.id === selection.tier);
-      return `${meta.label} in ${tier?.label ?? '?'} (${players.length})`;
+    if (!displaySlice) return '';
+    const s = displaySlice.selection;
+    if (s.kind === 'all') return `All ${displaySlice.meta.label.toLowerCase()}`;
+    if (s.kind === 'row') {
+      const team = TEAMS.find((t) => t.team_id === s.teamId);
+      return team?.team_name ?? '?';
     }
-    const tier = TIERS.find((t) => t.id === selection.tier);
-    return `${tier?.label ?? '?'} (${players.length})`;
-  }, [selection, meta.label, players.length]);
+    if (s.kind === 'col') {
+      const tier = TIERS.find((t) => t.id === s.tier);
+      return `${displaySlice.meta.label} · ${tier?.label ?? '?'}`;
+    }
+    const team = TEAMS.find((t) => t.team_id === s.teamId);
+    const tier = TIERS.find((t) => t.id === s.tier);
+    return `${team?.team_name ?? '?'} · ${tier?.label ?? '?'}`;
+  }, [displaySlice]);
+
+  const subtitle = useMemo(() => {
+    if (!displaySlice) return '';
+    return `${displaySlice.meta.label} — ${players.length} player${players.length === 1 ? '' : 's'}`;
+  }, [displaySlice, players.length]);
+
+  const isOpen = slice !== null;
+  const isSingleTeam =
+    displaySlice?.selection.kind === 'cell' || displaySlice?.selection.kind === 'row';
 
   return (
-    <div
-      className="bg-muted/10 border-l-4"
-      style={{ borderLeftColor: meta.color }}
-    >
-      <div className="px-5 py-2.5 flex items-baseline justify-between gap-2 flex-wrap">
-        <p className="text-[11px] font-bold uppercase tracking-wider" style={{ color: meta.color }}>
-          {title}
-        </p>
-        <button
-          onClick={onClose}
-          className="text-[11px] text-muted-foreground hover:text-foreground transition-colors"
-        >
-          Clear selection ✕
-        </button>
-      </div>
-      {players.length === 0 ? (
-        <p className="px-5 pb-3 text-xs italic text-muted-foreground">No players in this slice.</p>
-      ) : (
-        <ul className="px-5 pb-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-x-5 gap-y-1.5">
-          {players.map((p) => {
-            const teamColor = TEAM_COLOR_MAP[p.team_id] ?? '#6B7280';
-            const isDpp = /[/,]|\s/.test(p.rawPosition.trim());
-            return (
-              <li
-                key={`${p.team_id}-${p.player_id}`}
-                className="flex items-center gap-2 text-xs leading-snug min-w-0"
+    <div className={cn('fixed inset-0 z-50', !isOpen && 'pointer-events-none')}>
+      {/* Backdrop — click to close */}
+      <div
+        className={cn(
+          'absolute inset-0 bg-black/30 backdrop-blur-[2px] transition-opacity duration-200',
+          isOpen ? 'opacity-100' : 'opacity-0'
+        )}
+        onClick={onClose}
+      />
+      {/* Panel — slides in from the right */}
+      <div
+        className={cn(
+          'absolute right-0 top-0 bottom-0 w-full sm:w-[440px] bg-card shadow-2xl flex flex-col',
+          'transition-transform duration-300 ease-out',
+          isOpen ? 'translate-x-0' : 'translate-x-full'
+        )}
+      >
+        {displaySlice && (
+          <>
+            <header
+              className="px-5 py-4 border-b border-border flex items-start justify-between gap-3"
+              style={{ borderTop: `3px solid ${displaySlice.meta.color}` }}
+            >
+              <div className="min-w-0 flex-1">
+                <p className="text-[10px] font-bold uppercase tracking-wider" style={{ color: displaySlice.meta.color }}>
+                  {subtitle}
+                </p>
+                <h3 className="text-lg font-bold truncate mt-0.5">{title}</h3>
+              </div>
+              <button
+                onClick={onClose}
+                aria-label="Close panel"
+                className="text-muted-foreground hover:text-foreground transition-colors shrink-0 -mr-1 -mt-1 p-1"
               >
-                {/* Avg score leads the line — tight to the name, so
-                    there's no awkward gap. Right-aligned in a fixed
-                    box so all numbers stack vertically for easy
-                    column-scanning. Coloured by the player's
-                    classified position rather than the section
-                    colour, so the Roster Overview shows a position
-                    mix at a glance (red = forward, blue = defender,
-                    purple = ruck, green = mid). For per-position
-                    sections every player resolves to that section's
-                    colour so the look is unchanged. */}
-                <span
-                  className="text-sm font-bold tabular-nums shrink-0 w-7 text-right"
-                  style={{ color: POSITION_META[p.position].color }}
-                >
-                  {p.avg}
-                </span>
-                {/* Team marker only shows for multi-team selections
-                    (column / grand total). Cell / row selections
-                    inherit team identity from the anchoring row. */}
-                {!isSingleTeam && (
-                  <>
-                    <span
-                      aria-hidden
-                      className="w-2 h-2 rounded-full shrink-0"
-                      style={{ background: teamColor }}
-                      title={TEAM_SHORT_NAMES[p.team_id] ?? ''}
-                    />
-                    <span
-                      className="text-[10px] font-semibold uppercase tracking-wider shrink-0 w-10 truncate"
-                      style={{ color: teamColor }}
-                    >
-                      {TEAM_SHORT_NAMES[p.team_id] ?? ''}
-                    </span>
-                  </>
-                )}
-                {/* Name takes whatever space remains; truncate with
-                    ellipsis if the grid cell isn't wide enough. */}
-                <span className="truncate min-w-0 flex-1 text-foreground">
-                  {p.player_name}
-                </span>
-                {isDpp && (
-                  <span className="text-[9px] font-semibold uppercase tracking-wider px-1 py-px rounded bg-muted text-muted-foreground shrink-0">
-                    {p.rawPosition}
-                  </span>
-                )}
-              </li>
-            );
-          })}
+                <X size={18} />
+              </button>
+            </header>
+            <div className="flex-1 overflow-y-auto px-5 py-4">
+              {players.length === 0 ? (
+                <p className="text-sm italic text-muted-foreground">No players in this slice.</p>
+              ) : (
+                <ul className="space-y-1.5">
+                  {players.map((p) => {
+                    const teamColor = TEAM_COLOR_MAP[p.team_id] ?? '#6B7280';
+                    const isDpp = /[/,]|\s/.test(p.rawPosition.trim());
+                    return (
+                      <li
+                        key={`${p.team_id}-${p.player_id}`}
+                        className="flex items-center gap-2.5 text-sm leading-snug min-w-0 py-1 border-b border-border/30 last:border-b-0"
+                      >
+                        {/* Position-color dot leads the line in the
+                            Roster Overview so the position mix is
+                            visible at a glance. Hidden for per-
+                            position views where it's redundant. */}
+                        {displaySlice.isSummary && (
+                          <span
+                            aria-hidden
+                            className="w-1.5 h-1.5 rounded-full shrink-0"
+                            style={{ background: POSITION_META[p.position].color }}
+                            title={p.position}
+                          />
+                        )}
+                        {/* Avg score — neutral dark slate, NOT
+                            position-coloured. Coloured numbers were
+                            reading as warning flags. */}
+                        <span className="text-sm font-bold tabular-nums shrink-0 w-7 text-right text-slate-800">
+                          {p.avg}
+                        </span>
+                        {/* Team marker — only for multi-team selections. */}
+                        {!isSingleTeam && (
+                          <>
+                            <span
+                              aria-hidden
+                              className="w-2 h-2 rounded-full shrink-0"
+                              style={{ background: teamColor }}
+                            />
+                            <span
+                              className="text-[10px] font-semibold uppercase tracking-wider shrink-0 w-10 truncate"
+                              style={{ color: teamColor }}
+                            >
+                              {TEAM_SHORT_NAMES[p.team_id] ?? ''}
+                            </span>
+                          </>
+                        )}
+                        <span className="truncate min-w-0 flex-1 text-foreground">
+                          {p.player_name}
+                        </span>
+                        {isDpp && (
+                          <span className="text-[9px] font-semibold uppercase tracking-wider px-1.5 py-px rounded bg-muted text-muted-foreground shrink-0">
+                            {p.rawPosition}
+                          </span>
+                        )}
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// AIInsightsCard — fetches AI-generated trade-focused insights via
+// /api/ai/chart-insights. Caches per round + section_key. Renders
+// outside the matrix table so it sits as its own breathing summary
+// card (per the user's UX feedback).
+// ────────────────────────────────────────────────────────────────────────────
+function AIInsightsCard({
+  roundNumber,
+  sectionKey,
+  sectionName,
+  matrix,
+  meta,
+  isSummary,
+}: {
+  roundNumber: number;
+  sectionKey: string;
+  sectionName: string;
+  matrix: Map<string, RosterRow[]>;
+  meta: SectionMeta;
+  isSummary: boolean;
+}) {
+  const [insights, setInsights] = useState<string[] | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Load cached insights on mount — same pattern as InsightsPanel.
+  useEffect(() => {
+    let cancelled = false;
+    async function loadCached() {
+      try {
+        const res = await fetch(`/api/ai/chart-insights?round=${roundNumber}&section=${sectionKey}`);
+        const data = await res.json();
+        if (!cancelled && Array.isArray(data.insights)) {
+          setInsights(data.insights);
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+    if (roundNumber) loadCached();
+    return () => {
+      cancelled = true;
+    };
+  }, [roundNumber, sectionKey]);
+
+  const generate = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const sectionData = buildSectionData(matrix, meta, isSummary);
+      const res = await fetch('/api/ai/chart-insights', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ roundNumber, sectionKey, sectionName: `${sectionName} (Position Depth)`, sectionData }),
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || 'Failed to generate insights');
+      }
+      const data = await res.json();
+      setInsights(data.insights);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Generation failed');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="bg-card border border-border rounded-lg p-4 shadow-sm">
+      <div className="flex items-center justify-between gap-2 mb-3 flex-wrap">
+        <p
+          className="text-[11px] font-bold uppercase tracking-wider flex items-center gap-1.5"
+          style={{ color: meta.color }}
+        >
+          <Sparkles size={12} className="text-amber-500" />
+          {meta.label} — Trade Insights
+        </p>
+        {(insights || error) && (
+          <button
+            onClick={generate}
+            disabled={loading}
+            className={cn(
+              'flex items-center gap-1 text-[11px] text-muted-foreground hover:text-primary transition-colors',
+              loading && 'opacity-50 cursor-not-allowed'
+            )}
+          >
+            <RefreshCw size={11} className={loading ? 'animate-spin' : ''} />
+            {loading ? 'Generating…' : 'Regenerate'}
+          </button>
+        )}
+      </div>
+
+      {error && <p className="text-xs text-red-600 mb-2">{error}</p>}
+
+      {!insights && !loading && !error && (
+        <button
+          onClick={generate}
+          className="flex items-center gap-2 text-sm text-muted-foreground hover:text-primary transition-colors font-medium"
+        >
+          <Sparkles size={14} />
+          Generate trade-focused insights
+        </button>
+      )}
+
+      {loading && !insights && (
+        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+          <div className="w-3 h-3 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+          Analyzing roster patterns…
+        </div>
+      )}
+
+      {insights && insights.length > 0 && (
+        <ul className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-3">
+          {insights.map((insight, i) => (
+            <li key={i} className="flex items-start gap-2 text-sm text-foreground leading-relaxed">
+              <span aria-hidden className="shrink-0 text-base leading-none mt-0.5">
+                💡
+              </span>
+              <span className="min-w-0">{insight}</span>
+            </li>
+          ))}
         </ul>
       )}
     </div>
   );
 }
 
-// ─── Insights footer ────────────────────────────────────────────────────────
-// Pulls a few high-signal takeaways out of the matrix and renders
-// them as a compact bullet list at the bottom of each section. Only
-// surfaces insights that meet a meaningfulness threshold (no
-// "lightest" callout when everyone's even; no "cliff risk" when no
-// one qualifies).
-function InsightsFooter({
-  matrix,
-  meta,
-}: {
-  matrix: Map<string, RosterRow[]>;
-  meta: SectionMeta;
-}) {
-  const insights = useMemo(() => buildInsights(matrix, meta.noun), [matrix, meta.noun]);
-  if (insights.length === 0) return null;
+/**
+ * Build the JSON payload sent to the AI. Includes an explicit
+ * INSTRUCTIONS field at the top so the model focuses on trade-actionable
+ * patterns rather than generic stats commentary. The system prompt is
+ * already configured for punchy LOMAF takes; this just steers it
+ * toward 'who could trade what' framing.
+ */
+function buildSectionData(matrix: Map<string, RosterRow[]>, meta: SectionMeta, isSummary: boolean) {
+  const tierMap: Record<TierId, string> = {
+    '100+': '100+',
+    '90s': '90-99',
+    '80s': '80-89',
+    '70s': '70-79',
+    '<70': '<70',
+  };
 
-  return (
-    <div className="border-t border-border bg-muted/5 px-5 py-3">
-      <p
-        className="text-[11px] font-bold uppercase tracking-wider mb-2"
-        style={{ color: meta.color }}
-      >
-        Insights
-      </p>
-      <ul className="grid grid-cols-1 sm:grid-cols-2 gap-x-5 gap-y-1.5">
-        {insights.map((i, idx) => (
-          <li key={idx} className="flex items-baseline gap-2 text-xs text-foreground leading-snug">
-            <span aria-hidden className="shrink-0 text-sm leading-none">
-              {i.icon}
-            </span>
-            <span className="min-w-0">
-              <span className="font-semibold">{i.label}: </span>
-              <span className="text-muted-foreground">{i.text}</span>
-            </span>
-          </li>
-        ))}
-      </ul>
-    </div>
-  );
-}
-
-interface TeamSlice {
-  team: (typeof TEAMS)[number];
-  total: number;
-  premiums: number; // 100+
-  highs: number;    // 90s
-  mids: number;     // 80s
-  lows: number;     // 70s
-  bench: number;    // <70
-}
-
-function buildInsights(matrix: Map<string, RosterRow[]>, noun: string): { icon: string; label: string; text: string }[] {
-  const slices: TeamSlice[] = TEAMS.map((team) => {
-    const get = (tier: TierId) => matrix.get(`${team.team_id}-${tier}`)?.length ?? 0;
-    const premiums = get('100+');
-    const highs = get('90s');
-    const mids = get('80s');
-    const lows = get('70s');
-    const bench = get('<70');
-    return {
-      team,
-      total: premiums + highs + mids + lows + bench,
-      premiums,
-      highs,
-      mids,
-      lows,
-      bench,
-    };
-  });
-
-  const insights: { icon: string; label: string; text: string }[] = [];
-  const active = slices.filter((s) => s.total > 0);
-  if (active.length === 0) return insights;
-
-  const leagueTotal = slices.reduce((s, x) => s + x.total, 0);
-  const leaguePremiums = slices.reduce((s, x) => s + x.premiums, 0);
-  const avgTotal = leagueTotal / TEAMS.length;
-
-  // 🏆 Deepest — only one team named (skip if tie among 3+).
-  {
-    const maxTotal = Math.max(...active.map((s) => s.total));
-    const winners = active.filter((s) => s.total === maxTotal);
-    if (winners.length <= 2) {
-      const names = winners.map((s) => s.team.team_name).join(' & ');
-      insights.push({
-        icon: '🏆',
-        label: `Deepest ${noun}`,
-        text: `${names} (${maxTotal} player${maxTotal === 1 ? '' : 's'})`,
-      });
+  const perTeam: Record<string, Record<string, number>> = {};
+  let leagueTotal = 0;
+  let leaguePremium = 0;
+  for (const team of TEAMS) {
+    const data: Record<string, number> = {};
+    let teamTotal = 0;
+    for (const tier of TIERS) {
+      const count = matrix.get(`${team.team_id}-${tier.id}`)?.length ?? 0;
+      data[tierMap[tier.id]] = count;
+      teamTotal += count;
+      if (tier.id === '100+') leaguePremium += count;
     }
+    data.total = teamTotal;
+    perTeam[team.team_name] = data;
+    leagueTotal += teamTotal;
   }
 
-  // 💎 Most premiums — only if someone has a clear lead.
-  {
-    const maxPrem = Math.max(...active.map((s) => s.premiums));
-    if (maxPrem > 0) {
-      const winners = active.filter((s) => s.premiums === maxPrem);
-      if (winners.length <= 2) {
-        const names = winners.map((s) => s.team.team_name).join(' & ');
-        insights.push({
-          icon: '💎',
-          label: 'Most premiums (100+)',
-          text: `${names} (${maxPrem})`,
+  // Top 10 players in this section (across all teams + tiers) —
+  // gives the AI concrete names to reference in its insights.
+  const allPlayers: { name: string; team: string; avg: number; eligibility: string }[] = [];
+  for (const team of TEAMS) {
+    for (const tier of TIERS) {
+      const list = matrix.get(`${team.team_id}-${tier.id}`) ?? [];
+      for (const p of list) {
+        allPlayers.push({
+          name: p.player_name,
+          team: team.team_name,
+          avg: p.avg,
+          eligibility: p.rawPosition,
         });
       }
     }
   }
+  const topPlayers = allPlayers.sort((a, b) => b.avg - a.avg).slice(0, 10);
 
-  // ⚠️ Lightest — only flag when notably below the league average.
-  {
-    const minTotal = Math.min(...active.map((s) => s.total));
-    if (minTotal < avgTotal * 0.7 && minTotal < avgTotal - 1) {
-      const losers = active.filter((s) => s.total === minTotal);
-      if (losers.length <= 2) {
-        const names = losers.map((s) => s.team.team_name).join(' & ');
-        insights.push({
-          icon: '⚠️',
-          label: `Thinnest ${noun}`,
-          text: `${names} (${minTotal} vs league avg ${avgTotal.toFixed(1)})`,
-        });
-      }
-    }
-  }
-
-  // 📉 Cliff risk — premium dependence with no 80-99 fallback.
-  {
-    const cliffs = active.filter((s) => s.premiums >= 1 && s.highs + s.mids === 0);
-    if (cliffs.length > 0 && cliffs.length <= 3) {
-      const names = cliffs
-        .map((s) => `${s.team.team_name} (${s.premiums} prem, no 80–99)`)
-        .join(' · ');
-      insights.push({
-        icon: '📉',
-        label: 'Cliff risk',
-        text: names,
-      });
-    }
-  }
-
-  // 🌐 League snapshot — always last.
-  {
-    const pct = leagueTotal > 0 ? Math.round((leaguePremiums / leagueTotal) * 100) : 0;
-    insights.push({
-      icon: '🌐',
-      label: 'League',
-      text: `${leagueTotal} total · ${leaguePremiums} premium (${pct}%)`,
-    });
-  }
-
-  return insights;
+  return {
+    INSTRUCTIONS: `Provide 2-3 TRADE-FOCUSED insights for LOMAF coaches looking at this ${isSummary ? 'overall roster depth' : meta.label.toLowerCase() + ' depth'} view. Each insight MUST identify a specific trade opportunity: a coach who has surplus depth they could trade away, a coach who has a positional weakness they need to address, or a cross-position arbitrage opportunity between coaches. Be specific — name the coach (use their team name), the position involved, and the rationale. Example output: "Mansion Mambas has 4 forwards averaging over 80, whereas most teams only have 2 — he could consider trading one to bolster his midfield." Avoid generic observations like 'X has the deepest line' without naming a trade angle.`,
+    view: isSummary ? 'Roster overview (all positions aggregated)' : `Position depth: ${meta.label} only`,
+    tier_buckets: 'Players grouped by season-to-date average: 100+, 90-99, 80-89, 70-79, <70',
+    per_team_counts: perTeam,
+    league_total: leagueTotal,
+    league_premium_count: leaguePremium,
+    top_players_in_section: topPlayers,
+  };
 }
