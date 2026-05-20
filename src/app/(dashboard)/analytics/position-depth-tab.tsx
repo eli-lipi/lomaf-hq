@@ -71,11 +71,31 @@ function deriveEligibility(draftRaw: string, observedSlots: Set<string>): string
   return POSITION_DISPLAY_ORDER.filter((p) => found.has(p)).join('/');
 }
 
-const POSITION_META: Record<Position, { label: string; color: string; bg: string }> = {
-  FWD: { label: 'Forwards', color: '#DC2626', bg: 'rgba(220,38,38,0.06)' },
-  DEF: { label: 'Defenders', color: '#1A56DB', bg: 'rgba(26,86,219,0.06)' },
-  RUC: { label: 'Rucks', color: '#7C3AED', bg: 'rgba(124,58,237,0.06)' },
-  MID: { label: 'Midfielders', color: '#059669', bg: 'rgba(5,150,105,0.06)' },
+// Section metadata — `noun` is interpolated into insight labels
+// ('Deepest forward line' vs 'Deepest roster' for the summary view).
+interface SectionMeta {
+  label: string;
+  color: string;
+  bg: string;
+  /** Singular noun used in insight strings, e.g. 'forward line', 'roster'. */
+  noun: string;
+}
+
+const POSITION_META: Record<Position, SectionMeta> = {
+  FWD: { label: 'Forwards', color: '#DC2626', bg: 'rgba(220,38,38,0.06)', noun: 'forward line' },
+  DEF: { label: 'Defenders', color: '#1A56DB', bg: 'rgba(26,86,219,0.06)', noun: 'defender line' },
+  RUC: { label: 'Rucks', color: '#7C3AED', bg: 'rgba(124,58,237,0.06)', noun: 'ruck line' },
+  MID: { label: 'Midfielders', color: '#059669', bg: 'rgba(5,150,105,0.06)', noun: 'midfield' },
+};
+
+// Summary view sits above the four position tables and aggregates
+// every rostered player by team × tier. Neutral slate so it doesn't
+// fight with the four position accents below.
+const SUMMARY_META: SectionMeta = {
+  label: 'Roster Overview',
+  color: '#1F2937',
+  bg: 'rgba(31, 41, 55, 0.05)',
+  noun: 'roster',
 };
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -223,6 +243,20 @@ export default function PositionDepthTab() {
     return result;
   }, [rows]);
 
+  // Summary matrix — same shape as the per-position ones but
+  // aggregated across every position. Each player still classifies
+  // into exactly one position table (via the hierarchy), so this is
+  // just "all rostered players keyed by team × tier".
+  const summaryMatrix = useMemo(() => {
+    const m = new Map<string, RosterRow[]>();
+    for (const r of rows) {
+      const key = `${r.team_id}-${r.tier}`;
+      if (!m.has(key)) m.set(key, []);
+      m.get(key)!.push(r);
+    }
+    return m;
+  }, [rows]);
+
   if (loading) {
     return <div className="py-12 text-center text-muted-foreground">Loading position depth…</div>;
   }
@@ -280,10 +314,18 @@ export default function PositionDepthTab() {
         </div>
       </div>
 
+      {/* Summary first — aggregates every rostered player by tier.
+          Coaches use it to spot overall depth/balance before drilling
+          into individual position lines. */}
+      <PositionMatrix
+        meta={SUMMARY_META}
+        matrix={summaryMatrix}
+        sortMode={sortMode}
+      />
+
       {POSITION_ORDER.map((pos) => (
         <PositionMatrix
           key={pos}
-          position={pos}
           meta={POSITION_META[pos]}
           matrix={matricesByPos[pos]}
           sortMode={sortMode}
@@ -314,13 +356,11 @@ function selectionsEqual(a: NonNullable<Selection>, b: NonNullable<Selection>): 
 }
 
 function PositionMatrix({
-  position,
   meta,
   matrix,
   sortMode,
 }: {
-  position: Position;
-  meta: (typeof POSITION_META)[Position];
+  meta: SectionMeta;
   matrix: Map<string, RosterRow[]>;
   sortMode: 'depth' | 'team';
 }) {
@@ -626,7 +666,7 @@ function BreakdownContent({
 }: {
   selection: NonNullable<Selection>;
   matrix: Map<string, RosterRow[]>;
-  meta: (typeof POSITION_META)[Position];
+  meta: SectionMeta;
   onClose: () => void;
 }) {
   // True when the selection spans only one team — we drop the
@@ -699,10 +739,16 @@ function BreakdownContent({
                 {/* Avg score leads the line — tight to the name, so
                     there's no awkward gap. Right-aligned in a fixed
                     box so all numbers stack vertically for easy
-                    column-scanning. */}
+                    column-scanning. Coloured by the player's
+                    classified position rather than the section
+                    colour, so the Roster Overview shows a position
+                    mix at a glance (red = forward, blue = defender,
+                    purple = ruck, green = mid). For per-position
+                    sections every player resolves to that section's
+                    colour so the look is unchanged. */}
                 <span
                   className="text-sm font-bold tabular-nums shrink-0 w-7 text-right"
-                  style={{ color: meta.color }}
+                  style={{ color: POSITION_META[p.position].color }}
                 >
                   {p.avg}
                 </span>
@@ -755,9 +801,9 @@ function InsightsFooter({
   meta,
 }: {
   matrix: Map<string, RosterRow[]>;
-  meta: (typeof POSITION_META)[Position];
+  meta: SectionMeta;
 }) {
-  const insights = useMemo(() => buildInsights(matrix), [matrix]);
+  const insights = useMemo(() => buildInsights(matrix, meta.noun), [matrix, meta.noun]);
   if (insights.length === 0) return null;
 
   return (
@@ -795,7 +841,7 @@ interface TeamSlice {
   bench: number;    // <70
 }
 
-function buildInsights(matrix: Map<string, RosterRow[]>): { icon: string; label: string; text: string }[] {
+function buildInsights(matrix: Map<string, RosterRow[]>, noun: string): { icon: string; label: string; text: string }[] {
   const slices: TeamSlice[] = TEAMS.map((team) => {
     const get = (tier: TierId) => matrix.get(`${team.team_id}-${tier}`)?.length ?? 0;
     const premiums = get('100+');
@@ -822,7 +868,7 @@ function buildInsights(matrix: Map<string, RosterRow[]>): { icon: string; label:
   const leaguePremiums = slices.reduce((s, x) => s + x.premiums, 0);
   const avgTotal = leagueTotal / TEAMS.length;
 
-  // 🏆 Deepest line — only one team named (skip if tie among 3+).
+  // 🏆 Deepest — only one team named (skip if tie among 3+).
   {
     const maxTotal = Math.max(...active.map((s) => s.total));
     const winners = active.filter((s) => s.total === maxTotal);
@@ -830,7 +876,7 @@ function buildInsights(matrix: Map<string, RosterRow[]>): { icon: string; label:
       const names = winners.map((s) => s.team.team_name).join(' & ');
       insights.push({
         icon: '🏆',
-        label: 'Deepest line',
+        label: `Deepest ${noun}`,
         text: `${names} (${maxTotal} player${maxTotal === 1 ? '' : 's'})`,
       });
     }
@@ -861,7 +907,7 @@ function buildInsights(matrix: Map<string, RosterRow[]>): { icon: string; label:
         const names = losers.map((s) => s.team.team_name).join(' & ');
         insights.push({
           icon: '⚠️',
-          label: 'Thinnest line',
+          label: `Thinnest ${noun}`,
           text: `${names} (${minTotal} vs league avg ${avgTotal.toFixed(1)})`,
         });
       }
