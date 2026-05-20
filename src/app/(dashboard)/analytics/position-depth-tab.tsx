@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useMemo } from 'react';
+import { ChevronDown, ChevronRight } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { TEAMS } from '@/lib/constants';
 import { TEAM_COLOR_MAP, TEAM_SHORT_NAMES } from '@/lib/team-colors';
@@ -234,7 +235,7 @@ export default function PositionDepthTab() {
   }
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-5 max-w-5xl mx-auto">
       {/* Intro panel — explains the lens and the sort toggle. */}
       <div className="bg-card border border-border rounded-lg p-4">
         <div className="flex items-baseline justify-between gap-3 flex-wrap">
@@ -244,8 +245,8 @@ export default function PositionDepthTab() {
               How each coach&apos;s roster is distributed across season-average tiers, split by
               position. Players with dual eligibility resolve as <strong>Forward → Defender → Ruck → Mid</strong>{' '}
               (forwards / rucks are scarcer, so DPPs land in their scarcer slot). Click any cell,
-              row total, column total, or grand total to see the players underneath. Darker cell =
-              more players.
+              row total, column total, or grand total to see the players underneath. Click a
+              section title to collapse it. Darker cell = more players.
               {latestRound > 0 && (
                 <span className="block mt-1 text-[10px] text-muted-foreground/80">
                   Rosters as of R{latestRound}. Averages from season-to-date.
@@ -326,6 +327,7 @@ function PositionMatrix({
   // Selection state is local to each matrix so clicking around in
   // Forwards doesn't reset the user's exploration in Defenders.
   const [selection, setSelection] = useState<Selection>(null);
+  const [collapsed, setCollapsed] = useState(false);
 
   const toggleSelection = (next: NonNullable<Selection>) => {
     setSelection((current) => {
@@ -377,10 +379,15 @@ function PositionMatrix({
     });
   }, [sortMode, rowTotals, matrix]);
 
-  // Opacity scale: 0 → blank, 1 → ~25%, max → ~75%.
+  // Opacity scale:
+  //   - Empty cells (count = 0) get a faint 4% tint so the grid feels
+  //     cohesive (vs the section's color floating on white).
+  //   - Populated cells map count → [22%, 75%]. Min floor ensures even
+  //     a single player is visually distinct from empty.
   const cellOpacityPercent = (count: number): number => {
-    if (count === 0 || maxCellCount === 0) return 0;
-    return Math.round(25 + (count / maxCellCount) * 50);
+    if (count === 0) return 4;
+    if (maxCellCount === 0) return 4;
+    return Math.round(22 + (count / Math.max(1, maxCellCount)) * 53);
   };
 
   return (
@@ -388,23 +395,43 @@ function PositionMatrix({
       className="bg-card border border-border rounded-lg shadow-sm overflow-hidden"
       style={{ borderTop: `3px solid ${meta.color}` }}
     >
-      <header
-        className="px-5 py-3 border-b border-border flex items-baseline justify-between flex-wrap gap-2"
+      {/* Header doubles as the collapse trigger — whole bar is
+          clickable so the affordance is obvious without needing the
+          chevron to be the only target. */}
+      <button
+        type="button"
+        onClick={() => setCollapsed((c) => !c)}
+        aria-expanded={!collapsed}
+        className="w-full px-5 py-3 border-b border-border flex items-baseline justify-between flex-wrap gap-2 text-left hover:brightness-95 transition-all"
         style={{ background: meta.bg }}
       >
-        <h3 className="text-base font-bold" style={{ color: meta.color }}>
-          {meta.label}
-        </h3>
+        <div className="flex items-center gap-2 min-w-0">
+          {collapsed ? (
+            <ChevronRight size={16} className="shrink-0" style={{ color: meta.color }} />
+          ) : (
+            <ChevronDown size={16} className="shrink-0" style={{ color: meta.color }} />
+          )}
+          <h3 className="text-base font-bold" style={{ color: meta.color }}>
+            {meta.label}
+          </h3>
+        </div>
         <p className="text-xs text-muted-foreground">
           {grandTotal} player{grandTotal === 1 ? '' : 's'} across the league
         </p>
-      </header>
+      </button>
+      {!collapsed && (
       <div className="overflow-x-auto">
         <table className="w-full text-sm border-collapse">
           <thead>
             <tr className="border-b border-border bg-muted/30">
+              {/* Coach header indented by an invisible dot-width spacer
+                  so the word 'Coach' lines up with the team-name text
+                  in the rows below (which sit after the color dot). */}
               <th className="text-left px-4 py-2 text-[11px] font-bold uppercase tracking-wider text-muted-foreground">
-                Coach
+                <span className="inline-flex items-center gap-2">
+                  <span aria-hidden className="w-2.5 h-2.5 shrink-0" />
+                  Coach
+                </span>
               </th>
               {TIERS.map((tier) => (
                 <th
@@ -414,7 +441,7 @@ function PositionMatrix({
                   {tier.label}
                 </th>
               ))}
-              <th className="text-center px-3 py-2 text-[11px] font-bold uppercase tracking-wider text-foreground border-l-2 border-border bg-muted/50">
+              <th className="text-center px-3 py-2 text-[11px] font-bold uppercase tracking-wider text-foreground border-l-2 border-border bg-muted/70">
                 Total
               </th>
             </tr>
@@ -457,20 +484,24 @@ function PositionMatrix({
                           isSelected && 'ring-2 ring-offset-1 ring-foreground/60 relative z-10',
                           (isInSelectedRow || isInSelectedCol) && !isSelected && 'outline outline-1 outline-foreground/30'
                         )}
-                        style={
-                          count > 0
-                            ? { background: `color-mix(in srgb, ${meta.color} ${op}%, transparent)` }
-                            : undefined
-                        }
+                        style={{ background: `color-mix(in srgb, ${meta.color} ${op}%, transparent)` }}
                       >
                         <span
                           className={cn(
-                            'text-sm font-semibold tabular-nums',
-                            count === 0 && 'text-muted-foreground/40',
-                            count > 0 && op >= 50 && 'text-white drop-shadow-sm'
+                            'text-sm font-bold tabular-nums',
+                            // Flip to white text + heavier shadow once
+                            // the cell tint passes ~45% — keeps the
+                            // count legible against the saturated end
+                            // of the scale (was 50, dropped so dark
+                            // cells are readable).
+                            count > 0 && op >= 45 && 'text-white drop-shadow-[0_1px_1px_rgba(0,0,0,0.45)]'
                           )}
                         >
-                          {count === 0 ? '·' : count}
+                          {/* Blank cell when count = 0 — the faint
+                              4% tint is enough to anchor the grid
+                              structure without needing a placeholder
+                              glyph. */}
+                          {count > 0 ? count : ''}
                         </span>
                       </td>
                     );
@@ -478,20 +509,25 @@ function PositionMatrix({
                   <td
                     onClick={total > 0 ? () => toggleSelection({ kind: 'row', teamId: team.team_id }) : undefined}
                     className={cn(
-                      'text-center px-3 py-2.5 align-middle border-l-2 border-border bg-muted/30 font-bold tabular-nums transition-colors',
-                      total > 0 && 'cursor-pointer hover:bg-muted/60',
+                      'text-center px-3 py-2.5 align-middle border-l-2 border-border bg-muted/70 font-bold tabular-nums transition-colors',
+                      total > 0 && 'cursor-pointer hover:bg-muted',
                       selection?.kind === 'row' && selection.teamId === team.team_id && 'ring-2 ring-offset-1 ring-foreground/60 relative z-10'
                     )}
                   >
-                    {total}
+                    {total > 0 ? total : ''}
                   </td>
                 </tr>
               );
             })}
-            {/* Bottom totals row — tier totals + grand total */}
-            <tr className="border-t-2 border-border bg-muted/50 font-bold">
-              <td className="px-4 py-2.5 text-[11px] uppercase tracking-wider text-muted-foreground">
-                Tier Total
+            {/* Bottom totals row — tier totals + grand total. Stronger
+                background tint + heavier top border so the summary
+                row reads as a distinct band, not just another data row. */}
+            <tr className="border-t-2 border-border bg-muted font-bold">
+              <td className="px-4 py-2.5 text-[11px] uppercase tracking-wider text-foreground">
+                <span className="inline-flex items-center gap-2">
+                  <span aria-hidden className="w-2.5 h-2.5 shrink-0" />
+                  Tier Total
+                </span>
               </td>
               {TIERS.map((tier) => {
                 const tierTotal = colTotals.get(tier.id) ?? 0;
@@ -502,32 +538,35 @@ function PositionMatrix({
                     onClick={tierTotal > 0 ? () => toggleSelection({ kind: 'col', tier: tier.id }) : undefined}
                     className={cn(
                       'text-center px-2 py-2.5 tabular-nums border-l border-border/40 transition-colors',
-                      tierTotal > 0 && 'cursor-pointer hover:bg-muted',
+                      tierTotal > 0 && 'cursor-pointer hover:bg-muted/60',
                       isColSelected && 'ring-2 ring-offset-1 ring-foreground/60 relative z-10'
                     )}
                   >
-                    {tierTotal}
+                    {tierTotal > 0 ? tierTotal : ''}
                   </td>
                 );
               })}
+              {/* Grand total cell — strongest neutral so the corner
+                  reads as the apex of both summary axes. */}
               <td
                 onClick={grandTotal > 0 ? () => toggleSelection({ kind: 'all' }) : undefined}
                 className={cn(
-                  'text-center px-3 py-2.5 tabular-nums border-l-2 border-border bg-muted transition-colors',
-                  grandTotal > 0 && 'cursor-pointer hover:bg-muted/80',
+                  'text-center px-3 py-2.5 tabular-nums border-l-2 border-border bg-slate-200 transition-colors',
+                  grandTotal > 0 && 'cursor-pointer hover:bg-slate-300',
                   selection?.kind === 'all' && 'ring-2 ring-offset-1 ring-foreground/60 relative z-10'
                 )}
               >
-                {grandTotal}
+                {grandTotal > 0 ? grandTotal : ''}
               </td>
             </tr>
           </tbody>
         </table>
       </div>
-      {/* Breakdown panel — visible when something is selected. Lives
-          inside the section card so the matrix and its drill-down stay
-          visually attached. */}
-      {selection && (
+      )}
+      {/* Breakdown panel — visible when something is selected and the
+          section is expanded. Lives inside the section card so the
+          matrix and its drill-down stay visually attached. */}
+      {!collapsed && selection && (
         <BreakdownPanel
           selection={selection}
           matrix={matrix}
