@@ -14,7 +14,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { createClient } from '@supabase/supabase-js';
 import { unstable_cache } from 'next/cache';
-import { recalculateAllTradesForRound } from '@/lib/trades/recalculate';
 
 // v13.4 — round_advances changes about once a week (when admin clicks
 // Advance). Caching the latest-row lookup avoids hitting Supabase on
@@ -326,17 +325,21 @@ export interface AdvanceResult {
   round: number;
   emailsSent: boolean;
   emailError: string | null;
-  recalcError: string | null;
 }
 
 /**
  * Make `round` the new current round.
- * 1. Insert round_advances row.
- * 2. Recompute all trade probabilities for the round (forces fresh
- *    narratives — leverages the existing recalculate path).
- * 3. Auto-create the pwrnkgs_rounds draft for the round so the editor is
- *    seeded.
- * 4. Send announcement email if requested.
+ *
+ * Only does the FAST work — runs comfortably inside Vercel Hobby's 60s
+ * serverless function ceiling:
+ *   1. Insert round_advances ledger row.
+ *   2. Auto-create the pwrnkgs_rounds draft so the editor is seeded.
+ *   3. Send announcement email if requested.
+ *
+ * The slow work (AFL injury sync + per-trade recompute with AI narratives)
+ * runs after this returns, orchestrated by the client one chunk at a time
+ * via /api/afl-injuries/sync and /api/trades/{id}/recalculate. That keeps
+ * each request well under the timeout even with many trades.
  */
 export async function advanceToRound(supabase: SB, opts: AdvanceOpts): Promise<AdvanceResult> {
   const result: AdvanceResult = {
@@ -344,7 +347,6 @@ export async function advanceToRound(supabase: SB, opts: AdvanceOpts): Promise<A
     round: opts.round,
     emailsSent: false,
     emailError: null,
-    recalcError: null,
   };
 
   // 1. Insert ledger row. ON CONFLICT do nothing — re-advancing the same
@@ -363,24 +365,7 @@ export async function advanceToRound(supabase: SB, opts: AdvanceOpts): Promise<A
     }
   }
 
-  // 2a. Refresh the AFL injury cache before recomputing trades, so the
-  // narratives are written against the latest official prognoses.
-  // Non-fatal if it fails — recalc will still run with stale or no data.
-  try {
-    const { syncAflInjuries } = await import('./afl-injuries');
-    await syncAflInjuries(supabase);
-  } catch (e) {
-    console.error('[advanceToRound] AFL injury sync failed, continuing anyway:', e);
-  }
-
-  // 2b. Recompute trades.
-  try {
-    await recalculateAllTradesForRound(supabase, opts.round);
-  } catch (e) {
-    result.recalcError = e instanceof Error ? e.message : 'Trade recalc failed';
-  }
-
-  // 3. Auto-create the PWRNKGs draft for this round.
+  // 2. Auto-create the PWRNKGs draft for this round.
   try {
     const { data: existing } = await supabase
       .from('pwrnkgs_rounds')
@@ -394,7 +379,7 @@ export async function advanceToRound(supabase: SB, opts: AdvanceOpts): Promise<A
     // Non-fatal; PWRNKGs page will create on first visit anyway.
   }
 
-  // 4. Email.
+  // 3. Email.
   if (opts.sendEmail) {
     try {
       const { sendRoundLiveEmail } = await import('@/lib/email');

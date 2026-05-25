@@ -31,7 +31,6 @@ interface AdvanceResult {
   round: number;
   emailsSent: boolean;
   emailError: string | null;
-  recalcError: string | null;
 }
 
 const TOTAL_ROUNDS = 23;
@@ -81,11 +80,11 @@ export default function RoundControlClient({
   const [advanceMsg, setAdvanceMsg] = useState<string | null>(null);
   const [advanceErr, setAdvanceErr] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
-  // v12.2.2 — index of the currently-running progress step. Ticks
-  // forward on a timer while the advance API runs (we don't have SSE
-  // back from the server, so the cadence is a friendly approximation
-  // — slow on the trade-recalc step because that's where time goes).
+  // v15 — real per-step progress now that the slow work is chunked from
+  // the client. step indexes baseSteps in <ProgressOverlay>; tradeProgress
+  // is (done, total) for the per-trade recompute step.
   const [progressStep, setProgressStep] = useState(0);
+  const [tradeProgress, setTradeProgress] = useState<{ done: number; total: number } | null>(null);
 
   const isReAdvance = targetRound <= currentRound && currentRound > 0;
 
@@ -122,71 +121,122 @@ export default function RoundControlClient({
     return () => clearInterval(t);
   }, [verify, refreshVerify]);
 
+  // Parse a fetch response into either { json, error } so a Vercel HTML
+  // error page (timeout / crash) doesn't crash JSON.parse on the client.
+  const safeJson = async (res: Response): Promise<{ json: Record<string, unknown> | null; error: string | null }> => {
+    const text = await res.text();
+    try {
+      const json = text ? (JSON.parse(text) as Record<string, unknown>) : {};
+      return { json, error: null };
+    } catch {
+      const snippet = text.slice(0, 120).replace(/\s+/g, ' ').trim();
+      return { json: null, error: `Server returned a non-JSON response (HTTP ${res.status}). ${snippet}` };
+    }
+  };
+
   const handleAdvance = async () => {
     // Close the confirmation modal IMMEDIATELY so the loading overlay
     // takes over without a click swallowed by the dialog.
     setConfirming(false);
     setAdvancing(true);
     setProgressStep(0);
+    setTradeProgress(null);
     setAdvanceMsg(null);
     setAdvanceErr(null);
 
-    // Tick the progress indicator forward on a timer. We don't get
-    // step-by-step events from the server, so use friendly estimates
-    // (trade recalc is the slowest by far — all the AI narrative
-    // calls happen inside it).
-    const ticks = [
-      4_000,   // Step 0 → 1 (locking)
-      90_000,  // Step 1 → 2 (trade recalc — the big one)
-      30_000,  // Step 2 → 3 (narratives — tail end of recalc)
-      5_000,   // Step 3 → 4 (PWRNKGs draft)
-    ];
-    let cancelled = false;
-    let timeoutId: ReturnType<typeof setTimeout> | null = null;
-    let cursor = 0;
-    const advanceStep = () => {
-      if (cancelled) return;
-      cursor += 1;
-      setProgressStep(cursor);
-      const next = ticks[cursor];
-      if (next != null) timeoutId = setTimeout(advanceStep, next);
-    };
-    timeoutId = setTimeout(advanceStep, ticks[0]);
+    // v15 — orchestration now happens client-side so no single request
+    // exceeds Vercel Hobby's 60s function timeout. Steps:
+    //   0. Fast advance (ledger row + PWRNKGs draft + email)
+    //   1. AFL injury sync
+    //   2. Per-trade recompute (chunked, one POST per trade)
+    let advanceJson: (AdvanceResult & { error?: string }) | null = null;
+    const collected: string[] = [];
 
     try {
-      const res = await fetch('/api/round/advance', {
+      // Step 0 — fast advance.
+      setProgressStep(0);
+      const advRes = await fetch('/api/round/advance', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ round: targetRound, sendEmail }),
       });
-      cancelled = true;
-      if (timeoutId) clearTimeout(timeoutId);
-
-      const json = (await res.json()) as AdvanceResult & { error?: string };
-      if (!res.ok) {
-        setAdvanceErr(json.error || 'Advance failed.');
+      const advParsed = await safeJson(advRes);
+      if (!advRes.ok || !advParsed.json) {
+        setAdvanceErr(
+          (advParsed.json?.error as string | undefined) ||
+            advParsed.error ||
+            `Advance failed (HTTP ${advRes.status}).`
+        );
         return;
       }
-      // Mark all steps complete.
+      advanceJson = advParsed.json as unknown as AdvanceResult & { error?: string };
+
+      // Round is now live — reflect it immediately even if the slow
+      // background steps below fail.
+      setCurrentRound(targetRound);
+      setAdvancedAt(new Date().toISOString());
+
+      // Step 1 — AFL injury sync. Non-fatal.
+      setProgressStep(1);
+      try {
+        const injRes = await fetch('/api/afl-injuries/sync', { method: 'POST' });
+        const injParsed = await safeJson(injRes);
+        if (!injRes.ok) {
+          collected.push(
+            `Injury sync had an issue: ${(injParsed.json?.error as string | undefined) || injParsed.error || `HTTP ${injRes.status}`}.`
+          );
+        }
+      } catch (e) {
+        collected.push(`Injury sync had an issue: ${e instanceof Error ? e.message : 'unknown error'}.`);
+      }
+
+      // Step 2 — per-trade recompute. List the trades, then loop.
+      setProgressStep(2);
+      const listRes = await fetch(`/api/round/recompute-list?round=${targetRound}`);
+      const listParsed = await safeJson(listRes);
+      if (!listRes.ok || !listParsed.json) {
+        collected.push(
+          `Couldn't list trades to recompute: ${(listParsed.json?.error as string | undefined) || listParsed.error || `HTTP ${listRes.status}`}. You can retry from the Trades page.`
+        );
+      } else {
+        const tradeIds = (listParsed.json.tradeIds as string[]) ?? [];
+        setTradeProgress({ done: 0, total: tradeIds.length });
+        let failed = 0;
+        for (let i = 0; i < tradeIds.length; i++) {
+          const id = tradeIds[i];
+          try {
+            const r = await fetch(`/api/trades/${id}/recalculate`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ force: true }),
+            });
+            if (!r.ok) failed++;
+          } catch {
+            failed++;
+          }
+          setTradeProgress({ done: i + 1, total: tradeIds.length });
+        }
+        if (failed > 0) {
+          collected.push(`${failed} of ${tradeIds.length} trades couldn't be recomputed — retry from the Trades page.`);
+        }
+      }
+
+      // Done.
       setProgressStep(99);
       const note: string[] = [
         isReAdvance
           ? `Round ${targetRound} re-run complete.`
           : `Round ${targetRound} is now live.`,
       ];
-      if (json.recalcError) note.push(`Trade recalc had an issue: ${json.recalcError}`);
       if (sendEmail) {
-        if (json.emailsSent) note.push('Coaches were emailed.');
-        else if (json.emailError) note.push(`Email failed: ${json.emailError}`);
+        if (advanceJson.emailsSent) note.push('Coaches were emailed.');
+        else if (advanceJson.emailError) note.push(`Email failed: ${advanceJson.emailError}.`);
       }
+      note.push(...collected);
       setAdvanceMsg(note.join(' '));
-      setCurrentRound(targetRound);
-      setAdvancedAt(new Date().toISOString());
       setTargetRound(Math.min(TOTAL_ROUNDS, targetRound + 1));
       await Promise.all([refreshVerify(), refreshHistory()]);
     } catch (e) {
-      cancelled = true;
-      if (timeoutId) clearTimeout(timeoutId);
       setAdvanceErr(e instanceof Error ? e.message : 'Advance failed.');
     } finally {
       setAdvancing(false);
@@ -444,6 +494,7 @@ export default function RoundControlClient({
           isReAdvance={isReAdvance}
           sendEmail={sendEmail}
           step={progressStep}
+          tradeProgress={tradeProgress}
         />
       )}
 
@@ -586,35 +637,38 @@ function InjuryStatusCard() {
 }
 
 /**
- * Full-screen overlay shown while the advance pipeline runs. Steps tick
- * forward on a friendly client-side timer (the server doesn't stream
- * progress) — recompute is the slow one because every trade gets a
- * fresh AI narrative pass.
+ * Full-screen overlay shown while the advance pipeline runs. Steps reflect
+ * the real client-orchestrated flow:
+ *   0. Fast advance (ledger + PWRNKGs draft + email in one request)
+ *   1. AFL injury sync
+ *   2. Per-trade recompute (chunked — shows X of Y)
+ * Splitting the slow work into its own per-trade requests is what keeps us
+ * under Vercel Hobby's 60s function ceiling.
  */
 function ProgressOverlay({
   targetRound,
   isReAdvance,
   sendEmail,
   step,
+  tradeProgress,
 }: {
   targetRound: number;
   isReAdvance: boolean;
   sendEmail: boolean;
   step: number;
+  tradeProgress: { done: number; total: number } | null;
 }) {
+  const lockSub = sendEmail
+    ? `Recording the advance, seeding the PWRNKGs draft, emailing coaches.`
+    : `Recording the advance and seeding the PWRNKGs draft.`;
+  const tradesSub = tradeProgress
+    ? `Recomputing ${tradeProgress.done} of ${tradeProgress.total} trades.`
+    : 'Listing active trades to recompute.';
   const baseSteps: { key: string; label: string; sub: string }[] = [
-    { key: 'lock', label: `Locking Round ${targetRound} in the ledger`, sub: 'Recording the advance.' },
-    { key: 'trades', label: 'Recomputing trade probabilities', sub: 'Running every active trade against the new round.' },
-    { key: 'narratives', label: 'Generating fresh AI narratives', sub: 'Re-reading each trade with the new data.' },
-    { key: 'pwrnkgs', label: `Opening Round ${targetRound} PWRNKGs draft`, sub: 'Seeding the editor for this week.' },
+    { key: 'lock', label: `Locking Round ${targetRound} in the ledger`, sub: lockSub },
+    { key: 'injuries', label: 'Refreshing AFL injury list', sub: 'Pulling the official AFL.com.au prognoses.' },
+    { key: 'trades', label: 'Recomputing trade probabilities + AI narratives', sub: tradesSub },
   ];
-  if (sendEmail) {
-    baseSteps.push({
-      key: 'email',
-      label: 'Emailing all coaches',
-      sub: 'Round-live announcement going out.',
-    });
-  }
 
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 px-4">

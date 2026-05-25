@@ -9,7 +9,12 @@ import {
   ROUND_CURRENT_TAG,
 } from '@/lib/round';
 
-export const maxDuration = 300; // recalc + AI narratives can take a few minutes
+// v15 — fast advance only. The slow work (AFL injury sync + per-trade
+// recompute with AI narratives) is now orchestrated by the client one
+// chunk at a time so no single request can exceed Vercel Hobby's 60s
+// serverless function ceiling. 30s is comfortable headroom for the
+// ledger insert + PWRNKGs draft + Resend email call.
+export const maxDuration = 30;
 
 interface Body {
   round: number;
@@ -20,11 +25,15 @@ interface Body {
 /**
  * POST /api/round/advance — admin-only.
  *
- * The round-rhythm ceremony. Verifies the target round is ready, then:
+ * The round-rhythm ceremony, fast part only. Verifies the target round
+ * is ready, then:
  *   1. Inserts the round_advances ledger row.
- *   2. Recomputes every trade's probability + AI narrative for the new round.
- *   3. Auto-creates the PWRNKGs draft for the new round.
- *   4. Optionally sends the announcement email to all coaches.
+ *   2. Auto-creates the PWRNKGs draft for the new round.
+ *   3. Optionally sends the announcement email to all coaches.
+ *
+ * AFL injury sync + trade recompute are NOT done here — the client calls
+ * /api/afl-injuries/sync then loops /api/trades/{id}/recalculate so each
+ * request stays under the function timeout.
  *
  * Body: { round: N, sendEmail: boolean, force?: boolean }.
  * `force` skips the verifyRoundReady gate (escape hatch — front-end button
