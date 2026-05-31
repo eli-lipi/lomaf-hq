@@ -13,7 +13,7 @@ import {
   type ByeRound,
 } from '@/lib/afl-club-byes';
 import { cn } from '@/lib/utils';
-import type { CoachRoundImpact } from './types';
+import type { CoachRoundImpact, ByeTeamRetro } from './types';
 
 export function ClubBadge({ code, size = 28 }: { code: string; size?: number }) {
   const club = AFL_CLUBS[code];
@@ -45,6 +45,12 @@ interface Props {
   filterTeamId?: number;
   /** Optional alternate header label (e.g., "Round 12 — your bye outlook"). */
   headerLabel?: string;
+  /**
+   * Per-coach actuals once the round has been scored (team_id → stats).
+   * Present only for played bye rounds; flips the card from a forward-looking
+   * impact forecast to a retrospective of what each coach actually fielded.
+   */
+  retro?: Map<number, ByeTeamRetro>;
 }
 
 /**
@@ -52,10 +58,12 @@ interface Props {
  * round's bye clubs + scoring rule, then a ranked ladder of coaches
  * graded by total unavailability (byes + predicted injuries).
  */
-export function RoundImpactCard({ round, ladder, filterTeamId, headerLabel }: Props) {
+export function RoundImpactCard({ round, ladder, filterTeamId, headerLabel, retro }: Props) {
   const clubs = AFL_CLUB_BYES[round];
   const rule = getByeRule(round);
   const isByeRule = rule !== 'normal';
+  const isPlayed = !!retro && retro.size > 0;
+  const countLabel = getByeRuleLabel(rule); // "Best 16" / "Best 17"
   const visible = filterTeamId
     ? ladder.filter((row) => row.team.team_id === filterTeamId)
     : ladder;
@@ -73,6 +81,11 @@ export function RoundImpactCard({ round, ladder, filterTeamId, headerLabel }: Pr
           <span className="text-xs text-muted-foreground">
             {clubs.length} {clubs.length === 1 ? 'club' : 'clubs'} on bye
           </span>
+          {isPlayed && (
+            <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700">
+              Played
+            </span>
+          )}
         </div>
         <span
           className={cn(
@@ -117,7 +130,13 @@ export function RoundImpactCard({ round, ladder, filterTeamId, headerLabel }: Pr
 
         <ol className="space-y-2">
           {visible.map((row, i) => (
-            <CoachLadderRow key={row.team.team_id} row={row} rank={i + 1} />
+            <CoachLadderRow
+              key={row.team.team_id}
+              row={row}
+              rank={i + 1}
+              retro={retro?.get(row.team.team_id)}
+              countLabel={countLabel}
+            />
           ))}
         </ol>
       </div>
@@ -125,7 +144,17 @@ export function RoundImpactCard({ round, ladder, filterTeamId, headerLabel }: Pr
   );
 }
 
-function CoachLadderRow({ row, rank }: { row: CoachRoundImpact; rank: number }) {
+function CoachLadderRow({
+  row,
+  rank,
+  retro,
+  countLabel,
+}: {
+  row: CoachRoundImpact;
+  rank: number;
+  retro?: ByeTeamRetro;
+  countLabel: string;
+}) {
   const [expanded, setExpanded] = useState(false);
   const teamColor = TEAM_COLOR_MAP[row.team.team_id] ?? '#6B7280';
   const meta = IMPACT_META[row.grade];
@@ -187,6 +216,13 @@ function CoachLadderRow({ row, rank }: { row: CoachRoundImpact; rank: number }) 
           <span className="w-4 shrink-0" />
         )}
       </button>
+      {retro && (
+        <div className="flex flex-wrap items-stretch gap-2 px-3 pb-2.5 pt-0.5">
+          <RetroStat label="Available" value={retro.available} />
+          <RetroStat label="Total (all)" value={retro.totalAll} />
+          <RetroStat label={countLabel} value={retro.bestN} highlight />
+        </div>
+      )}
       {hasPlayers && expanded && (
         <ul className="px-3 pb-3 pt-2 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-x-4 gap-y-1.5 border-t border-border/50">
           {row.unavailable.map((p) => {
@@ -226,5 +262,39 @@ function CoachLadderRow({ row, rank }: { row: CoachRoundImpact; rank: number }) 
         </ul>
       )}
     </li>
+  );
+}
+
+/** Compact actual-result stat used in the played-round retrospective strip. */
+function RetroStat({
+  label,
+  value,
+  highlight = false,
+}: {
+  label: string;
+  value: number;
+  highlight?: boolean;
+}) {
+  return (
+    <div
+      className={cn(
+        'flex-1 min-w-[88px] rounded-md border px-2.5 py-1.5',
+        highlight
+          ? 'border-[#1A56DB]/30 bg-[#1A56DB]/5'
+          : 'border-border bg-muted/20'
+      )}
+    >
+      <div className="text-[9px] font-bold uppercase tracking-wider text-muted-foreground">
+        {label}
+      </div>
+      <div
+        className={cn(
+          'text-sm font-bold tabular-nums',
+          highlight && 'text-[#1A56DB]'
+        )}
+      >
+        {value.toLocaleString()}
+      </div>
+    </div>
   );
 }

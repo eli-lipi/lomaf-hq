@@ -137,6 +137,11 @@ export function getImpactGrade(
   );
 }
 
+/** True if `round` is one of the AFL bye rounds (R12–R16). Narrows to ByeRound. */
+export function isByeRound(round: number): round is ByeRound {
+  return (BYE_ROUNDS as readonly number[]).includes(round);
+}
+
 /** Returns the round in which an AFL club byes, or null if not in the bye window. */
 export function getByeRoundForClub(code: string): ByeRound | null {
   for (const round of BYE_ROUNDS) {

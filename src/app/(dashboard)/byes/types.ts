@@ -1,5 +1,5 @@
 import type { LeagueTeam } from '@/lib/types';
-import type { ImpactGrade } from '@/lib/afl-club-byes';
+import type { ImpactGrade, ByeRule } from '@/lib/afl-club-byes';
 
 export interface UnavailablePlayer {
   player_id: number;
@@ -26,4 +26,23 @@ export interface CoachRoundImpact {
   grade: ImpactGrade;
   /** Sum of `avg` across unavailable players (treats null avg as 0). */
   pointsLost: number;
+}
+
+/** Per-coach retrospective for a bye round that has already been scored. */
+export interface ByeTeamRetro {
+  team_id: number;
+  /** Players who returned a score this round (points not null). */
+  available: number;
+  /** Sum of every available player's score — the full squad output. */
+  totalAll: number;
+  /** The counted score (best 16/17) — equals the team's matchup score_for. */
+  bestN: number;
+}
+
+export interface ByeRoundRetro {
+  round: number;
+  rule: ByeRule;
+  /** 16 for best-16 rounds, 17 for best-17 (R13). */
+  minPlayable: number;
+  teams: ByeTeamRetro[];
 }

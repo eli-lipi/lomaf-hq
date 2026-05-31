@@ -2,7 +2,6 @@ import { ImageResponse } from 'next/og';
 import { createClient } from '@supabase/supabase-js';
 import { TEAMS, SEASON } from '@/lib/constants';
 import { computeSlideData } from '@/lib/compute-slide-data';
-import { computeLineupDiff } from '@/lib/compute-lineup-diff';
 import { computeTeamInjuries } from '@/lib/compute-team-injuries';
 import { readFileSync } from 'fs';
 import { join } from 'path';
@@ -470,10 +469,6 @@ export async function GET(
     const allComputedData = await computeSlideData(supabase, roundNumber);
     const cd = allComputedData.get(ranking.team_id);
 
-    // ── Lineup ins/outs vs previous round ──
-    const lineupDiffs = await computeLineupDiff(supabase, roundNumber);
-    const lineupDiff = lineupDiffs.get(ranking.team_id) ?? { ins: [], outs: [] };
-
     // ── Injuries on the current roster ──
     const teamInjuries = await computeTeamInjuries(supabase, roundNumber);
     const injuries = teamInjuries.get(ranking.team_id) ?? [];
@@ -705,8 +700,10 @@ export async function GET(
               )}
             </div>
 
-            {/* Roster status — IN / OUT / INJ. Hidden on R1 (no prior round to diff against) */}
-            {roundNumber >= 2 && (
+            {/* Injury status. The IN/OUT roster diff was dropped — it counted a
+                player's scoring-lineup moves, which best-16/17 bye rounds reshape
+                into phantom transactions. Shown only when there are injuries. */}
+            {injuries.length > 0 && (
               <div style={{
                 display: 'flex', flexDirection: 'column',
                 flexShrink: 0, marginTop: 20,
@@ -717,8 +714,6 @@ export async function GET(
                   background: `linear-gradient(90deg, ${theme.border}, rgba(255,255,255,0.04) 60%, transparent)`,
                 }} />
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                  <SatoriRosterRow label="IN"  color="#00FF87" players={lineupDiff.ins} />
-                  <SatoriRosterRow label="OUT" color="#FF4757" players={lineupDiff.outs} />
                   <SatoriRosterRow label="INJ" color="#FFB800" players={injuries.map(i => ({ player_name: i.player_name, duration_label: i.duration_label }))} />
                 </div>
               </div>

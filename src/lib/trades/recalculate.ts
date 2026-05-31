@@ -80,6 +80,7 @@ export async function recalculateTradeForRound(
     return {
       player_id: p.player_id,
       player_name: p.player_name,
+      club: null, // not needed here — this perf only feeds probability factors, never the bye-tagged breakdown
       receiving_team_id: p.receiving_team_id,
       receiving_team_name: p.receiving_team_name,
       position: (p.player_position as NormalizedPosition | null) ?? null,

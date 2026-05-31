@@ -1,4 +1,5 @@
 import { TEAMS } from './constants';
+import { isByeRound } from './afl-club-byes';
 
 /**
  * Computed slide data for one team.
@@ -154,12 +155,17 @@ export async function computeSlideData(
   }
 
   // ── 10. Season line averages + rank ──
+  // Bye rounds (R12–R16) score "best N regardless of position", so their
+  // per-position totals are structurally meaningless (a team might count 8
+  // mids one week, 0 rucks the next). Excluding them keeps the line ranks a
+  // clean read of each coach's positional strength in normal rounds.
   const LINE_POSITIONS = ['DEF', 'MID', 'FWD', 'RUC', 'UTL'] as const;
+  const lineRankRounds = scoredRounds.filter((r) => !isByeRound(r));
   const seasonLineAvgs = new Map<number, Record<string, number>>();
   for (const team of TEAMS) {
     const avgs: Record<string, number> = { DEF: 0, MID: 0, FWD: 0, RUC: 0, UTL: 0 };
     for (const pos of LINE_POSITIONS) {
-      const vals = scoredRounds.map(
+      const vals = lineRankRounds.map(
         (r) => lineByRoundTeam.get(`${r}-${team.team_id}`)?.[pos] || 0
       );
       avgs[pos] =

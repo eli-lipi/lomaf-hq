@@ -11,7 +11,7 @@ import {
   type ByeRound,
 } from '@/lib/afl-club-byes';
 import { LOMAF_BYE_FIXTURE } from '@/lib/lomaf-bye-fixture';
-import type { CoachRoundImpact, UnavailablePlayer } from './types';
+import type { CoachRoundImpact, UnavailablePlayer, ByeRoundRetro } from './types';
 
 interface RosterRow {
   team_id: number;
@@ -45,6 +45,14 @@ export interface ByeData {
    * window because the fixture is finalized for the season.
    */
   opponentByRound: OpponentByRound;
+  /**
+   * Played bye rounds (R12–R16 already scored), each with per-coach
+   * available/total/best-N stats. Empty until a bye round is uploaded.
+   * Indexable by round via `retroByRound`.
+   */
+  byeRetro: ByeRoundRetro[];
+  /** team_id → retrospective stats, per played bye round. */
+  retroByRound: Partial<Record<ByeRound, Map<number, ByeRoundRetro['teams'][number]>>>;
 }
 
 const EMPTY_IMPACT: Record<ByeRound, CoachRoundImpact[]> = {
@@ -68,6 +76,7 @@ export function useByeData(): ByeData {
   const [latestRound, setLatestRound] = useState(0);
   const [injuryFreshness, setInjuryFreshness] = useState<string | null>(null);
   const [avgByPlayerId, setAvgByPlayerId] = useState<Map<number, number>>(new Map());
+  const [byeRetro, setByeRetro] = useState<ByeRoundRetro[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -98,6 +107,7 @@ export function useByeData(): ByeData {
             latestRound: number;
             rosters: RosterRow[];
             averages: Array<{ player_id: number; avg_pts: number }>;
+            byeRetro?: ByeRoundRetro[];
           };
           if (!cancelled) {
             setLatestRound(json.latestRound ?? 0);
@@ -105,6 +115,7 @@ export function useByeData(): ByeData {
             const map = new Map<number, number>();
             for (const r of json.averages ?? []) map.set(r.player_id, r.avg_pts);
             setAvgByPlayerId(map);
+            setByeRetro(json.byeRetro ?? []);
           }
         }
 
@@ -234,6 +245,19 @@ export function useByeData(): ByeData {
     return out;
   }, []);
 
+  // Index the retrospective by round → team_id for O(1) lookup in cards.
+  const retroByRound = useMemo<
+    Partial<Record<ByeRound, Map<number, ByeRoundRetro['teams'][number]>>>
+  >(() => {
+    const out: Partial<Record<ByeRound, Map<number, ByeRoundRetro['teams'][number]>>> = {};
+    for (const r of byeRetro) {
+      const m = new Map<number, ByeRoundRetro['teams'][number]>();
+      for (const t of r.teams) m.set(t.team_id, t);
+      out[r.round as ByeRound] = m;
+    }
+    return out;
+  }, [byeRetro]);
+
   return {
     loading,
     hasRosters: rosters.length > 0,
@@ -241,6 +265,8 @@ export function useByeData(): ByeData {
     injuryFreshness,
     impactByRound,
     opponentByRound,
+    byeRetro,
+    retroByRound,
   };
 }
 

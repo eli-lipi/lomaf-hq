@@ -23,7 +23,7 @@ export default function OverviewTab({ data }: { data: ByeData }) {
 
       <div className="space-y-5">
         {BYE_ROUNDS.map((round) => (
-          <RoundImpactCard key={round} round={round} ladder={data.impactByRound[round]} />
+          <RoundImpactCard key={round} round={round} ladder={data.impactByRound[round]} retro={data.retroByRound[round]} />
         ))}
       </div>
 

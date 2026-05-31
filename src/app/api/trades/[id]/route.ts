@@ -73,10 +73,10 @@ export async function GET(_request: Request, ctx: { params: Promise<{ id: string
       playerIds.length > 0
         ? supabase
             .from('player_rounds')
-            .select('player_id, team_id, round_number, points, pos')
+            .select('player_id, team_id, round_number, points, pos, club')
             .in('player_id', playerIds)
             .lte('round_number', latestRound)
-        : Promise.resolve({ data: [] as Array<{ player_id: number; team_id: number; round_number: number; points: number | null; pos: string | null }> }),
+        : Promise.resolve({ data: [] as Array<{ player_id: number; team_id: number; round_number: number; points: number | null; pos: string | null; club: string | null }> }),
       playerIds.length > 0
         ? supabase
             .from('draft_picks')
@@ -110,6 +110,19 @@ export async function GET(_request: Request, ctx: { params: Promise<{ id: string
       if (r.pos && !roundsPosByPlayer.has(r.player_id)) {
         const cleaned = cleanPositionDisplay(r.pos);
         if (cleaned) roundsPosByPlayer.set(r.player_id, cleaned);
+      }
+    }
+
+    // Most-recent non-null AFL club per player — drives the bye-round tag in
+    // the round-by-round breakdown (a player byes when their club byes).
+    const clubByPlayer = new Map<number, string>();
+    const clubLatestRound = new Map<number, number>();
+    for (const r of (playerRoundsAll ?? []) as { player_id: number; round_number: number; club: string | null }[]) {
+      if (!r.club) continue;
+      const seen = clubLatestRound.get(r.player_id) ?? -1;
+      if (r.round_number >= seen) {
+        clubLatestRound.set(r.player_id, r.round_number);
+        clubByPlayer.set(r.player_id, r.club);
       }
     }
 
@@ -214,6 +227,7 @@ export async function GET(_request: Request, ctx: { params: Promise<{ id: string
       return {
         player_id: p.player_id,
         player_name: p.player_name,
+        club: clubByPlayer.get(p.player_id) ?? null,
         receiving_team_id: p.receiving_team_id,
         receiving_team_name: p.receiving_team_name,
         position: (p.player_position as NormalizedPosition | null) ?? null,

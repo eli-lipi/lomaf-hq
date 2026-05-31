@@ -133,6 +133,7 @@ export default function MyTeamTab({ data, defaultTeamId }: Props) {
             round={round}
             ladder={data.impactByRound[round]}
             filterTeamId={selectedTeamId}
+            retro={data.retroByRound[round]}
           />
         ))}
       </div>

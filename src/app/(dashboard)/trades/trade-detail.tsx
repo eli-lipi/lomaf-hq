@@ -47,6 +47,7 @@ import {
   getCoachByTeam,
   getTeamColor,
 } from '@/lib/team-colors';
+import { getByeRoundForClub } from '@/lib/afl-club-byes';
 import type {
   PlayerPerformance,
   Trade,
@@ -2454,6 +2455,7 @@ function DarkScoresGrid({
 
   const renderRow = (p: PlayerPerformance) => {
     const baseline = baselineForPerformance(p);
+    const byeRound = p.club ? getByeRoundForClub(p.club) : null;
     const preMap = new Map<number, number | null>();
     for (const s of p.pre_trade_round_scores ?? []) preMap.set(s.round, s.points);
     const postMap = new Map<number, number | null>();
@@ -2478,7 +2480,7 @@ function DarkScoresGrid({
           const pts = preMap.get(r);
           return (
             <td key={`pre-${r}`} className="px-1 py-1 text-center">
-              <ScoreCell pts={pts === undefined ? null : pts} hasRound={preMap.has(r)} baseline={baseline} />
+              <ScoreCell pts={pts === undefined ? null : pts} hasRound={preMap.has(r)} baseline={baseline} isBye={byeRound === r} />
             </td>
           );
         })}
@@ -2504,7 +2506,7 @@ function DarkScoresGrid({
           const pts = postMap.get(r);
           return (
             <td key={`post-${r}`} className="px-1 py-1 text-center">
-              <ScoreCell pts={pts === undefined ? null : pts} hasRound={postMap.has(r)} baseline={baseline} />
+              <ScoreCell pts={pts === undefined ? null : pts} hasRound={postMap.has(r)} baseline={baseline} isBye={byeRound === r} />
             </td>
           );
         })}
@@ -2640,32 +2642,50 @@ function ScoreCell({
   pts,
   hasRound,
   baseline,
+  isBye = false,
 }: {
   pts: number | null;
   hasRound: boolean;
   baseline: number;
+  isBye?: boolean;
 }) {
+  const byeTag = isBye ? (
+    <span
+      className="block text-[8px] font-bold uppercase tracking-wide mt-0.5"
+      style={{ color: 'rgba(163,255,18,0.75)' }}
+      title="AFL club bye — player unavailable this round"
+    >
+      bye
+    </span>
+  ) : null;
+
   if (!hasRound) {
     return (
-      <span
-        className="inline-block min-w-[2.25rem] px-1.5 py-0.5 rounded text-xs tabular-nums"
-        style={{ color: TEXT_MUTED }}
-      >
-        —
-      </span>
+      <>
+        <span
+          className="inline-block min-w-[2.25rem] px-1.5 py-0.5 rounded text-xs tabular-nums"
+          style={{ color: TEXT_MUTED }}
+        >
+          —
+        </span>
+        {byeTag}
+      </>
     );
   }
   const cell = scoreCellStyle(pts, baseline);
   return (
-    <span
-      className="inline-block min-w-[2.25rem] px-1.5 py-0.5 rounded text-xs tabular-nums font-medium"
-      style={{
-        background: cell.bg,
-        color: cell.color,
-        border: `1px solid ${cell.border}`,
-      }}
-    >
-      {pts == null ? 'DNP' : pts}
-    </span>
+    <>
+      <span
+        className="inline-block min-w-[2.25rem] px-1.5 py-0.5 rounded text-xs tabular-nums font-medium"
+        style={{
+          background: cell.bg,
+          color: cell.color,
+          border: `1px solid ${cell.border}`,
+        }}
+      >
+        {pts == null ? 'DNP' : pts}
+      </span>
+      {byeTag}
+    </>
   );
 }

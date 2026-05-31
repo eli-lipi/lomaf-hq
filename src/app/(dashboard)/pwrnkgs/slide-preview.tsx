@@ -434,8 +434,10 @@ export default function SlidePreview({ data }: { data: SlidePreviewData }) {
             {renderWriteup(d.writeup)}
           </div>
 
-          {/* Roster status — IN / OUT / INJ. Hidden on R1 (no prior round to diff against) */}
-          {d.roundNumber >= 2 && (
+          {/* Injury status. The IN/OUT roster diff was dropped — it counted a
+              player's scoring-lineup moves, which best-16/17 bye rounds reshape
+              into phantom transactions. Shown only when there are injuries. */}
+          {d.injuries.length > 0 && (
             <div style={{ flexShrink: 0, marginTop: 10, display: 'flex', flexDirection: 'column' }}>
               {/* Gradient divider */}
               <div style={{
@@ -443,8 +445,6 @@ export default function SlidePreview({ data }: { data: SlidePreviewData }) {
                 background: `linear-gradient(90deg, ${theme.border}, rgba(255,255,255,0.04) 60%, transparent)`,
               }} />
               <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                <RosterRow label="IN" color="#00FF87" players={d.ins} />
-                <RosterRow label="OUT" color="#FF4757" players={d.outs} />
                 <RosterRow label="INJ" color="#FFB800" players={d.injuries.map(i => ({ player_name: i.player_name, duration_label: i.duration_label }))} />
               </div>
             </div>

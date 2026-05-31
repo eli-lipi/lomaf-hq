@@ -4,6 +4,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { TEAMS } from '@/lib/constants';
 import { cn, formatScore } from '@/lib/utils';
 import { fetchResolvedScores } from '@/lib/scores';
+import { isByeRound } from '@/lib/afl-club-byes';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell,
 } from 'recharts';
@@ -93,18 +94,21 @@ export default function RoundRangeTab() {
   // Season averages (for single-round comparison)
   const seasonLineAvgs = useMemo(() => {
     if (!isSingleRound) return null;
+    // Baseline = normal rounds only. Bye rounds (best 16/17) reshape both the
+    // position lines and the team total, so they'd skew a "vs season norm" read.
+    const baselineRounds = validRounds.filter(r => !isByeRound(r));
     const avgs: Record<number, Record<string, number>> = {};
     TEAMS.forEach(t => {
       avgs[t.team_id] = {};
       LINE_IDS.forEach(pos => {
-        const roundTotals = validRounds.map(round => {
+        const roundTotals = baselineRounds.map(round => {
           return allData.filter(r => r.team_id === t.team_id && r.round_number === round && r.pos === pos && r.is_scoring && r.points != null)
             .reduce((sum, p) => sum + Number(p.points), 0);
         }).filter(s => s > 0);
         avgs[t.team_id][pos] = roundTotals.length > 0 ? Math.round(roundTotals.reduce((a, b) => a + b, 0) / roundTotals.length) : 0;
       });
       // Total season avg
-      const totalPerRound = validRounds.map(round => {
+      const totalPerRound = baselineRounds.map(round => {
         return allData.filter(r => r.team_id === t.team_id && r.round_number === round && r.is_scoring && r.points != null)
           .reduce((sum, p) => sum + Number(p.points), 0);
       }).filter(s => s > 0);
@@ -208,8 +212,9 @@ export default function RoundRangeTab() {
       }
     });
 
-    // Single-round comparison to season avg
-    if (isSingleRound && seasonLineAvgs) {
+    // Single-round comparison to season avg — skip for bye rounds, where a
+    // best-16/17 total isn't comparable to the normal-round baseline.
+    if (isSingleRound && seasonLineAvgs && !isByeRound(selectedRounds[0])) {
       TEAMS.forEach(t => {
         const teamRow = tableData.find(tr => tr.team_id === t.team_id);
         if (!teamRow) return;
@@ -279,7 +284,7 @@ export default function RoundRangeTab() {
               }}
               className="border border-border rounded-md px-3 py-1.5 text-sm bg-background"
             >
-              {validRounds.map(r => <option key={r} value={r}>R{r}</option>)}
+              {validRounds.map(r => <option key={r} value={r}>R{r}{isByeRound(r) ? ' (bye)' : ''}</option>)}
             </select>
           </div>
           <div className="flex items-center gap-2">
@@ -293,7 +298,7 @@ export default function RoundRangeTab() {
               }}
               className="border border-border rounded-md px-3 py-1.5 text-sm bg-background"
             >
-              {validRounds.map(r => <option key={r} value={r}>R{r}</option>)}
+              {validRounds.map(r => <option key={r} value={r}>R{r}{isByeRound(r) ? ' (bye)' : ''}</option>)}
             </select>
           </div>
           <div className="flex gap-2">
@@ -326,6 +331,11 @@ export default function RoundRangeTab() {
           <div className="p-4 border-b border-border">
             <h3 className="font-semibold">Team Performance — {isSingleRound ? `Round ${selectedRounds[0]}` : `R${selectedRounds[0]}–R${selectedRounds[selectedRounds.length - 1]}`}</h3>
             <p className="text-xs text-muted-foreground mt-1">Click column headers to sort</p>
+            {selectedRounds.some(r => isByeRound(r)) && (
+              <p className="text-[11px] mt-2 px-2.5 py-1.5 rounded bg-[#1A56DB]/5 text-[#1A56DB] border border-[#1A56DB]/20 leading-relaxed">
+                Range includes a bye round (best 16/17). The team <strong>Total</strong> is accurate, but the per-line DEF/MID/FWD/RUC/UTL breakdown only counts players who made the best 16/17 that week — positions don&apos;t apply on byes.
+              </p>
+            )}
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">

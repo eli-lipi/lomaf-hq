@@ -3,6 +3,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { TEAMS } from '@/lib/constants';
 import { fetchResolvedScores } from '@/lib/scores';
+import { isByeRound } from '@/lib/afl-club-byes';
 import { cn, formatScore } from '@/lib/utils';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
@@ -104,13 +105,17 @@ export default function LineRankingsTab() {
   const crossPosSummary = useMemo(() => {
     if (validRounds.length === 0) return [];
     const posIds = ['DEF', 'MID', 'RUC', 'FWD', 'UTL'] as const;
+    // Bye rounds score "best N regardless of position", so they don't
+    // reflect a team's true positional strength — exclude them from the
+    // season position averages and ranks.
+    const nonByeRounds = validRounds.filter(r => !isByeRound(r));
 
     // For each position + team, compute season average
     const teamPosAvg: Record<string, Record<string, number>> = {};
     TEAMS.forEach(t => {
       teamPosAvg[t.team_name] = {};
       posIds.forEach(pos => {
-        const roundTotals = validRounds.map(round => {
+        const roundTotals = nonByeRounds.map(round => {
           const players = allData.filter(r => r.team_id === t.team_id && r.round_number === round && r.pos === pos && r.is_scoring && r.points != null);
           let total = players.reduce((sum, p) => sum + Number(p.points), 0);
           // Apply line adjustment if one exists for this round/team/position
@@ -179,7 +184,10 @@ export default function LineRankingsTab() {
         return { round, score, rank: 0 };
       });
 
-      const validScores = roundScores.map(r => r.score).filter(s => s > 0);
+      // Season avg/high/low/total exclude bye rounds (best-N scoring makes
+      // their per-position totals structurally misleading), but the
+      // per-round roundScores keep every round so the grid can tag byes.
+      const validScores = roundScores.filter(r => !isByeRound(r.round)).map(r => r.score).filter(s => s > 0);
       const avg = validScores.length > 0 ? Math.round(validScores.reduce((a, b) => a + b, 0) / validScores.length) : 0;
 
       // === Player breakdown by average (top N by avg = "best", rest = "depth") ===
@@ -360,7 +368,12 @@ export default function LineRankingsTab() {
                     <th className="px-3 py-2.5 font-medium text-muted-foreground text-right">High</th>
                     <th className="px-3 py-2.5 font-medium text-muted-foreground text-right">Low</th>
                     {validRounds.map(r => (
-                      <th key={r} className="px-2 py-2.5 font-medium text-muted-foreground text-center min-w-[56px]">R{r}</th>
+                      <th key={r} className="px-2 py-2.5 font-medium text-muted-foreground text-center min-w-[56px]">
+                        R{r}
+                        {isByeRound(r) && (
+                          <span className="block text-[8px] font-bold uppercase tracking-wide text-[#1A56DB]">Bye</span>
+                        )}
+                      </th>
                     ))}
                   </tr>
                 </thead>
@@ -380,12 +393,19 @@ export default function LineRankingsTab() {
                       <td className="px-3 py-2.5 text-right">{formatScore(team.total)}</td>
                       <td className="px-3 py-2.5 text-right text-green-600 font-medium">{team.high}</td>
                       <td className="px-3 py-2.5 text-right text-red-600">{team.low}</td>
-                      {team.roundScores.map((rs, ri) => (
-                        <td key={ri} className="px-2 py-2.5 text-center">
-                          <div className="text-xs font-medium">{rs.score || '—'}</div>
-                          {rs.score > 0 && <RankBadge rank={rs.rank} />}
-                        </td>
-                      ))}
+                      {team.roundScores.map((rs, ri) => {
+                        const bye = isByeRound(rs.round);
+                        return (
+                          <td key={ri} className={cn('px-2 py-2.5 text-center', bye && 'bg-[#1A56DB]/5')}>
+                            <div className={cn('text-xs font-medium', bye && 'italic text-muted-foreground')}>{rs.score || '—'}</div>
+                            {bye ? (
+                              <span className="text-[8px] uppercase tracking-wide text-muted-foreground" title="Bye round — best 16/17, excluded from line rankings">bye</span>
+                            ) : (
+                              rs.score > 0 && <RankBadge rank={rs.rank} />
+                            )}
+                          </td>
+                        );
+                      })}
                     </tr>
                   ))}
                 </tbody>

@@ -105,6 +105,7 @@ export interface TradeProbability {
 export interface PlayerPerformance {
   player_id: number;
   player_name: string;
+  club: string | null; // AFL club code — determines the player's bye round
   receiving_team_id: number;
   receiving_team_name: string;
   position: NormalizedPosition | null;

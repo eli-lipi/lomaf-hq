@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { AFL_CLUBS } from '@/lib/afl-clubs';
+import { BYE_ROUNDS, getByeRule, getMinPlayable } from '@/lib/afl-club-byes';
+import type { ByeTeamRetro, ByeRoundRetro } from '@/app/(dashboard)/byes/types';
 
 /**
  * GET /api/byes/data — server-side, parallelized fetch of the two
@@ -39,6 +41,8 @@ export interface ByesDataResponse {
   latestRound: number;
   rosters: RosterRow[];
   averages: AvgRow[];
+  /** Played bye rounds (R12–R16 with scores), each with per-coach stats. */
+  byeRetro: ByeRoundRetro[];
 }
 
 async function fetchAllRostersForRound(maxRound: number): Promise<RosterRow[]> {
@@ -97,6 +101,77 @@ async function fetchAllAverages(): Promise<AvgRow[]> {
   return out;
 }
 
+/**
+ * For each bye round that has already been scored, compute per coach:
+ * how many players were available, the combined total of every player's
+ * score, and the counted best-16/17 score. Drawn entirely from
+ * player_rounds — `is_scoring` marks the counted players (its sum equals
+ * the team's matchup score_for), `points != null` marks availability.
+ */
+async function fetchByeRoundRetro(latestRound: number): Promise<ByeRoundRetro[]> {
+  const rounds = BYE_ROUNDS.filter((r) => r <= latestRound);
+  if (rounds.length === 0) return [];
+
+  const rows: {
+    round_number: number;
+    team_id: number;
+    points: number | null;
+    is_scoring: boolean;
+  }[] = [];
+  let offset = 0;
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    const { data: batch, error } = await supabase
+      .from('player_rounds')
+      .select('round_number, team_id, points, is_scoring')
+      .in('round_number', rounds as unknown as number[])
+      .range(offset, offset + 999);
+    if (error) throw error;
+    if (!batch || batch.length === 0) break;
+    rows.push(...batch);
+    if (batch.length < 1000) break;
+    offset += 1000;
+  }
+
+  const byRound = new Map<number, Map<number, ByeTeamRetro>>();
+  const roundHasScore = new Set<number>();
+  for (const row of rows) {
+    let teamMap = byRound.get(row.round_number);
+    if (!teamMap) {
+      teamMap = new Map();
+      byRound.set(row.round_number, teamMap);
+    }
+    let agg = teamMap.get(row.team_id);
+    if (!agg) {
+      agg = { team_id: row.team_id, available: 0, totalAll: 0, bestN: 0 };
+      teamMap.set(row.team_id, agg);
+    }
+    if (row.points != null) {
+      agg.available += 1;
+      agg.totalAll += Number(row.points);
+      roundHasScore.add(row.round_number);
+      if (row.is_scoring) agg.bestN += Number(row.points);
+    }
+  }
+
+  const out: ByeRoundRetro[] = [];
+  for (const round of rounds) {
+    if (!roundHasScore.has(round)) continue; // round not played yet
+    const rule = getByeRule(round);
+    const teamMap = byRound.get(round)!;
+    const teams = [...teamMap.values()]
+      .map((a) => ({
+        team_id: a.team_id,
+        available: a.available,
+        totalAll: Math.round(a.totalAll),
+        bestN: Math.round(a.bestN),
+      }))
+      .sort((a, b) => a.team_id - b.team_id);
+    out.push({ round, rule, minPlayable: getMinPlayable(rule), teams });
+  }
+  return out;
+}
+
 export async function GET() {
   try {
     // 1. Get the latest round with player_rounds data — needed before we
@@ -113,10 +188,14 @@ export async function GET() {
     const latestRound =
       (latestRoundRes.data as { round_number: number }[] | null)?.[0]?.round_number ?? 0;
 
-    // 2. Pull rosters for the latest round.
-    const rosters = await fetchAllRostersForRound(latestRound);
+    // 2. Pull rosters for the latest round + the played-bye retrospective.
+    //    Both depend only on latestRound, so run them together.
+    const [rosters, byeRetro] = await Promise.all([
+      fetchAllRostersForRound(latestRound),
+      fetchByeRoundRetro(latestRound),
+    ]);
 
-    const payload: ByesDataResponse = { latestRound, rosters, averages };
+    const payload: ByesDataResponse = { latestRound, rosters, averages, byeRetro };
     return NextResponse.json(payload, {
       // 30s edge cache. Bye impact tables don't change minute-to-minute;
       // a coach refreshing the page during planning won't notice this.
