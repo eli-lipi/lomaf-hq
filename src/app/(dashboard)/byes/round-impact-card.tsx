@@ -9,6 +9,7 @@ import {
   IMPACT_META,
   STAR_AVG_THRESHOLD,
   getByeRule,
+  getByeRuleLabel,
   type ByeRound,
 } from '@/lib/afl-club-byes';
 import { cn } from '@/lib/utils';
@@ -54,7 +55,7 @@ interface Props {
 export function RoundImpactCard({ round, ladder, filterTeamId, headerLabel }: Props) {
   const clubs = AFL_CLUB_BYES[round];
   const rule = getByeRule(round);
-  const isBest16 = rule === 'best-16';
+  const isByeRule = rule !== 'normal';
   const visible = filterTeamId
     ? ladder.filter((row) => row.team.team_id === filterTeamId)
     : ladder;
@@ -76,10 +77,10 @@ export function RoundImpactCard({ round, ladder, filterTeamId, headerLabel }: Pr
         <span
           className={cn(
             'ml-auto text-xs font-semibold px-2.5 py-1 rounded-full',
-            isBest16 ? 'bg-[#1A56DB] text-white' : 'bg-muted text-muted-foreground'
+            isByeRule ? 'bg-[#1A56DB] text-white' : 'bg-muted text-muted-foreground'
           )}
         >
-          {isBest16 ? 'Best 16' : 'Play normally'}
+          {getByeRuleLabel(rule)}
         </span>
       </div>
 

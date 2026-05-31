@@ -10,6 +10,7 @@ import {
   IMPACT_META,
   STAR_AVG_THRESHOLD,
   getByeRule,
+  getByeRuleLabel,
   type ByeRound,
 } from '@/lib/afl-club-byes';
 import { cn } from '@/lib/utils';
@@ -81,7 +82,7 @@ function pairsFromOpponentMap(
 function FixtureRoundSection({ round, pairs }: { round: ByeRound; pairs: FixturePair[] }) {
   const clubs = AFL_CLUB_BYES[round];
   const rule = getByeRule(round);
-  const isBest16 = rule === 'best-16';
+  const isByeRule = rule !== 'normal';
 
   return (
     <section id={`round-${round}`} className="scroll-mt-20">
@@ -92,10 +93,10 @@ function FixtureRoundSection({ round, pairs }: { round: ByeRound; pairs: Fixture
         <span
           className={cn(
             'text-[11px] font-semibold px-2 py-0.5 rounded-full',
-            isBest16 ? 'bg-[#1A56DB] text-white' : 'bg-muted text-muted-foreground'
+            isByeRule ? 'bg-[#1A56DB] text-white' : 'bg-muted text-muted-foreground'
           )}
         >
-          {isBest16 ? 'Best 16' : 'Play normally'}
+          {getByeRuleLabel(rule)}
         </span>
         <div className="flex items-center gap-1.5 ml-auto flex-wrap">
           <span className="text-[11px] uppercase tracking-wider text-muted-foreground">

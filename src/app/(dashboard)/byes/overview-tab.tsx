@@ -61,7 +61,7 @@ function Legend({ latestRound, injuryFreshness }: { latestRound: number; injuryF
         <li><strong>Low Impact</strong> — 1–3 players <em>or</em> 1–249 pts</li>
         <li><strong>Medium Impact</strong> — 4–6 players <em>or</em> 250–499 pts</li>
         <li><strong>High Impact</strong> — 7+ players (still fieldable) <em>or</em> 500–699 pts</li>
-        <li><strong>Can&apos;t Field a Team</strong> — playable roster drops below the scoring minimum (16 in best-16 rounds, 18 in normal) <em>or</em> 700+ pts lost</li>
+        <li><strong>Can&apos;t Field a Team</strong> — playable roster drops below the scoring minimum (16 in best-16 rounds, 17 in best-17 rounds) <em>or</em> 700+ pts lost</li>
       </ul>
       <p className="text-[10px] text-muted-foreground pt-2 border-t border-border/50">
         Unavailable = AFL bye <em>or</em> AFL injury feed predicts the player out that round

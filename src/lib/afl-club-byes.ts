@@ -3,7 +3,9 @@
 // =====================================================================
 // The AFL bye block runs R12–R16. Each of the 18 AFL clubs has exactly
 // one bye in this window. LOMAF scoring rules:
-//   - 2-bye round (R13)            → play normally
+//   - 2-bye round (R13)            → play "best 17" (top 17 scores
+//                                    from each coach's full list,
+//                                    no positions / bench / emg)
 //   - 4-bye round (R12, R14–R16)   → play "best 16" (top 16 scores
 //                                    from each coach's full list,
 //                                    no positions / bench / emg)
@@ -26,18 +28,26 @@ export const AFL_CLUB_BYES: Record<ByeRound, string[]> = {
   16: ['WBD', 'GEE', 'STK', 'MEL'],
 };
 
-export type ByeRule = 'normal' | 'best-16';
+export type ByeRule = 'normal' | 'best-16' | 'best-17';
 
-/** 2-bye rounds → play normally; 4-bye rounds → best 16. */
+/** 2-bye rounds → best 17; 4-bye rounds → best 16. */
 export function getByeRule(round: ByeRound): ByeRule {
-  return AFL_CLUB_BYES[round].length === 2 ? 'normal' : 'best-16';
+  return AFL_CLUB_BYES[round].length === 2 ? 'best-17' : 'best-16';
 }
 
 /** Minimum playable squad size for the round's scoring rule.
  *  Normal: 18 scoring positions (5 DEF + 7 MID + 4 FWD + 1 RUC + 1 UTL).
+ *  Best-17 (R13): top 17 scores from the full roster — no positions / bench.
  *  Best-16: top 16 scores from the full roster — no positions / bench. */
 export function getMinPlayable(rule: ByeRule): number {
-  return rule === 'best-16' ? 16 : 18;
+  return rule === 'best-16' ? 16 : rule === 'best-17' ? 17 : 18;
+}
+
+/** Human-readable badge label for a round's scoring rule. */
+export function getByeRuleLabel(rule: ByeRule): string {
+  return rule === 'best-16' ? 'Best 16'
+       : rule === 'best-17' ? 'Best 17'
+       : 'Play normally';
 }
 
 // =====================================================================

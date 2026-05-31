@@ -45,10 +45,11 @@ function ByesClientInner({ userTeamId }: { userTeamId: number | null }) {
       <div className="mb-5">
         <h1 className="text-2xl font-bold">Byes</h1>
         <p className="text-muted-foreground text-sm mt-1">
-          AFL bye fixture for the 2026 season (R12–R16). When 2 AFL clubs bye we play normally;
-          when 4 bye we play <span className="font-semibold text-foreground">best 16</span> — top
-          16 scores from each coach&apos;s full list, no positions or bench. Players predicted
-          injured by AFL.com.au also count as unavailable.
+          AFL bye fixture for the 2026 season (R12–R16). When 2 AFL clubs bye we play{' '}
+          <span className="font-semibold text-foreground">best 17</span>; when 4 bye we play{' '}
+          <span className="font-semibold text-foreground">best 16</span> — the top 17 or 16 scores
+          from each coach&apos;s full list, no positions or bench. Players predicted injured by
+          AFL.com.au also count as unavailable.
         </p>
       </div>
 
