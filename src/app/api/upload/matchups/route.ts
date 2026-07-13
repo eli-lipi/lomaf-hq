@@ -124,6 +124,14 @@ export async function POST(request: Request) {
       }
     }
 
+    // Backfill blank-round ladder history from the (cumulative) matchup data.
+    // The teams CSV only ever carries standings for the round it's uploaded
+    // to, so any round skipped during a hiatus (e.g. the R12–R17 bye gap) has
+    // no ladder. matchup_rounds holds the authoritative H2H result for every
+    // round, so we reconstruct the cumulative ladder for rounds that lack a
+    // real snapshot. Runs on every upload → also self-heals future gaps.
+    const standingsBackfill = await backfillStandingsHistory();
+
     // Log upload
     await supabase.from('csv_uploads').insert({
       round_number: rounds[rounds.length - 1] || 0,
@@ -142,6 +150,7 @@ export async function POST(request: Request) {
       count: rows.length,
       rounds: roundCounts,
       new_discrepancies: newDiscrepancies,
+      standings_backfill: standingsBackfill,
     });
   } catch (err) {
     console.error('Matchups upload error:', err);
@@ -153,4 +162,96 @@ export async function POST(request: Request) {
       { status: 500 }
     );
   }
+}
+
+/**
+ * Reconstruct the cumulative ladder (W/L/T, pts for/against, %, league rank)
+ * for every round that has no authoritative standings snapshot, using the
+ * cumulative matchup_rounds data as the source of truth.
+ *
+ * A round is "authoritative" once a teams-CSV upload has written a
+ * league_rank for it — those rounds are left untouched. This fills the blank
+ * rounds only (e.g. a bye-round gap), so it's safe to run on every upload and
+ * is independent of the order in which the matchups/teams CSVs are uploaded.
+ *
+ * The upsert writes only standings columns, so line totals/ranks computed by
+ * the teams-CSV upload are preserved on any row that already carries them.
+ */
+async function backfillStandingsHistory(): Promise<{
+  filled_rounds: number[];
+  skipped_rounds: number[];
+}> {
+  const [{ data: allMatchups }, { data: existingSnaps }] = await Promise.all([
+    supabase
+      .from('matchup_rounds')
+      .select('round_number, team_id, score_for, score_against, win, loss, tie'),
+    supabase.from('team_snapshots').select('round_number, league_rank'),
+  ]);
+
+  if (!allMatchups || allMatchups.length === 0) {
+    return { filled_rounds: [], skipped_rounds: [] };
+  }
+
+  // Rounds that already carry a real ladder (league_rank set from a teams-CSV
+  // upload) are authoritative and never overwritten.
+  const authoritative = new Set<number>();
+  for (const s of existingSnaps ?? []) {
+    if (s.league_rank != null && s.league_rank > 0) authoritative.add(s.round_number);
+  }
+
+  const rounds = [...new Set(allMatchups.map((m) => m.round_number))].sort((a, b) => a - b);
+  const filled: number[] = [];
+  const skipped: number[] = [];
+  const rowsToWrite: Record<string, unknown>[] = [];
+
+  for (const round of rounds) {
+    if (authoritative.has(round)) {
+      skipped.push(round);
+      continue;
+    }
+
+    const ladder = TEAMS.map((t) => {
+      const upto = allMatchups.filter(
+        (m) => m.team_id === t.team_id && m.round_number <= round
+      );
+      const wins = upto.filter((m) => m.win).length;
+      const losses = upto.filter((m) => m.loss).length;
+      const ties = upto.filter((m) => m.tie).length;
+      const pts_for = upto.reduce((sum, m) => sum + Number(m.score_for || 0), 0);
+      const pts_against = upto.reduce((sum, m) => sum + Number(m.score_against || 0), 0);
+      return {
+        round_number: round,
+        team_id: t.team_id,
+        team_name: t.team_name,
+        wins,
+        losses,
+        ties,
+        pts_for,
+        pts_against,
+        pct: pts_against > 0 ? (pts_for / pts_against) * 100 : 0,
+        league_rank: 0,
+      };
+    });
+
+    // AFL ladder order: premiership points (win = 1, tie = 0.5) then %.
+    ladder.sort(
+      (a, b) => b.wins + 0.5 * b.ties - (a.wins + 0.5 * a.ties) || b.pct - a.pct
+    );
+    ladder.forEach((row, i) => {
+      row.league_rank = i + 1;
+    });
+
+    rowsToWrite.push(...ladder);
+    filled.push(round);
+  }
+
+  for (let i = 0; i < rowsToWrite.length; i += 500) {
+    const batch = rowsToWrite.slice(i, i + 500);
+    const { error } = await supabase
+      .from('team_snapshots')
+      .upsert(batch, { onConflict: 'round_number,team_id' });
+    if (error) throw error;
+  }
+
+  return { filled_rounds: filled, skipped_rounds: skipped };
 }
