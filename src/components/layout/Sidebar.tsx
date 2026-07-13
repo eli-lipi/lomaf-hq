@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Trophy, BarChart3, ArrowLeftRight, Settings, Menu, X, ChevronDown, ChevronRight, HeartPulse, CalendarOff, Upload } from 'lucide-react';
+import { Trophy, BarChart3, ArrowLeftRight, Settings, Menu, X, ChevronDown, ChevronRight, HeartPulse, Upload } from 'lucide-react';
 import { useState } from 'react';
 import { cn } from '@/lib/utils';
 import type { AppUser } from '@/lib/auth';
@@ -76,18 +76,6 @@ const NAV_ITEMS: NavItem[] = [
     href: '/injuries',
     label: 'Injuries',
     icon: HeartPulse,
-  },
-  {
-    // Open to all coaches (post-phase-1).
-    href: '/byes',
-    label: 'Byes',
-    icon: CalendarOff,
-    children: [
-      { href: '/byes?tab=overview', label: 'Overview' },
-      { href: '/byes?tab=fixture', label: 'Fixture' },
-      { href: '/byes?tab=opposition', label: 'Opposition' },
-      { href: '/byes?tab=my-team', label: 'My Team' },
-    ],
   },
   {
     href: '/settings',

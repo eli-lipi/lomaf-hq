@@ -77,21 +77,29 @@ export default function LuckFormTab() {
         TEAMS.every(t => perRoundResult[`${round}-${t.team_id}`] !== undefined)
       );
 
-      setLuckRounds(validRounds);
+      // Heatmap columns must match the rounds the luck calc actually covers.
+      setLuckRounds(roundsWithMatchups);
 
       // === Compute Luck-O-Meter ===
       // Expected wins: per round, count teams outscored → expected win rate
       // Actual wins: from cumulative W/L in latest snapshot
       // Luck = actual wins - expected wins (zero-sum across all teams)
 
-      const maxSnapRound = Math.max(...snapshotRounds);
-
+      // Luck compares each team's ACTUAL result to its EXPECTED result on the
+      // SAME games. A round is only measurable when we have both a weekly score
+      // (for expected) and a head-to-head result (for actual) for every team —
+      // i.e. roundsWithMatchups. Reading actual wins from the cumulative
+      // snapshot instead counts rounds we have no score data for (e.g. the
+      // R12–R17 bye gap), so an 18-round record gets compared against a
+      // 12-round expected total: the zero-sum breaks and every team reads
+      // "Blessed". Summing both sides over roundsWithMatchups keeps it honest.
       const luckRows: LuckRow[] = TEAMS.map(team => {
-        // Compute expected wins from per-round score rankings
         let totalExpected = 0;
+        let actualWins = 0;
+        let wins = 0, losses = 0, ties = 0;
         const perRoundLuck: { round: number; luck: number }[] = [];
 
-        validRounds.forEach(round => {
+        roundsWithMatchups.forEach(round => {
           const myScore = teamRoundScores[`${round}-${team.team_id}`] || 0;
 
           // Count how many of the other 9 teams this team outscored
@@ -106,22 +114,17 @@ export default function LuckFormTab() {
           const expectedWinRate = teamsOutscored / 9;
           totalExpected += expectedWinRate;
 
-          // Per-round luck (only if matchup data available for this round)
-          if (perRoundResult[`${round}-${team.team_id}`] !== undefined) {
-            const actualResult = perRoundResult[`${round}-${team.team_id}`];
-            const roundLuck = actualResult - expectedWinRate;
-            perRoundLuck.push({ round, luck: Math.round(roundLuck * 100) / 100 });
-          }
+          // Actual head-to-head result: win = 1, tie = 0.5, loss = 0.
+          const actualResult = perRoundResult[`${round}-${team.team_id}`];
+          actualWins += actualResult;
+          if (actualResult === 1) wins += 1;
+          else if (actualResult === 0.5) ties += 1;
+          else losses += 1;
+
+          perRoundLuck.push({ round, luck: Math.round((actualResult - expectedWinRate) * 100) / 100 });
         });
 
-        // Actual wins from cumulative snapshot: wins count as 1, ties as 0.5
-        const snap = snapshotsByRound[maxSnapRound]?.[team.team_id];
-        const wins = snap?.wins || 0;
-        const losses = snap?.losses || 0;
-        const ties = snap?.ties || 0;
-        const actualWins = wins + 0.5 * ties;
-
-        // LUCK = ACTUAL WINS minus EXPECTED WINS
+        // LUCK = ACTUAL WINS minus EXPECTED WINS, over the same set of rounds.
         const luckScore = Math.round((actualWins - totalExpected) * 100) / 100;
 
         return {
@@ -260,6 +263,9 @@ export default function LuckFormTab() {
           <div className="p-4 border-b border-border">
             <h3 className="font-semibold">Luck-O-Meter</h3>
             <p className="text-xs text-muted-foreground mt-1">Compares actual W/L record to expected wins based on weekly score ranking. Positive = lucky, Negative = unlucky. Zero-sum: total luck across all teams = 0.</p>
+            {luckRounds.length > 0 && (
+              <p className="text-[11px] text-muted-foreground mt-1">Based on {luckRounds.length} round{luckRounds.length === 1 ? '' : 's'} with complete score + result data{luckRounds.length > 0 ? ` (R${luckRounds[0]}–R${luckRounds[luckRounds.length - 1]})` : ''}. Rounds without uploaded scores (e.g. byes) are excluded.</p>
+            )}
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">

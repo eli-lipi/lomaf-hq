@@ -65,7 +65,11 @@ export default function RoundRangeTab() {
 
   const loadData = async () => {
     try {
-      const { teamRoundScores: resolved, lineAdjustments, validRounds: valid, allPlayerRounds } = await fetchResolvedScores();
+      const { teamRoundScores: resolved, lineAdjustments, validRounds: validRaw, allPlayerRounds } = await fetchResolvedScores();
+      // Round Range is a positional breakdown tab. Bye rounds (R12–R16) score
+      // "best 16/17" with no positions, so their per-line DEF/MID/FWD/RUC/UTL
+      // splits are meaningless — exclude them from this tab entirely.
+      const valid = validRaw.filter(r => !isByeRound(r));
       // Convert allPlayerRounds to the shape we need
       const allRows: PlayerRoundRow[] = allPlayerRounds.map(r => ({
         round_number: r.round_number, team_id: r.team_id, pos: r.pos, is_scoring: r.is_scoring, points: r.points,
@@ -284,7 +288,7 @@ export default function RoundRangeTab() {
               }}
               className="border border-border rounded-md px-3 py-1.5 text-sm bg-background"
             >
-              {validRounds.map(r => <option key={r} value={r}>R{r}{isByeRound(r) ? ' (bye)' : ''}</option>)}
+              {validRounds.map(r => <option key={r} value={r}>R{r}</option>)}
             </select>
           </div>
           <div className="flex items-center gap-2">
@@ -298,7 +302,7 @@ export default function RoundRangeTab() {
               }}
               className="border border-border rounded-md px-3 py-1.5 text-sm bg-background"
             >
-              {validRounds.map(r => <option key={r} value={r}>R{r}{isByeRound(r) ? ' (bye)' : ''}</option>)}
+              {validRounds.map(r => <option key={r} value={r}>R{r}</option>)}
             </select>
           </div>
           <div className="flex gap-2">
@@ -330,12 +334,7 @@ export default function RoundRangeTab() {
         <div className="bg-card border border-border rounded-lg shadow-sm overflow-hidden">
           <div className="p-4 border-b border-border">
             <h3 className="font-semibold">Team Performance — {isSingleRound ? `Round ${selectedRounds[0]}` : `R${selectedRounds[0]}–R${selectedRounds[selectedRounds.length - 1]}`}</h3>
-            <p className="text-xs text-muted-foreground mt-1">Click column headers to sort</p>
-            {selectedRounds.some(r => isByeRound(r)) && (
-              <p className="text-[11px] mt-2 px-2.5 py-1.5 rounded bg-[#1A56DB]/5 text-[#1A56DB] border border-[#1A56DB]/20 leading-relaxed">
-                Range includes a bye round (best 16/17). The team <strong>Total</strong> is accurate, but the per-line DEF/MID/FWD/RUC/UTL breakdown only counts players who made the best 16/17 that week — positions don&apos;t apply on byes.
-              </p>
-            )}
+            <p className="text-xs text-muted-foreground mt-1">Click column headers to sort. Bye rounds (R12–R16) are excluded — best-16/17 scoring has no positions.</p>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
