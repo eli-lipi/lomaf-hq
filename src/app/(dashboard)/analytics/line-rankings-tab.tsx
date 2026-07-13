@@ -279,6 +279,11 @@ export default function LineRankingsTab() {
 
   return (
     <div className="space-y-6">
+      {/* Bye-exclusion notice — applies to every view in this tab. */}
+      <p className="text-[12px] px-3 py-2 rounded-md bg-[#1A56DB]/5 text-[#1A56DB] border border-[#1A56DB]/20 leading-relaxed">
+        Line rankings exclude bye rounds (R12–R16). Those rounds score &ldquo;best 16/17&rdquo; with no positions, so counting them would distort each team&rsquo;s positional strength.
+      </p>
+
       {/* Position Sub-tabs */}
       <div className="flex gap-1 border-b border-border overflow-x-auto">
         <button
