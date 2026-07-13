@@ -85,6 +85,12 @@ export default function UploadContent({
     if (!isControlled) setInternalTargetRound(n);
   };
 
+  // Backfill mode: ingest EVERY round present in the lineups/matchups files
+  // instead of only the target round. Used to recover a gap (e.g. the R12–R17
+  // bye hiatus) from the cumulative CSVs in one pass. Off by default so the
+  // normal weekly flow (one round at a time) is unchanged.
+  const [backfillRounds, setBackfillRounds] = useState(false);
+
   useEffect(() => {
     loadDbSummary();
   }, []);
@@ -224,10 +230,16 @@ export default function UploadContent({
           [type]: { ...prev[type], status: 'uploading' },
         }));
 
+        // In backfill mode, lineups/matchups ingest every round in the file
+        // (target_round: null → the route keeps all rounds). Teams (a current
+        // snapshot) and points-grid still key off the target round.
+        const sendRound =
+          backfillRounds && (type === 'lineups' || type === 'matchups') ? null : targetRound;
+
         const res = await fetch(`/api/upload/${type.replace('_', '-')}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ data: upload.data, target_round: targetRound }),
+          body: JSON.stringify({ data: upload.data, target_round: sendRound }),
         });
 
         if (!res.ok) {
@@ -410,7 +422,8 @@ export default function UploadContent({
               id="target-round"
               value={targetRound ?? ''}
               onChange={(e) => setTargetRound(Number(e.target.value) || null)}
-              className="px-3 py-2 text-sm border border-border rounded-md bg-background font-medium"
+              disabled={backfillRounds}
+              className="px-3 py-2 text-sm border border-border rounded-md bg-background font-medium disabled:opacity-50"
             >
               {Array.from({ length: TOTAL_ROUNDS }, (_, i) => i + 1).map((r) => (
                 <option key={r} value={r}>
@@ -420,6 +433,20 @@ export default function UploadContent({
             </select>
           </div>
         </div>
+        <label className="flex items-start gap-2 mt-4 pt-4 border-t border-border cursor-pointer">
+          <input
+            type="checkbox"
+            checked={backfillRounds}
+            onChange={(e) => setBackfillRounds(e.target.checked)}
+            className="mt-0.5"
+          />
+          <span className="text-xs text-muted-foreground">
+            <strong className="text-foreground">Backfill — import every round in the file.</strong> Ingests all
+            rounds found in the <strong>lineups</strong> and <strong>matchups</strong> CSVs (not just the target
+            round), for recovering a gap like the R12–R17 bye hiatus in one pass. Teams &amp; points-grid still use
+            the target round above.
+          </span>
+        </label>
       </div>
       )}
 
